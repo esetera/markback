@@ -1,0 +1,30 @@
+{
+  "name": "review-app",
+  "version": "0.1.0",
+  "description": "Building apps is not prompting, it is annotating. Agents push screenshots; you mark them up; each mark comes back as a request.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "bin": {
+    "review": "./bin/review"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "license": "MIT",
+  "files": [
+    ".claude-plugin",
+    "bin",
+    "docs/picture.png",
+    "lib",
+    "public",
+    "skills",
+    "README.md",
+    "LICENSE",
+    "package.json",
+    "review.mjs",
+    "server.mjs"
+  ]
+}

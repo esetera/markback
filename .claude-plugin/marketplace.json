@@ -1,0 +1,5 @@
+{
+  "name": "review-app",
+  "owner": { "name": "review-app" },
+  "plugins": [{ "name": "review-app", "source": "./", "description": "Review screens by drawing on them." }]
+}

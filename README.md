@@ -1,0 +1,176 @@
+# Review app
+
+**A new way of building apps.**
+
+1. Models already know a lot about the application you mean: a simple command gets you far.
+2. Agents can infer the back end from what the front end needs.
+3. Building apps isn't prompting; it's annotating.
+4. Voice is a tool: you can say it.
+
+This app is the third part. The first two are your own agent's work, such as Claude Code: it builds, it infers, and it pushes screens here. You box, point and write on them, and press Send. The fourth is early: the mic is here, but has not yet been tried with a real voice. The marked picture and the marks as numbers land in a folder your agent reads, and each mark becomes a request.
+
+![The review page, with a box and a note drawn on a sample](docs/picture.png)
+
+## Try it in a minute
+
+You need [Node](https://nodejs.org) 22.6 or later and nothing else: it has no dependencies.
+
+```bash
+git clone https://github.com/purescience-inc/review-app
+cd review-app
+node review.mjs start
+node review.mjs demo
+```
+
+Open the address it prints, draw on the sample, and press Send. Then read what came back:
+
+```bash
+node review.mjs read --app Sample --latest
+```
+
+If the port is taken: `node review.mjs start --port 5742`. To stop: `node review.mjs stop`.
+
+## With Claude Code, in one step
+
+```bash
+claude plugin marketplace add purescience-inc/review-app && claude plugin install review-app@review-app
+```
+
+That gives every session the `review` command and four skills: `push-screens`, `read-marks`, `workflow-sketches` and `ideas-and-queue`. Agents then push screens instead of pasting pictures in chat.
+
+Without Claude Code, `npm install -g .` from the cloned folder gives you the `review` command.
+
+## What stays on your computer
+
+Everything. The server listens only on this computer and refuses requests from any other page. Screens, marks and notes are plain files in `~/.review-wizard` (set `REVIEW_HOME` to move them). Nothing is sent anywhere, with one exception that you choose: speech. See below.
+
+## Speaking (early)
+
+This has been tested with a stand-in for the browser's speech engine, not yet with a real voice. Press **D** to speak your notes. Where the sound goes is the first thing it decides, and it tells you:
+
+| Browser | What happens |
+| --- | --- |
+| Chrome | On this computer. The first press fetches a language pack of about 60 MB from Google, once, if you agree. |
+| Safari, Edge, or Chrome with no pack for your language | The browser sends the sound to its maker: Apple, Google or Microsoft. It stays off until you turn it on, and the button says so. |
+| Others, or a window with the microphone blocked | No microphone: it says to open the page in Chrome. |
+
+A phrase that is only "looks good", "next", "back", "send" or "stop listening" acts. Any other words are notes, and you can correct them as you go.
+
+## The review page
+
+Light and dark are separate screens. The page is the review: the picture fills the window, fitted so nothing is cut off.
+
+- **One thin bar:** the app and screen, "3 of 13", back and next, the marking tools, Before and After when there is a before, and a small menu.
+- **What to look at:** one line, in ten words or fewer as pushed. It is the first sentence of the note, or the `--check` lines, three at most; **More** (I) opens the rest over the picture, so the picture does not move. When a fitted picture leaves room at its side, the lines stand there, level with its top, and never make it smaller.
+- **Where it changed:** with a before of the same size, corner ticks mark each place that differs. They show on screen only and never in what is sent. C hides them. They do not show when most of the picture changed, and a very faint change can go unmarked.
+- **At the foot:** a slim notes box that grows up over the picture as you type, Looks good and Send. If there are answers already, a small line opens them.
+
+Opened at the plain address it starts at the next thing to review, not set aside, says where with one press to be in, and the list and panels stay out of the way. A link with a `#` opens what it names.
+
+Draw by dragging. The last tool and colour stay. Keys for the rest: press **?**.
+
+**Looks good** (G) and **Send** (⌘Enter) go straight on. The next pictures are already loaded, so the swap is instant, and Back is as quick. A small note says what happened, with **Undo** (U) for four seconds. Then the answer goes to the inbox by itself. Marks and notes stay in the browser until they have gone, so closing the window loses nothing: a Looks good goes as it closes, and marks and notes go on the next look, which says so in one line. If the server is away they are kept and go when it is back.
+
+An answer belongs to the picture it was given on. If a new picture is pushed before it has gone, a Looks good is dropped and says so (the new picture still waits), and marks and notes go to the inbox flagged `olderPicture`, with the screen still waiting. A draft saved on some other picture never goes by itself: a Looks good on it is forgotten, and its marks and words stay in view until you press Send.
+
+Moving into another review is never quiet. A full overlay says what was finished and what is starting, and stays until a press: **Enter** starts, **X** sets the rest of the group aside, **S** stops. G does nothing there, however fast or held. A change of group is larger than a change of app. Marks you moved past without sending go with the rest, so there is no last step. When nothing is offered, a plain page says so.
+
+**Groups:** apps named "X-style: title" or "X: title" with more than one member show as a group: "Alpha, 2 of 5". What is stored and pushed does not change. The bar keeps count: "this one 2 of 5 · 12 waiting overall".
+
+**Stop here** (S, or the bar) can be pressed at any time. What you answered goes at once, and the page says what is sent, what waits and how to go on. **Set aside** (from the overlay, the list or the menu) answers nothing and sends nothing: it only stops an app being offered, kept beside the queue in `queue/set-aside.json`. A new round on it stays set aside, and says it is new. One press brings it back. **Looks good for the rest** (⇧⌘Enter, or the menu) answers all that is left at once, and those with nothing on them are recorded as no comment.
+
+**L** opens a slim drawer over the picture. Groups, reviews and their pages all fold: click a heading, or Right and Left. All start closed, with an outline on the heading that holds where you are. A heading shows its counts. **Open** goes to a review, and the drawer closes on choosing. **Q** is the panel view: a strip and the details beside the picture, each can be folded from the menu, and the picture keeps at least 70%. **Esc** closes what is open or cancels a mark being drawn, and never loses words.
+
+## Keys (press ? in the page)
+
+| Key | Does |
+| --- | --- |
+| ← → | Previous or next screen |
+| [ ] | Previous or next app |
+| Enter | On to the next app, at the end of one |
+| L | Apps and screens |
+| V | After, side by side, before |
+| C | Show or hide where it changed |
+| I | The rest of the words |
+| Q | Panel view |
+| F | Full screen |
+| B A P T M | Box, arrow, pen, text, move |
+| 1–4 | Red, amber, blue, black |
+| ⌘Z / ⇧⌘Z | Undo / redo a mark |
+| + − 0 | Zoom in, zoom out, fit |
+| N | Write notes on this screen |
+| G | Looks good, and on to the next |
+| ⌘Enter | Send, and on to the next |
+| U | Undo the last answer, while it says so |
+| ⇧⌘Enter | Looks good for all the rest |
+| Esc | Close or cancel. Words stay |
+
+## Push screens (the session that made the change)
+
+```
+review push --app MyApp --screen Home --mode light \
+  --after /path/after.png --before /path/before.png --note "What changed" --check "One thing to check" --check "Another" --from "Claude"
+```
+
+Say what to look at in ten words or fewer. Longer words wait behind More, and `push` warns. `--check` can be said more than once. `--from` says whose words the note and checks are, shown as "From Claude" beside them; it defaults to Claude.
+
+The pictures are copied, so scratch files can go away. Pushing the same app, screen and mode again starts round 2 on
+the same step.
+
+## Read the feedback
+
+```
+review wait --app MyApp --all     # blocks until every screen is answered, then prints them
+review wait --app MyApp           # returns as soon as one screen is answered
+review read --app MyApp --latest  # what was said, newest per screen; --json for raw
+review list                        # what is queued and its status
+review clear --app MyApp          # take the app off the page (feedback stays)
+```
+
+Inbox: `~/.review-wizard/inbox/<app>/<screen>-<mode>-<time>.{png,json}`. The JSON:
+
+```json
+{
+  "app": "MyApp", "screen": "Home", "screenId": "home-light", "mode": "light", "round": 1,
+  "verdict": "changes",
+  "notes": "The heading should line up with the button.",
+  "shapes": [
+    { "type": "box", "colour": "red", "box": { "x": 100, "y": 80, "w": 120, "h": 50 } },
+    { "type": "arrow", "colour": "red", "box": { … }, "from": { "x": 400, "y": 700 }, "to": { "x": 800, "y": 300 } },
+    { "type": "text", "colour": "red", "box": { … }, "text": "Make this bigger" },
+    { "type": "freehand", "colour": "red", "box": { … }, "points": [[x, y], …] }
+  ],
+  "imageSize": { "w": 1290, "h": 835 },
+  "annotatedImage": "…/inbox/myapp/home-light-….png",
+  "afterImage": "…/images/myapp/home-light-after-….png",
+  "beforeImage": "…/images/myapp/home-light-before-….png",
+  "sentAt": "2026-01-15T14:57:17.701Z"
+}
+```
+
+`read --latest` and `wait --all` give one record per screen. When marks are sent twice on one picture, each marked copy holds only what was new, so the newest record carries the ones before it under `earlier`. A Looks good pressed over changes replaces them and stands alone.
+
+Every `box` is in the after picture's own pixels. `verdict` is `changes` or `approved` (approved has no shapes and no
+annotated image). A screen sent with the set with nothing on it is `approved` with `"notes": "No comment."` and an extra
+`"noComment": true`: it counts as Looks good, and the flag keeps it apart from a Looks good pressed on that screen.
+
+The page also reads `GET /api/history?app=<app>&id=<screen id>` (earlier answers for one screen) and
+`GET /inbox/<app>/<file>.png` (the marked pictures). Both only read.
+
+## Ideas and the queue
+
+Press **W** for a second page. **Ideas:** say what for and how many, and press Get ideas. That writes a request; an agent studies the thing and answers. Each idea is one line for what, one for why, and a size. Press Yes, No or Later (Y, N, L).
+
+**Queue:** Queued, In progress, Ready for you, Done. Each item says who has it. Drag to set the order, or use ⇧↑ and ⇧↓; agents take the top one first. Press N to add a note, typed or spoken; agents read notes while they work.
+
+A Yes becomes a proposal: an agent develops the UX and pushes it, shown loudly as **Proposal**. Marks start another round. Your approval moves it to **Build it**, and what gets built comes back for checking as **QA**. For the commands, run `review` or see the skills.
+
+## Keeping it working
+
+```bash
+npm test
+```
+
+The browser tests borrow Playwright from any project that has it: `REVIEW_PLAYWRIGHT_FROM=/path/to/package.json REVIEW_CHROME=/path/to/chrome npm test`. Without them they are skipped.
+
+Tried on macOS. It uses only Node's own parts and should run on Linux and Windows; those are not yet tried.
