@@ -161,11 +161,14 @@ const readPid = () => {
   }
 }
 /** This number is Markback's own server, still running: not a number the system has since given to something else. */
+const SERVER = join(dirname(fileURLToPath(import.meta.url)), 'server.mjs')
 const ourServer = pid => {
   if (!pid) return false
   try {
     process.kill(pid, 0)
-    return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).includes('server.mjs')
+    // Windows has no ps to ask: there a live number is taken as the server, as before.
+    if (process.platform === 'win32') return true
+    return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).includes(SERVER)
   } catch {
     // Gone, not ours, or no way to tell: never trusted, never signalled.
     return false
@@ -268,9 +271,9 @@ if (command === 'push') {
   let url = found.running
   if (!url && found.run) {
     let yes = !!flags.yes
-    if (!yes && process.stdin.isTTY) yes = await askYes(`Your app runs with ${found.run.command}. It is not running. Start it? [y/N] `)
+    if (!yes && process.stdin.isTTY) yes = await askYes(`Your app runs with ${found.run.command}. ${found.run.port ? 'It is not running.' : 'I can\'t tell whether it is running.'} Start it? [y/N] `)
     if (!yes) {
-      console.log(`Your app runs with ${found.run.command}, and it is not running. Start it yourself, or run this again with --yes to have it started.`)
+      console.log(found.run.port ? `Your app runs with ${found.run.command}, and it is not running. Start it yourself, or run this again with --yes to have it started.` : `Your app runs with ${found.run.command}. Its script names no port, so I can't tell whether it is running. Run this again with --yes to start it, and I'll find it where it says it is.`)
       process.exit(2)
     }
     try {
