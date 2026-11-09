@@ -13,7 +13,6 @@ const ICONS = {
   down: svg('<path d="M8 3v10M4 9l4 4 4-4"/>'),
   note: svg('<path d="M2.5 3h11v8h-6l-3 2.5V11h-2z"/>'),
   mic: svg('<rect x="6" y="1.5" width="4" height="8" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5M5.5 14.5h5"/>'),
-  tag: svg('<path d="M2 2.5v5l6.5 6.5 5.5-5.5L7.5 2.5H2z"/>'),
 }
 const STAGES = [['queued', 'Queued'], ['progress', 'In progress'], ['ready', 'Ready for you'], ['done', 'Done']]
 
@@ -66,25 +65,35 @@ async function load(force = false) {
 
 /* ---------- drawing ---------- */
 
-const tag = (css, words) => `<span class="tag ${css}"><i>${ICONS.tag}</i><b>${esc(words)}</b></span>`
-const phaseTag = item => (item.marksBack ? tag('marks', `Marks, round ${item.round}`) : item.phase === 'build' ? tag('build', 'Build it') : tag('proposal', 'Proposal'))
+/* What is asked, in plain words in its own column. Marks back says something, so it is in ink. */
+const phaseWords = item => (item.marksBack ? `<span class="phase marks">Marks back, round ${item.round}</span>` : `<span class="phase">${item.phase === 'build' ? 'Build it' : 'Proposal'}</span>`)
 const when = iso => new Date(iso).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const inStage = stage => state.items.filter(i => i.stage === stage)
+
+/**
+ * Columns that say the same on every row are left out. What it is for shows when there is more than one; who has it shows
+ * only in progress, and only when that is not the same session for all: the section head says it then.
+ */
+const workItems = () => state.items.filter(i => STAGES.some(([stage]) => stage === i.stage))
+const showTarget = () => new Set(workItems().map(i => i.target)).size > 1
+const owners = () => new Set(inStage('progress').map(i => i.owner || ''))
+const showWho = () => owners().size > 1
+const columns = () => ['34px', 'minmax(0, 1fr)', '150px', ...(showTarget() ? ['140px'] : []), ...(showWho() ? ['150px'] : []), '140px'].join(' ')
 
 function row(item, at, stage) {
   const queued = stage === 'queued'
   const lane = inStage(stage)
   const notes = item.notes?.length ?? 0
-  return `<div class="row" tabindex="0" data-id="${esc(item.id)}"${queued ? ' draggable="true"' : ''} aria-label="${esc(item.title)}">
+  return `<div class="row" tabindex="0" data-id="${esc(item.id)}"${queued ? ' draggable="true"' : ''} aria-label="${esc(item.title)}" style="grid-template-columns: ${columns()}">
     <span class="pos">${queued ? at + 1 : ''}</span>
     <span class="name">${esc(item.title)}</span>
-    ${phaseTag(item)}
-    <span class="target" title="${esc(item.target)}">${esc(item.target)}</span>
-    <span class="who">${esc(item.owner || (stage === 'ready' ? 'You' : stage === 'queued' ? 'Nobody yet' : ''))}</span>
+    ${phaseWords(item)}
+    ${showTarget() ? `<span class="target" title="${esc(item.target)}">${esc(item.target)}</span>` : ''}
+    ${showWho() ? `<span class="who">${esc(stage === 'progress' ? item.owner : '')}</span>` : ''}
     <span class="acts">
-      ${stage === 'ready' && item.app ? `<a class="btn" href="/#${esc(slugOf(item.app))}">Review</a>` : ''}
+      ${stage === 'ready' && item.app ? `<a class="btn${at === 0 ? ' primary' : ''}" href="/#${esc(slugOf(item.app))}">Review</a>` : ''}
       ${queued ? `<button class="tool" data-up aria-label="Move up" title="Move up (⇧↑)"${at === 0 ? ' disabled' : ''}>${ICONS.up}</button><button class="tool" data-down aria-label="Move down" title="Move down (⇧↓)"${at === lane.length - 1 ? ' disabled' : ''}>${ICONS.down}</button>` : ''}
-      <button class="tool${notes ? ' on' : ''}" data-open aria-label="Notes (${notes})" title="Notes (N)">${ICONS.note}</button>
+      <button class="tool note-btn${notes ? ' has-notes' : ''}" data-open aria-label="${notes ? `${notes} note${notes === 1 ? '' : 's'}` : 'Notes'}" title="Notes (N)">${ICONS.note}${notes ? `<span>${notes}</span>` : ''}</button>
     </span>
   </div>${state.open.has(item.id) ? `<div class="open" data-open-for="${esc(item.id)}">
     ${item.why ? `<p>${esc(item.why)}</p>` : ''}
@@ -94,17 +103,28 @@ function row(item, at, stage) {
 }
 const slugOf = text => String(text).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 
+const EMPTY_WORDS = { queued: 'queued', progress: 'in progress', ready: 'ready for you', done: 'done' }
+/** "Nothing queued, in progress or done." */
+const nothingLine = stages => {
+  const words = stages.map(stage => EMPTY_WORDS[stage])
+  return `Nothing ${words.length > 1 ? `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}` : words[0]}.`
+}
+
+/** Sections with something in them, in order. The empty ones say so together, in one quiet line at the foot. */
 function queuePage() {
-  return STAGES.map(([stage, words]) => {
+  const empty = STAGES.filter(([stage]) => !inStage(stage).length).map(([stage]) => stage)
+  const one = owners().size === 1 ? [...owners()][0] : ''
+  return `${STAGES.filter(([stage]) => !empty.includes(stage)).map(([stage, words]) => {
     const list = inStage(stage)
     const shown = stage === 'done' ? list.slice().reverse() : list
     const folded = state.folded.has(stage)
     const head = stage === 'done'
       ? `<button data-fold="${stage}" aria-expanded="${!folded}">${folded ? '▸' : '▾'} ${words}</button>`
       : words
-    return `<section><h2 class="section-head">${head} <span>${list.length}</span></h2>
-      ${folded ? '' : list.length ? `<div class="rows" data-lane="${stage}">${shown.map((item, at) => row(item, at, stage)).join('')}</div>` : '<div class="empty-line">Nothing</div>'}</section>`
-  }).join('')
+    const by = stage === 'progress' && one ? ` · ${esc(one)}` : ''
+    return `<section><h2 class="section-head">${head} <span>${list.length}${by}</span></h2>
+      ${folded ? '' : `<div class="rows" data-lane="${stage}">${shown.map((item, at) => row(item, at, stage)).join('')}</div>`}</section>`
+  }).join('')}${empty.length ? `<p class="empty-line">${nothingLine(empty)}</p>` : ''}`
 }
 
 const decideButtons = item => `<span class="acts"><button class="btn" data-decide="yes" title="Y">Yes</button>${item.stage === 'no' ? '' : '<button class="btn" data-decide="no" title="N">No</button>'}${item.stage === 'later' ? '' : '<button class="btn" data-decide="later" title="L">Later</button>'}</span>`
@@ -140,6 +160,7 @@ function render() {
   const typing = document.activeElement?.closest?.('#askForm, [data-note-box]')
   if (typing) return
   for (const b of document.querySelectorAll('[data-page]')) b.classList.toggle('on', b.dataset.page === state.page)
+  document.title = `Markback · ${state.page === 'ideas' ? 'Ideas' : 'Queue'}`
   $('page').innerHTML = `<div class="work-inner">${state.page === 'ideas' ? ideasPage() : queuePage()}</div>`
   if (state.focus) document.querySelector(`[data-id="${CSS.escape(state.focus)}"]`)?.focus({ preventScroll: false })
   renderMic()

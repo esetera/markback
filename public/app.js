@@ -1,6 +1,6 @@
 import { burnCanvas, changesBetween, COLOURS, fitZoom, isReal, paintChanged, paintMarks, redone, shapeOf, strokeFor, textFor, undone, withMark, withMarks, ZOOM_STEP, ZOOM_WHEEL_STEP, zoomedBy } from './annotate.js'
 import { createListener, findRoute, installPack } from './mic.js'
-import { afterSend, answerWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, nextWords, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from './flow.js'
+import { afterSend, answerWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from './flow.js'
 
 /**
  * The wizard is the review: the picture fills the window, with one thin bar above it, what it is about under that, and a slim
@@ -25,6 +25,8 @@ const ICONS = {
   redo: svg('<path d="M10.5 3l3 3-3 3"/><path d="M13.5 6H6a3.5 3.5 0 0 0 0 7h4"/>'),
   clear: svg('<path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 9h6.6l.7-9M6.7 7v4.5M9.3 7v4.5"/>'),
   mic: svg('<rect x="6" y="1.5" width="4" height="8" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5M5.5 14.5h5"/>'),
+  // A lit bulb: filled, with rays.
+  idea: svg('<path d="M6 12.5h4M6.5 14.5h3" /><path d="M8 3.2a3.8 3.8 0 0 0-2.2 6.9c.4.3.6.7.6 1.1v.3h3.2v-.3c0-.4.2-.8.6-1.1A3.8 3.8 0 0 0 8 3.2z" fill="var(--bulb)" /><path d="M8 .6v1.1M2.6 2.7l.8.8M13.4 2.7l-.8.8M.9 7.4h1.1M14 7.4h1.1" />'),
   tag: svg('<path d="M2 2.5v5l6.5 6.5 5.5-5.5L7.5 2.5H2z"/><path d="M5 5.5v.1" stroke-width="2"/>'),
   changes: svg('<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10M8 6.5v3M6.5 8h3"/>'),
   zoomIn: svg('<circle cx="7" cy="7" r="4.5"/><path d="M10.3 10.3 14 14M5 7h4M7 5v4"/>'),
@@ -212,6 +214,10 @@ function tallyOf(a) {
   return { set, changes, good, untouched, reviewed: changes.length + good.length }
 }
 const label = s => `${s.screen}${s.mode ? ` (${s.mode})` : ''}`
+/** The screen in the bar: its name first to be kept, and light or dark quiet after it. */
+const screenCrumb = s => `<b title="${esc(label(s))}">${esc(s.screen)}</b>${s.mode ? `<span class="crumb-mode">${esc(s.mode)}</span>` : ''}`
+/** Waiting in every review still offered. */
+const waitingInAll = () => state.apps.filter(x => !x.setAside).reduce((n, x) => n + openOf(x).length, 0)
 /** Whose words the note is. Anything already queued came from a session too. */
 const fromWords = s => `From ${s?.from || 'Claude'}`
 /** A screen as the latest list has it. */
@@ -442,12 +448,15 @@ function renderAnswers(a, s) {
   if (!line) document.body.classList.remove('answers-open')
 }
 
-/* Proposal says it loudly: this is a new idea to shape, not something built to check. */
+/* A Proposal is a new idea to shape, not something built to check: a lit bulb in the bar says so. QA needs no mark. */
 function renderKind(s) {
   const proposal = s?.kind === 'proposal'
-  $('kindTag').hidden = !s
-  $('kindTag').className = `kind${proposal ? ' proposal' : ''}`
-  setHtml($('kindTag'), proposal ? `<i>${ICONS.tag}</i><b>Proposal</b>` : 'QA')
+  // A small mark in the bar: the overlay and the queue say Proposal in full. QA is the usual case and needs no mark.
+  $('kindTag').hidden = !proposal
+  $('kindTag').className = 'kind proposal'
+  setHtml($('kindTag'), ICONS.idea)
+  $('kindTag').dataset.tip = 'Proposal: a new idea to shape'
+  $('kindTag').setAttribute('aria-label', 'Proposal')
 }
 
 /* ---------- speaking ---------- */
@@ -603,15 +612,12 @@ function renderSegment(a) {
   // Opening the wizard: where this starts, with one press to be in.
   if (state.arriving && a && !onDonePage()) {
     const place = placeOf(a)
-    const waiting = state.apps.filter(x => !x.setAside).reduce((n, x) => n + openOf(x).length, 0)
-    const reviews = state.apps.filter(offered).length
     $('segment').hidden = false
     $('segment').className = 'segment new-group'
     return setHtml($('segment'), `<div class="segment-in">
-      <p class="finished">${waiting} screen${waiting === 1 ? '' : 's'} waiting, in ${reviews} review${reviews === 1 ? '' : 's'}.</p>
       <p class="starting">You are starting with:</p>
       <h1>${esc(placeWords(place))}</h1>
-      <p class="what">${esc(nextWords(place, openOf(a).length, a.screens.length))}</p>
+      <p class="what">${esc(`${place.group ? `${place.title}: ` : ''}${countWords(openOf(a).length, waitingInAll())}`)}</p>
       <div class="actions"><button class="btn primary" data-start>Start<span class="kbd">↩</span></button><button class="btn" data-stop>Stop here<span class="kbd">S</span></button></div>
     </div>`)
   }
@@ -633,7 +639,7 @@ function renderSegment(a) {
     <p class="starting">You are now starting a new review:</p>
     <span class="new-word">${sameGroup ? '' : 'A different group'}</span>
     <h1>${esc(placeWords(there))}</h1>
-    <p class="what">${esc(nextWords(there, openOf(target).length, target.screens.length))}</p>
+    <p class="what">${esc(`${there.group ? `${there.title}: ` : ''}${countWords(openOf(target).length, waitingInAll())}`)}</p>
     <div class="actions">
       <button class="btn primary" data-start>Start<span class="kbd">↩</span></button>
       ${restOfGroup(from).length ? `<button class="btn" data-rest-aside>Set the rest of this group aside<span class="kbd">X</span></button>` : ''}
@@ -826,16 +832,17 @@ function render() {
   renderFoot(a, s)
   renderDrawer()
   document.body.classList.toggle('no-screen', !s)
-  const overall = state.apps.filter(x => !x.setAside).reduce((n, x) => n + openOf(x).length, 0)
-  const asideCount = state.apps.filter(x => x.setAside).length
-  $('overall').textContent = state.loaded && state.apps.length ? `· ${overall} waiting overall${asideCount ? ` · ${asideCount} set aside` : ''}` : ''
+  // Nothing to draw on until a picture is up: the overlay hides the tools and the views with it.
+  document.body.classList.toggle('covered', covered)
+  // One count, and only where a picture is: the overlay says it in full.
+  $('overall').textContent = s && a ? countWords(openOf(a).length, waitingInAll(), { short: true }) : ''
+  $('overall').title = s && a ? `Screen ${state.index + 1} of ${a.screens.length}. ${countWords(openOf(a).length, waitingInAll())}.` : ''
   $('stopHere').hidden = !s
   document.body.classList.toggle('no-apps', state.loaded && !state.apps.length)
   $('notes').disabled = !s
   if (!a) {
     renderKind(null)
     setHtml($('crumbs'), '')
-    $('position').textContent = ''
     $('back').disabled = $('next').disabled = true
     setHtml($('views'), '')
     return
@@ -843,10 +850,11 @@ function render() {
   renderKind(s)
   const total = a.screens.length
   const here = placeOf(a)
+  // A group called Proposal or Built only says again what the label says: the name alone is enough.
+  const kindGroup = /^(proposal|built|qa)$/i.test(here.group ?? '')
   setHtml($('crumbs'), here.group
-    ? `<span class="crumb-app" title="${esc(a.name)}">${esc(placeWords(here))}</span><span class="sep-slash">/</span><b title="${esc(a.name)}">${esc(here.title)}</b>${s ? `<span class="sep-slash">/</span><span class="crumb-app">${esc(label(s))}</span>` : ''}`
-    : `<span class="crumb-app">${esc(a.name)}</span>${s ? `<span class="sep-slash">/</span><b>${esc(label(s))}</b>` : ''}`)
-  $('position').textContent = s ? `${placeOf(a).group ? `this ${placeOf(a).noun.trim() || 'one'} ` : ''}${state.index + 1} of ${total}` : ''
+    ? `${kindGroup ? '' : `<span class="crumb-app" title="${esc(a.name)}">${esc(placeWords(here))}</span><span class="sep-slash">/</span>`}<span class="crumb-app" title="${esc(a.name)}">${esc(here.title)}</span>${s ? `<span class="sep-slash">/</span>${screenCrumb(s)}` : ''}`
+    : `<span class="crumb-app" title="${esc(a.name)}">${esc(barName(a.name))}</span>${s ? `<span class="sep-slash">/</span>${screenCrumb(s)}` : ''}`)
   $('back').disabled = !s || state.index === 0
   $('next').disabled = !s || state.index >= total - 1
   if (!s) {
@@ -1868,11 +1876,13 @@ $('center').addEventListener('click', event => {
 /* The first minute: your own app, or one sentence to your agent, or a sample. */
 function firstRunHtml() {
   return `<form class="first" data-first>
-    <h2>See your app, and mark it.</h2>
+    <h2>Two ways to start.</h2>
+    <div class="first-or">1. Your app's address, on this computer or online</div>
     <div class="first-row"><input id="firstAddress" placeholder="http://localhost:3000" aria-label="Your app's address" autocomplete="off"><button class="btn primary" id="firstShow">Show it</button></div>
     <p class="first-said" id="firstSaid" hidden></p>
-    <div class="first-or">No app yet? Say what you want, to your agent</div>
-    <div class="first-row"><code id="firstAsk">/markback:first-mark a recipe box for my family</code><button type="button" class="btn" data-first-copy>Copy</button></div>
+    <div class="first-or">2. In your agent, in your project: it finds the app and opens it here</div>
+    <div class="first-row"><code id="firstAsk">/markback</code><button type="button" class="btn" data-first-copy>Copy</button></div>
+    <p class="first-said">No app yet? Say what you want after it: <b>/markback a recipe box for my family</b>. In a terminal, <b>markback</b> in the project's folder does the same, once installed: <b>npm install -g github:purescience-inc/markback</b></p>
     <div class="first-or">Just looking</div>
     <div class="first-row"><button type="button" class="btn" data-first-sample>Try the sample</button></div>
   </form>`

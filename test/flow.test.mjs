@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { afterSend, answerWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, nextWords, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from '../public/flow.js'
+import { afterSend, answerWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, nextWords, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from '../public/flow.js'
 
 const screen = (id, status = 'waiting') => ({ id, status })
 const none = () => false
@@ -88,6 +88,13 @@ test('what is next, in screens left', () => {
   assert.equal(nextWords(place, 8, 8), 'Beta, 8 screens')
   assert.equal(nextWords(place, 3, 8), 'Beta, 3 of 8 screens left')
   assert.equal(nextWords({ group: null, title: 'Plain', pages: 'screens' }, 3, 3), '3 screens')
+  assert.equal(countWords(21, 63), '21 left in this review · 63 in all')
+  assert.equal(countWords(21, 63, { short: true }), '21 left · 63 in all')
+  assert.equal(countWords(5, 5), '5 left')
+  assert.equal(barName('Proposal: First mark in 60 seconds'), 'First mark in 60 seconds')
+  assert.equal(barName('Built: Point and speak'), 'Point and speak')
+  assert.equal(barName('Shop front office'), 'Shop front office')
+  assert.equal(barName('Proposal:'), 'Proposal:')
 })
 
 test('what to check: as pushed, or the note, one a sentence', () => {

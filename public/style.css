@@ -4,10 +4,10 @@
 :root {
   --ink: #1b1d21;
   --soft: #4a4f57;
-  --faint: #6b717a;
+  --faint: #646a73;
   --ground: #ffffff;
   --side: #f8f9fa;
-  --well: #eceef1;
+  --well: #f1f2f4;
   --rule: #e0e3e7;
   --rule-firm: #cdd1d6;
   --edge: #b3b8bf;
@@ -21,13 +21,14 @@
   --accent-deep: #17489f;
   --on-accent: #ffffff;
   --primary-edge: #0f3478;
-  --chosen: color-mix(in srgb, var(--accent-deep) 6%, var(--ground));
+  --chosen: color-mix(in srgb, var(--accent-deep) 8%, var(--ground));
   --chosen-edge: color-mix(in srgb, var(--accent-deep) 65%, var(--ground));
   --chosen-ink: var(--accent-deep);
   --good: #1d7a3a;
   --amber: #f5b301;
   --danger: #b3261e;
-  --sheet-edge: #b8bdc4;
+  --sheet-edge: #c3c8ce;
+  --sheet-lift: 0 1px 2px rgba(16, 20, 28, 0.06), 0 4px 14px rgba(16, 20, 28, 0.06);
   --tip-bg: #1b1d21;
   --tip-ink: #ffffff;
   --shadow: 0 8px 28px rgba(16, 20, 28, 0.18), 0 1px 3px rgba(16, 20, 28, 0.12);
@@ -61,6 +62,7 @@
     --good: #3aa865;
     --danger: #ff7b72;
     --sheet-edge: #3b3e44;
+    --sheet-lift: none;
     --tip-bg: #f1f3f5;
     --tip-ink: #1b1d21;
     --shadow: 0 10px 32px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.4);
@@ -95,7 +97,7 @@ button { font-family: inherit; }
 .btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--primary-edge); }
 .btn.primary:active:not(:disabled) { background: var(--accent-deep); }
 .btn.primary:disabled { background: var(--off-bg); color: var(--off-ink); border-color: var(--rule); }
-.btn.good-on { background: color-mix(in srgb, var(--good) 9%, var(--ground)); border-color: color-mix(in srgb, var(--good) 70%, var(--ground)); color: var(--good); }
+.btn.good-on { background: var(--chosen); border-color: var(--chosen-edge); color: var(--chosen-ink); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08); }
 .btn .kbd { margin-left: 4px; background: transparent; color: inherit; border-color: color-mix(in srgb, currentColor 40%, transparent); }
 .tool {
   display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; flex: none;
@@ -120,18 +122,21 @@ button { font-family: inherit; }
 
 /* ---------- the one bar ---------- */
 .bar { display: flex; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--rule-firm); background: var(--ground); min-width: 0; }
-/* A label: flat, a tag in a white stub, then the colour. Nothing to press. Proposal is loud; QA is the usual case and quiet. */
-.kind { flex: none; color: var(--faint); font-size: 12px; font-weight: 600; padding: 0 2px; }
-.kind.proposal { display: inline-flex; align-items: stretch; height: 24px; padding: 0; border: 1px solid #5b34c9; border-radius: var(--r); overflow: hidden; font-size: 13px; }
-.kind.proposal i { display: flex; align-items: center; padding: 0 5px; background: #fff; color: #5b34c9; }
-.kind.proposal i svg { width: 13px; height: 13px; }
-.kind.proposal b { display: flex; align-items: center; padding: 0 9px; background: #5b34c9; color: #fff; font-weight: 700; }
+/* The name, small and quiet, so it is known whose page this is. */
+.wordmark { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px 0 2px; font-size: 12px; font-weight: 700; letter-spacing: 0.01em; color: var(--faint); }
+.wordmark img { display: block; border-radius: 4px; }
+/* A Proposal is a small lit bulb in the bar; the overlay and the queue say the word. QA, the usual case, has no mark. */
+.kind { flex: none; color: var(--faint); font-size: 12px; font-weight: 600; padding: 0 4px 0 0; }
+.kind.proposal { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; color: var(--ink); }
+.kind.proposal svg { width: 18px; height: 18px; }
+.kind.proposal { --bulb: #f5b301; }
 .crumbs { flex: 0 1 auto; min-width: 60px; display: flex; align-items: baseline; gap: 6px; padding: 0 4px; font-size: 13px; white-space: nowrap; overflow: hidden; }
 .crumbs .sep-slash { color: var(--faint); }
-.crumbs b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
-.crumbs .crumb-app { color: var(--soft); overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 40px; }
+.crumbs b { flex: 0 1 auto; min-width: 60px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.crumbs .crumb-app { color: var(--soft); overflow: hidden; text-overflow: ellipsis; flex: 0 1000 auto; min-width: 24px; max-width: 32ch; }
+.crumbs .sep-slash { flex: none; }
+.crumbs .crumb-mode { flex: none; font-size: 12px; color: var(--faint); }
 .pager { display: flex; align-items: center; gap: 1px; flex: none; }
-.position { min-width: 56px; text-align: center; color: var(--soft); font-variant-numeric: tabular-nums; }
 .group { display: flex; align-items: center; gap: 1px; flex: none; }
 .sep { width: 1px; height: 18px; background: var(--rule-firm); margin: 0 5px; flex: none; }
 .spacer { flex: 1 1 0; min-width: 4px; }
@@ -143,6 +148,8 @@ button { font-family: inherit; }
 .menu button:disabled { color: var(--off-ink); cursor: default; background: none; }
 .menu hr { border: 0; border-top: 1px solid var(--rule); margin: 4px 0; }
 body.no-screen .marking, body.no-screen .pager { display: none; }
+/* Until a picture is up, nothing to draw with and nothing to view. */
+body.covered .marking, body.covered #views, body.covered #zoomValue, body.covered .pager, body.covered #overall, body.covered #stopHere { display: none !important; }
 
 /* ---------- the picture: all the room there is ---------- */
 .workspace { display: flex; min-height: 0; min-width: 0; }
@@ -168,7 +175,7 @@ body.no-screen .marking, body.no-screen .pager { display: none; }
 .scroller { flex: 1; min-height: 0; overflow: auto; background: var(--well); padding: 6px; position: relative; display: flex; flex-direction: column; }
 .pair { display: flex; gap: 16px; align-items: flex-start; width: max-content; margin: auto; flex: none; }
 /* What to check, at the top of the picture, in the room beside it. */
-.checks { flex: none; padding: 12px 14px; background: var(--ground); border: 1px solid var(--rule-firm); overflow-y: auto; font-size: 14px; line-height: 1.45; color: var(--ink); }
+.checks { flex: none; padding: 12px 14px; background: var(--ground); border: 1px solid var(--rule-firm); box-shadow: var(--sheet-lift); overflow-y: auto; font-size: 14px; line-height: 1.45; color: var(--ink); }
 .checks h2 { display: flex; justify-content: space-between; gap: 12px; margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--faint); }
 .checks h2 .from { margin: 0; }
 .checks ul { margin: 0; padding: 0 0 0 18px; }
@@ -177,7 +184,7 @@ body.no-screen .marking, body.no-screen .pager { display: none; }
 .shot { margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .shot figcaption { font-weight: 600; font-size: 12px; color: var(--soft); }
 .pair.view-after figcaption { display: none; }
-.frame { position: relative; background: #fff; box-shadow: 0 0 0 1px var(--sheet-edge); }
+.frame { position: relative; background: #fff; box-shadow: 0 0 0 1px var(--sheet-edge), var(--sheet-lift); }
 .frame img { display: block; width: 100%; height: 100%; user-select: none; -webkit-user-drag: none; }
 .frame canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
 .pair.view-after .before-shot { display: none; }
@@ -208,12 +215,12 @@ textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transp
 .segment .starting { margin: 0 0 12px; font-size: 17px; color: var(--ink); }
 .segment h1 { margin: 0 0 10px; font-size: 32px; font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .segment .what { margin: 0 0 36px; font-size: 22px; line-height: 1.35; color: var(--ink); overflow-wrap: anywhere; }
-.segment.new-group .new-word { display: block; margin: 0 0 6px; font-size: 15px; font-weight: 700; color: var(--accent-deep); }
+.segment.new-group .new-word { display: block; margin: 0 0 6px; font-size: 15px; font-weight: 700; color: var(--ink); }
 .segment.new-group h1 { font-size: 52px; border-top: 4px solid var(--ink); padding-top: 16px; margin-top: 8px; }
 .segment .new-word { display: none; }
 .segment .actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .segment .btn { height: 38px; padding: 0 16px; font-size: 14px; }
-.overall { flex: none; margin-left: 10px; color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.overall { flex: none; margin-left: 10px; color: var(--soft); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .btn.stop { flex: none; height: 26px; padding: 0 9px; font-size: 12px; }
 body.no-screen .overall { margin-left: 4px; }
 .end-line { gap: 16px; padding: 0 12px; font-size: 14px; }
@@ -241,11 +248,11 @@ body.no-screen .foot:not(.end-line) { display: none; }
 
 /* status squares */
 .mk { display: inline-block; width: 8px; height: 8px; border-radius: 1px; flex: none; }
-.mk.waiting { background: var(--amber); }
-.mk.sent { background: var(--accent-deep); }
-.mk.approved { background: var(--good); }
-.mk.draft-changes { border: 2px solid var(--accent-deep); }
-.mk.draft-good { border: 2px solid var(--good); }
+.mk.waiting { border: 1px solid var(--faint); }
+.mk.sent { background: var(--soft); }
+.mk.approved { background: var(--ink); }
+.mk.draft-changes { border: 2px solid var(--soft); }
+.mk.draft-good { border: 2px solid var(--ink); }
 
 /* ---------- the drawer: over the picture, no space when closed ---------- */
 .drawer { position: fixed; left: 0; top: 40px; bottom: 0; width: 380px; z-index: 30; display: flex; flex-direction: column; background: var(--ground); border-right: 1px solid var(--rule-firm); box-shadow: var(--shadow); }
@@ -270,7 +277,7 @@ body.no-screen .foot:not(.end-line) { display: none; }
 .row-btn.page { padding-left: 34px; }
 .row-btn.page.deep { padding-left: 48px; }
 .row-btn .mark { display: inline-block; width: 13px; color: var(--soft); font-size: 11px; }
-.row-btn .new { margin-left: 6px; font-weight: 700; font-size: 11.5px; color: var(--accent-deep); }
+.row-btn .new { margin-left: 6px; font-weight: 700; font-size: 11.5px; color: var(--ink); }
 
 /* ---------- panels, for those who want them: the picture keeps at least 70% ---------- */
 body.panels .filmstrip { display: flex; flex-direction: column; flex: 0 0 132px; min-height: 0; border-right: 1px solid var(--rule-firm); }
@@ -346,7 +353,7 @@ body.answers-open:not(.panels) .insp-head { display: none; }
 .toast { transition: opacity 180ms ease; }
 .toast.fading { opacity: 0; }
 .toast.problem { outline: 1px solid var(--danger); }
-.toast .link { font: inherit; font-weight: 600; color: var(--accent-deep); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
+.toast .link { font: inherit; font-weight: 600; color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 
 .tip {
   position: fixed; z-index: 80; pointer-events: none; display: flex; align-items: center; gap: 8px; max-width: 280px;
