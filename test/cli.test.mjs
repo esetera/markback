@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -29,9 +29,24 @@ test('a start that cannot reach a page already running leaves that page stoppabl
   }
 })
 
-test('a page whose process is alive is running, even when this command cannot reach it', () => {
+test('a page whose own server process is alive is running, even when this command cannot reach it; stop stops it', async () => {
+  // A stand-in for the server: a process whose command line names server.mjs, as Markback's does.
+  const server = spawn('node', ['-e', 'setTimeout(() => {}, 60000)', 'server.mjs'], { stdio: 'ignore' })
+  await new Promise(r => server.once('spawn', r))
+  try {
+    writeFileSync(pidFile, String(server.pid))
+    const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: '4692' }
+    assert.match(execFileSync('node', [CLI, 'start'], { env, encoding: 'utf8' }), /Already running/)
+    assert.match(execFileSync('node', [CLI, 'stop'], { env, encoding: 'utf8' }), /Stopped/)
+    await new Promise(r => server.once('exit', r))
+  } finally {
+    server.kill()
+  }
+})
+
+test('a number in server.pid that now belongs to something else is never trusted, and never stopped', () => {
   writeFileSync(pidFile, String(process.pid))
-  const out = execFileSync('node', [CLI, 'start'], { env: { ...process.env, REVIEW_HOME: home, REVIEW_PORT: '4692' }, encoding: 'utf8' })
-  assert.match(out, /Already running/)
-  assert.equal(readFileSync(pidFile, 'utf8'), String(process.pid))
+  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: '4693' }
+  assert.match(execFileSync('node', [CLI, 'stop'], { env, encoding: 'utf8' }), /It was not running/)
+  assert.ok(process.kill(process.pid, 0), 'still here')
 })

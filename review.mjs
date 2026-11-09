@@ -33,7 +33,7 @@
  *                                               the skills for Codex, Cursor, Gemini CLI and others; AGENTS.md for the rest
  */
 
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -160,14 +160,15 @@ const readPid = () => {
     return 0
   }
 }
-const alive = pid => {
+/** This number is Markback's own server, still running: not a number the system has since given to something else. */
+const ourServer = pid => {
   if (!pid) return false
   try {
     process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // Not ours to signal, but there.
-    return error.code === 'EPERM'
+    return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).includes('server.mjs')
+  } catch {
+    // Gone, not ours, or no way to tell: never trusted, never signalled.
+    return false
   }
 }
 // A port that takes the call and never answers is not the page.
@@ -181,7 +182,7 @@ async function start() {
     return console.log(`Already running: http://localhost:${port}`)
   }
   // A sandbox can stop this command reaching the page while the page runs. Its process still says so.
-  if (alive(readPid()) && !flags.port) return console.log(`Already running: http://localhost:${port}`)
+  if (ourServer(readPid()) && !flags.port) return console.log(`Already running: http://localhost:${port}`)
   mkdirSync(HOME, { recursive: true })
   const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'server.mjs')], { detached: true, stdio: 'ignore', env: { ...process.env, REVIEW_PORT: String(port) } })
   child.unref()
@@ -200,12 +201,11 @@ async function start() {
 
 async function stop() {
   if (!existsSync(PID_FILE)) return console.log('It is not running from here.')
-  try {
-    process.kill(Number(readFileSync(PID_FILE, 'utf8')))
+  const pid = readPid()
+  if (ourServer(pid)) {
+    process.kill(pid)
     console.log('Stopped.')
-  } catch {
-    console.log('It was not running.')
-  }
+  } else console.log('It was not running.')
   rmSync(PID_FILE, { force: true })
 }
 

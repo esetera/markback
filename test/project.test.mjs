@@ -7,7 +7,7 @@ import { after, test } from 'node:test'
 
 const home = mkdtempSync(join(tmpdir(), 'review-project-'))
 process.env.REVIEW_HOME = home
-const { findApp, linksIn, portOf } = await import('../lib/project.mjs')
+const { findApp, linksIn, portOf, startApp } = await import('../lib/project.mjs')
 after(() => rmSync(home, { recursive: true, force: true }))
 const folder = (name, files) => {
   const dir = join(home, name)
@@ -60,4 +60,27 @@ test('the main screens are the app own links: same place, each once, no anchors 
     { url: 'http://localhost:5173/new', name: 'New recipe' },
     { url: 'http://localhost:5173/about', name: 'about' },
   ])
+})
+
+test('a page on disk leads only to pages in its own folder', () => {
+  const html = '<a href="about.html">About</a><a href="../secret.html">Up</a><a href="/etc/passwd">Root</a><a href="docs/a.html">Docs</a>'
+  assert.deepEqual(linksIn(html, 'file:///work/site/index.html').map(l => l.url), ['file:///work/site/about.html', 'file:///work/site/docs/a.html'])
+})
+
+test('an app whose script names no port is found where it says it listens', async () => {
+  const dir = folder('says-its-port', {
+    'package.json': JSON.stringify({ scripts: { dev: 'node server.js' } }),
+    'server.js': "require('node:http').createServer((q, r) => r.end('hi')).listen(4641, () => console.log('Ready on http://localhost:4641'))",
+  })
+  const started = await startApp(dir, { script: 'dev', port: null }, { waitMs: 20000 })
+  try {
+    assert.equal(started.url, 'http://localhost:4641/')
+  } finally {
+    process.kill(-started.pid)
+  }
+})
+
+test('an app that never answers is stopped, and the person is told where its words went', async () => {
+  const dir = folder('never-answers', { 'package.json': JSON.stringify({ scripts: { dev: 'node -e "setTimeout(() => {}, 60000)"' } }) })
+  await assert.rejects(startApp(dir, { script: 'dev', port: 4642 }, { waitMs: 1500 }), /so it was stopped\. What it said is in .*never-answers\.log/)
 })
