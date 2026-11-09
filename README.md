@@ -199,6 +199,8 @@ npm test
 
 The browser tests borrow Playwright from any project that has it: `REVIEW_PLAYWRIGHT_FROM=/path/to/package.json REVIEW_CHROME=/path/to/chrome npm test`. Without them they are skipped.
 
+`public/annotate.js`, the drawing code, is also kept in TypeScript in a project that is not public. Edit `public/annotate.js` here as you would any file; the maintainers carry changes across with `scripts/vendor-annotate.mjs`.
+
 Tried on macOS. It uses only Node's own parts and should run on Linux and Windows; those are not yet tried.
 
 ## Who makes it
