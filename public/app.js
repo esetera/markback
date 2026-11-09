@@ -25,7 +25,8 @@ const ICONS = {
   redo: svg('<path d="M10.5 3l3 3-3 3"/><path d="M13.5 6H6a3.5 3.5 0 0 0 0 7h4"/>'),
   clear: svg('<path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 9h6.6l.7-9M6.7 7v4.5M9.3 7v4.5"/>'),
   mic: svg('<rect x="6" y="1.5" width="4" height="8" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5M5.5 14.5h5"/>'),
-  idea: svg('<path d="M6 12.5h4M6.5 14.5h3M8 1.5a4.5 4.5 0 0 0-2.6 8.2c.4.3.6.7.6 1.2v.6h4v-.6c0-.5.2-.9.6-1.2A4.5 4.5 0 0 0 8 1.5z"/>'),
+  // A lit bulb: filled, with rays.
+  idea: svg('<path d="M6 12.5h4M6.5 14.5h3" /><path d="M8 3.2a3.8 3.8 0 0 0-2.2 6.9c.4.3.6.7.6 1.1v.3h3.2v-.3c0-.4.2-.8.6-1.1A3.8 3.8 0 0 0 8 3.2z" fill="var(--bulb)" /><path d="M8 .6v1.1M2.6 2.7l.8.8M13.4 2.7l-.8.8M.9 7.4h1.1M14 7.4h1.1" />'),
   tag: svg('<path d="M2 2.5v5l6.5 6.5 5.5-5.5L7.5 2.5H2z"/><path d="M5 5.5v.1" stroke-width="2"/>'),
   changes: svg('<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10M8 6.5v3M6.5 8h3"/>'),
   zoomIn: svg('<circle cx="7" cy="7" r="4.5"/><path d="M10.3 10.3 14 14M5 7h4M7 5v4"/>'),

@@ -128,7 +128,8 @@ button { font-family: inherit; }
 /* What is asked, in plain words: Proposal in ink and bold, QA quiet. No colour: colour is for what acts. */
 .kind { flex: none; color: var(--faint); font-size: 12px; font-weight: 600; padding: 0 4px 0 0; }
 .kind.proposal { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; color: var(--ink); }
-.kind.proposal svg { width: 16px; height: 16px; }
+.kind.proposal svg { width: 18px; height: 18px; }
+.kind.proposal { --bulb: #f5b301; }
 .crumbs { flex: 0 1 auto; min-width: 60px; display: flex; align-items: baseline; gap: 6px; padding: 0 4px; font-size: 13px; white-space: nowrap; overflow: hidden; }
 .crumbs .sep-slash { color: var(--faint); }
 .crumbs b { flex: 0 1 auto; min-width: 60px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
