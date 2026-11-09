@@ -30,8 +30,8 @@ test('a start that cannot reach a page already running leaves that page stoppabl
 })
 
 test('a page whose own server process is alive is running, even when this command cannot reach it; stop stops it', async () => {
-  // A stand-in for the server: a process whose command line names server.mjs, as Markback's does.
-  const server = spawn('node', ['-e', 'setTimeout(() => {}, 60000)', 'server.mjs'], { stdio: 'ignore' })
+  // A stand-in for the server: a process whose command line names this Markback's server.mjs, as the real one does.
+  const server = spawn('node', ['-e', 'setTimeout(() => {}, 60000)', join(dirname(CLI), 'server.mjs')], { stdio: 'ignore' })
   await new Promise(r => server.once('spawn', r))
   try {
     writeFileSync(pidFile, String(server.pid))
