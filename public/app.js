@@ -25,6 +25,7 @@ const ICONS = {
   redo: svg('<path d="M10.5 3l3 3-3 3"/><path d="M13.5 6H6a3.5 3.5 0 0 0 0 7h4"/>'),
   clear: svg('<path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 9h6.6l.7-9M6.7 7v4.5M9.3 7v4.5"/>'),
   mic: svg('<rect x="6" y="1.5" width="4" height="8" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5M5.5 14.5h5"/>'),
+  idea: svg('<path d="M6 12.5h4M6.5 14.5h3M8 1.5a4.5 4.5 0 0 0-2.6 8.2c.4.3.6.7.6 1.2v.6h4v-.6c0-.5.2-.9.6-1.2A4.5 4.5 0 0 0 8 1.5z"/>'),
   tag: svg('<path d="M2 2.5v5l6.5 6.5 5.5-5.5L7.5 2.5H2z"/><path d="M5 5.5v.1" stroke-width="2"/>'),
   changes: svg('<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10M8 6.5v3M6.5 8h3"/>'),
   zoomIn: svg('<circle cx="7" cy="7" r="4.5"/><path d="M10.3 10.3 14 14M5 7h4M7 5v4"/>'),
@@ -449,9 +450,12 @@ function renderAnswers(a, s) {
 /* Proposal says it plainly, in ink and bold: a new idea to shape, not something built to check. QA is the usual case and quiet. */
 function renderKind(s) {
   const proposal = s?.kind === 'proposal'
-  $('kindTag').hidden = !s
-  $('kindTag').className = `kind${proposal ? ' proposal' : ''}`
-  $('kindTag').textContent = proposal ? 'Proposal' : 'QA'
+  // A small mark in the bar: the overlay and the queue say Proposal in full. QA is the usual case and needs no mark.
+  $('kindTag').hidden = !proposal
+  $('kindTag').className = 'kind proposal'
+  setHtml($('kindTag'), ICONS.idea)
+  $('kindTag').dataset.tip = 'Proposal: a new idea to shape'
+  $('kindTag').setAttribute('aria-label', 'Proposal')
 }
 
 /* ---------- speaking ---------- */

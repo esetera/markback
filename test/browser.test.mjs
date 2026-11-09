@@ -1581,20 +1581,21 @@ test('the queue: four parts, drag or keys set the order, notes reach the session
   assert.deepEqual(errors, [])
 })
 
-test('Proposal shows loudly on the bar, QA quietly, and a proposal approved goes to Build it', { skip }, async () => {
+test('Proposal shows as a small mark in the bar, QA not at all, and a proposal approved goes to Build it', { skip }, async () => {
   const r = await rig()
   const ids = JSON.parse(execFileSync('node', ['-e', `import('${join(ROOT, 'lib/work.mjs')}').then(w => { const a = w.askForIdeas({ target: 'App', count: 1 }); const i = w.postIdea({ request: a.id, what: 'New look', why: 'Why', size: 'S' }); w.decide(i.id, 'yes'); w.take({ by: 'S' }); console.log(JSON.stringify([i.id])) })`], { env: r.env, encoding: 'utf8' }))
   r.push('Prop', ['One'], () => 'Is this the right shape?', ['--kind', 'proposal', '--item', ids[0]])
   r.push('Plain', ['A'], () => 'Is it level?')
   const { page, errors } = await r.open('prop', { undo: 40 })
-  assert.equal(await page.locator('#kindTag').innerText(), 'Proposal')
+  assert.equal(await page.locator('#kindTag').getAttribute('aria-label'), 'Proposal')
+  assert.equal(await page.locator('#kindTag').isVisible(), true, 'a small mark in the bar')
   assert.ok((await page.locator('#kindTag').evaluate(el => el.className)).includes('proposal'))
   await page.keyboard.press('g')
   await waitFor(() => JSON.parse(work(r, 'queue', '--json'))[0].stage === 'queued')
   const item = JSON.parse(work(r, 'queue', '--json'))[0]
   assert.equal(item.phase, 'build', 'on to be built')
   const plain = await r.open('plain')
-  assert.equal(await plain.page.locator('#kindTag').innerText(), 'QA')
+  assert.equal(await plain.page.locator('#kindTag').isVisible(), false, 'QA, the usual case, needs no mark')
   assert.deepEqual(errors, [])
 })
 
