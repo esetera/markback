@@ -25,6 +25,10 @@
  *   review note --item <id> --text "..." [--by "who"]
  *   review stage --item <id> --to queued|progress|ready|done
  *
+ *   review plugin add <folder or git address> [--yes]   review plugin list   review plugin remove <name>
+ *   review <plugin> [<command>] ...             a command a plugin adds
+ *   review export --app MyApp --as <export> [--out file]   an app's latest answers, turned into text by a plugin
+ *
  *   review install-skills [--to ~/.agents/skills] [--agents-md <project folder> [--no-path]]
  *                                               the skills for Codex, Cursor, Gemini CLI and others; AGENTS.md for the rest
  */
@@ -38,6 +42,7 @@ import { HOME, INBOX, PORT, clearApp, isSetAside, listApps, listScreens, push, r
 import { pushSample, showApp } from './lib/first.mjs'
 import { sketch } from './lib/sketch.mjs'
 import { installSkills } from './lib/skills.mjs'
+import { addPlugins, addsWords, fetchSource, listPlugins, pluginsIn, removePlugin, runCommand, runExport } from './lib/plugins.mjs'
 import { addNote, closeRequest, listWork, openRequests, postIdea, pushedFor, setStage, take } from './lib/work.mjs'
 
 const [command, ...rest] = process.argv.slice(2)
@@ -139,6 +144,15 @@ async function ideas(what) {
 }
 
 const PID_FILE = join(HOME, 'server.pid')
+/** Yes or no from the person at the terminal. Anything but yes is no. */
+const confirmYes = question => new Promise(answer => {
+  process.stdout.write(question)
+  process.stdin.setEncoding('utf8')
+  process.stdin.once('data', said => {
+    process.stdin.pause()
+    answer(/^\s*y(es)?\s*$/i.test(said))
+  })
+})
 const up = port => fetch(`http://127.0.0.1:${port}/api/queue`).then(r => r.ok, () => false)
 
 /** Runs the server on its own, so it outlasts this command. Nothing leaves this computer. */
@@ -265,7 +279,57 @@ if (command === 'push') {
   showItem(addNote(need('item'), need('text'), typeof flags.by === 'string' ? flags.by : 'a session'))
 } else if (command === 'stage') {
   showItem(setStage(need('item'), need('to'), typeof flags.by === 'string' ? flags.by : 'a session'))
+} else if (command === 'plugin') {
+  const what = rest[0]
+  if (what === 'list') {
+    const all = listPlugins()
+    console.log(all.length ? all.map(p => `${p.name} ${p.version}: ${p.description}\n  ${addsWords(p)}`).join('\n') : 'No plugins. Add one with: review plugin add <folder or git address>')
+  } else if (what === 'remove') {
+    try {
+      removePlugin(rest[1])
+      console.log(`Removed ${rest[1]}.`)
+    } catch (error) {
+      fail(error.message)
+    }
+  } else if (what === 'add' && rest[1] && !rest[1].startsWith('--')) {
+    let source
+    try {
+      source = fetchSource(rest[1])
+      const found = pluginsIn(source.dir)
+      console.log('Plugins run code on your computer. Add only ones you trust.')
+      for (const p of found) console.log(`${p.name} ${p.version} adds: ${addsWords(p)}`)
+      const yes = flags.yes || (process.stdin.isTTY && (await confirmYes(`Add ${found.length === 1 ? 'it' : `these ${found.length}`}? [y/N] `)))
+      if (!yes) {
+        console.log(process.stdin.isTTY ? 'Nothing added.' : 'Nothing added. Run it again with --yes once you have looked at what it adds.')
+        process.exit(2)
+      }
+      addPlugins(found)
+      console.log(`Added ${found.map(p => p.name).join(', ')}.`)
+    } catch (error) {
+      fail(error.message)
+    } finally {
+      source?.done()
+    }
+  } else fail('review plugin add <folder or git address> | plugin list | plugin remove <name>')
+} else if (command === 'export') {
+  try {
+    const answers = latestPerScreen(readInbox(need('app')))
+    if (!answers.length) fail(`No answers yet for ${flags.app}.`)
+    const text = await runExport(need('as'), answers, { app: flags.app, home: HOME })
+    if (typeof flags.out === 'string') {
+      writeFileSync(flags.out, text)
+      console.log(`Wrote ${flags.out}`)
+    } else process.stdout.write(text.endsWith('\n') ? text : `${text}\n`)
+  } catch (error) {
+    fail(error.message)
+  }
+} else if (command && listPlugins().some(p => p.name === command)) {
+  try {
+    await runCommand(command, rest[0] && !rest[0].startsWith('--') ? rest[0] : null, { args: rest, flags, home: HOME, read: readInbox, push })
+  } catch (error) {
+    fail(error.message)
+  }
 } else {
-  console.log(`review start | stop | see | demo | sketch | push | list | wait | read | clear | ideas | queue | take | show | note | stage | install-skills   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
+  console.log(`review start | stop | see | demo | sketch | push | list | wait | read | clear | ideas | queue | take | show | note | stage | install-skills | plugin | export   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
   if (command) process.exit(1)
 }
