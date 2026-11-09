@@ -104,6 +104,15 @@ export function nextWords(place, open, total) {
   return `${place.group ? `${place.title}, ` : ''}${open === total ? `${total} ${pages}` : `${open} of ${total} ${pages} left`}`
 }
 
+/** The one count: what is left here, then in all. Short for the bar. Said once when the two are the same. */
+export function countWords(left, all, { short = false } = {}) {
+  if (left === all) return `${all} left`
+  return short ? `${left} left · ${all} in all` : `${left} left in this review · ${all} in all`
+}
+
+/** An app's name in the bar: without a "Proposal:" or "Built:" in front, which the label beside it already says. */
+export const barName = name => String(name).replace(/^\s*(proposal|built|qa)\s*:\s*/i, '') || String(name)
+
 /**
  * What Submit all sends: every screen in the set, with what its draft says. A screen with nothing on it goes as Looks good
  * with no comment, so the press leaves nothing waiting and the entry closes.
