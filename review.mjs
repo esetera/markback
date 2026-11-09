@@ -359,6 +359,7 @@ if (command === 'push') {
     const all = listPlugins()
     console.log(all.length ? all.map(p => `${p.name} ${p.version}: ${p.description}\n  ${addsWords(p)}`).join('\n') : 'No plugins. Add one with: review plugin add <folder or git address>')
   } else if (what === 'remove') {
+    if (!rest[1] || rest[1].startsWith('--')) fail('Say which: review plugin remove <name>')
     try {
       removePlugin(rest[1])
       console.log(`Removed ${rest[1]}.`)
@@ -366,24 +367,35 @@ if (command === 'push') {
       fail(error.message)
     }
   } else if (what === 'add' && rest[1] && !rest[1].startsWith('--')) {
+    // What happened is decided first and said after the fetched copy is cleaned up: an exit would skip a finally.
     let source
+    let outcome
     try {
       source = fetchSource(rest[1])
       const found = pluginsIn(source.dir)
-      console.log('Plugins run code on your computer. Add only ones you trust.')
-      for (const p of found) console.log(`${p.name} ${p.version} adds: ${addsWords(p)}`)
-      const yes = flags.yes || (process.stdin.isTTY && (await askYes(`Add ${found.length === 1 ? 'it' : `these ${found.length}`}? [y/N] `)))
-      if (!yes) {
-        console.log(process.stdin.isTTY ? 'Nothing added.' : 'Nothing added. Run it again with --yes once you have looked at what it adds.')
-        process.exit(2)
+      const have = listPlugins()
+      for (const p of found) for (const name of Object.keys(p.exports)) {
+        const other = have.find(h => h.name !== p.name && h.exports[name])
+        if (other) throw new Error(`${other.name} already adds an export called ${name}. Remove it first, or keep this one out.`)
       }
-      addPlugins(found)
-      console.log(`Added ${found.map(p => p.name).join(', ')}.`)
+      console.log('Plugins run code on your computer. Add only ones you trust.')
+      for (const p of found) {
+        const old = have.find(h => h.name === p.name)
+        console.log(`${p.name} ${p.version} adds: ${addsWords(p)}${old ? ` It replaces the ${p.name}${old.version ? ` ${old.version}` : ''} you have.` : ''}`)
+      }
+      const yes = flags.yes || (process.stdin.isTTY && (await askYes(`Add ${found.length === 1 ? 'it' : `these ${found.length}`}? [y/N] `)))
+      if (yes) {
+        addPlugins(found)
+        outcome = { words: `Added ${found.map(p => p.name).join(', ')}.` }
+      } else outcome = { words: process.stdin.isTTY ? 'Nothing added.' : 'Nothing added. Run it again with --yes once you have looked at what it adds.', code: 2 }
     } catch (error) {
-      fail(error.message)
+      outcome = { problem: error.message }
     } finally {
       source?.done()
     }
+    if (outcome.problem) fail(outcome.problem)
+    console.log(outcome.words)
+    if (outcome.code) process.exit(outcome.code)
   } else fail('review plugin add <folder or git address> | plugin list | plugin remove <name>')
 } else if (command === 'export') {
   try {
@@ -399,7 +411,9 @@ if (command === 'push') {
   }
 } else if (command && listPlugins().some(p => p.name === command)) {
   try {
-    await runCommand(command, rest[0] && !rest[0].startsWith('--') ? rest[0] : null, { args: rest, flags, home: HOME, read: readInbox, push })
+    // The words after the command, without the --flags and their values, which come as flags.
+    const words = rest.filter((w, i) => !w.startsWith('--') && !(i > 0 && rest[i - 1].startsWith('--') && rest[i - 1].slice(2) in flags && flags[rest[i - 1].slice(2)] !== true))
+    await runCommand(command, words[0] ?? null, { args: words, flags, home: HOME, read: readInbox, push })
   } catch (error) {
     fail(error.message)
   }

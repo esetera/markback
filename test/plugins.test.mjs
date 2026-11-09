@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
@@ -25,7 +25,7 @@ function plugin(name, meta, files) {
 }
 
 const hello = plugin('hello', { name: 'hello', version: '1.0.0', description: 'Says hello', commands: { greet: 'greet.mjs' }, exports: { count: 'count.mjs' } }, {
-  'greet.mjs': "export default ({ args, home }) => console.log(`hello ${args.slice(1).join(' ')} from ${home ? 'markback' : '?'}`)",
+  'greet.mjs': "export default ({ args, flags, home }) => console.log(`hello ${args.join(' ')}${flags.loud ? '!' : ''} from ${home ? 'markback' : '?'}`)",
   'count.mjs': "export default (answers, { app }) => `${app}: ${answers.length} answers, ${answers.filter(a => a.verdict === 'changes').length} with changes`",
 })
 
@@ -42,6 +42,7 @@ test('with a yes it is added, listed, and its command runs', () => {
   assert.match(review('plugin', 'add', hello, '--yes'), /Added hello\./)
   assert.match(review('plugin', 'list'), /hello 1\.0\.0: Says hello\n {2}command review hello greet, export count\. No network\./)
   assert.equal(review('hello', 'greet', 'there').trim(), 'hello there from markback')
+  assert.equal(review('hello', 'greet', 'you', 'two', '--loud').trim(), 'hello you two! from markback', 'the words after the command; flags as flags')
 })
 
 test('an export turns an app\'s latest answers into text, to the screen or a file', () => {
@@ -79,6 +80,9 @@ test('a plugin that takes one of Markback\'s names, reaches outside its folder, 
     [plugin('empty', { name: 'empty' }, {}), /adds nothing/],
     [plugin('missing', { name: 'missing', exports: { y: 'y.mjs' } }, {}), /is named in plugin\.json but is not there/],
   ]
+  const linked = plugin('linked', { name: 'linked', commands: { x: 'x.mjs' } }, {})
+  symlinkSync(join(hello, 'greet.mjs'), join(linked, 'x.mjs'))
+  cases.push([linked, /outside the plugin's folder/])
   const broken = join(home, 'sources', 'broken')
   mkdirSync(broken)
   writeFileSync(join(broken, 'plugin.json'), '{ not json')
@@ -95,4 +99,11 @@ test('an address that is neither a folder nor git is not run as anything', () =>
   assert.notEqual(run.status, 0)
   assert.match(run.stderr, /neither a folder here nor a git address/)
   assert.equal(existsSync(join(home, 'pwned')), false)
+})
+
+test('adding over a plugin says it replaces it; one export name, one plugin; remove with no name says so; nothing fetched is left behind', () => {
+  assert.match(review('plugin', 'add', hello, '--yes'), /It replaces the hello 1\.0\.0 you have\./)
+  const clash = plugin('clash', { name: 'clash', exports: { count: 'c.mjs' } }, { 'c.mjs': 'export default () => ""' })
+  assert.match(spawnSync('node', [CLI, 'plugin', 'add', clash, '--yes'], { env, encoding: 'utf8' }).stderr, /hello already adds an export called count/)
+  assert.match(spawnSync('node', [CLI, 'plugin', 'remove'], { env, encoding: 'utf8' }).stderr, /Say which/)
 })

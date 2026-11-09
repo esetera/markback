@@ -105,7 +105,7 @@ review plugin add https://github.com/purescience-inc/markback-plugins
 review export --app "My app" --as markdown --out marks.md
 ```
 
-Adding one says what it adds and asks first. Plugins run code on your computer, so add only ones you trust. `review plugin list` shows them; `review plugin remove <name>` takes one away. To write your own, see [markback-plugins](https://github.com/purescience-inc/markback-plugins).
+Adding one says what it adds and asks first (in a terminal; run any other way, it needs `--yes`). Plugins run code on your computer, so add only ones you trust. `review plugin list` shows them; `review plugin remove <name>` takes one away. To write your own, see [markback-plugins](https://github.com/purescience-inc/markback-plugins).
 
 ## What stays on your computer
 
