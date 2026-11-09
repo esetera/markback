@@ -95,7 +95,7 @@ test('what to check: as pushed, or the note, one a sentence', () => {
   assert.deepEqual(lookOf({ check: ['A', 'B'], note: 'Why. Yes.' }), { lines: ['A', 'B'], rest: 'Why. Yes.\nA\nB' })
   assert.deepEqual(lookOf({ check: ['A', 'B', 'C', 'D'] }).lines, ['A', 'B', 'C'], 'three at most')
   assert.equal(lookOf({ check: ['A', 'B', 'C', 'D'] }).rest, 'A\nB\nC\nD', 'the fourth is a press away')
-  assert.deepEqual(lookOf({ note: 'One thing. Another! Version 2.1 stays whole.' }), { lines: ['One thing.'], rest: 'One thing. Another! Version 2.1 stays whole.' })
+  assert.deepEqual(lookOf({ note: 'One whole thing. Another! Version 2.1 stays whole.' }), { lines: ['One whole thing.'], rest: 'One whole thing. Another! Version 2.1 stays whole.' })
   assert.deepEqual(lookOf({ note: 'One thing.' }), { lines: ['One thing.'], rest: '' })
   assert.deepEqual(lookOf({ note: '' }), { lines: [], rest: '' })
   assert.deepEqual(lookOf({}), { lines: [], rest: '' })

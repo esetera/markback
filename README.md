@@ -9,7 +9,7 @@
 3. Building apps isn't prompting; it's annotating.
 4. Voice is a tool: you can say it.
 
-This app is the third part. The first two are your own agent's work, such as Claude Code: it builds, it infers, and it pushes screens here. You box, point and write on them, and press Send. The fourth is early: the mic is here, but has not yet been tried with a real voice. The marked picture and the marks as numbers land in a folder your agent reads, and each mark becomes a request.
+Markback is the third part. The first two are your own agent's work, such as Claude Code or Codex: it builds, it infers, and it pushes screens here. You box, point and write on them, and press Send. The fourth is early: the mic is here, but has not yet been tried with a real voice. The marked picture and the marks as numbers land in a folder your agent reads, and each mark becomes a request.
 
 ![The review page, with a box and a note drawn on a sample](docs/picture.png)
 
@@ -30,21 +30,43 @@ Open the address it prints, draw on the sample, and press Send. Then read what c
 node review.mjs read --app Sample --latest
 ```
 
+Or show your own running app, ready to mark (this needs Chrome or Edge): `node review.mjs see http://localhost:3000`.
+
 If the port is taken: `node review.mjs start --port 5742`. To stop: `node review.mjs stop`.
 
-## With Claude Code, in one step
+## Your agent
+
+Markback is a command and plain files, so it works with any agent that can run a shell command. What it teaches agents lives in five skills: `first-mark`, `push-screens`, `read-marks`, `workflow-sketches` and `ideas-and-queue`. Everything below is made from those same five files, so no agent is taught something different.
+
+**Claude Code**, in one step. It gives every session the `review` command and the five skills. Try `/markback:first-mark a recipe box for my family`.
 
 ```bash
 claude plugin marketplace add purescience-inc/markback && claude plugin install markback@markback
 ```
 
-That gives every session the `review` command and four skills: `push-screens`, `read-marks`, `workflow-sketches` and `ideas-and-queue`. Agents then push screens instead of pasting pictures in chat.
+**Codex, Cursor and Gemini CLI** all read skills from `~/.agents/skills`, by their own docs. From the cloned folder:
 
-Without Claude Code, `npm install -g .` from the cloned folder gives you the `review` command.
+```bash
+node review.mjs install-skills
+```
+
+Run it again after you update Markback. To put it in one project only, add `--to <project>/.agents/skills`.
+
+**Any other agent** that reads `AGENTS.md` (Codex and Cursor do, and others): add Markback's part to your project's `AGENTS.md`. It goes between two markers, so your own words stay and a rerun replaces only that part. It names where your Markback folder is; add `--no-path` to say it in words instead, for a file you commit.
+
+```bash
+node review.mjs install-skills --agents-md /path/to/your/project
+```
+
+Gemini CLI reads `GEMINI.md` unless told otherwise. To have it read `AGENTS.md` too, put `{ "context": { "fileName": ["AGENTS.md", "GEMINI.md"] } }` in the project's `.gemini/settings.json`. This repo does that for its own `AGENTS.md`.
+
+`npm install -g .` from the cloned folder puts `review` on your PATH. Without that, agents use `node /path/to/markback/review.mjs`, and the installed skills already say so.
+
+**What has really been tried.** Claude Code, with the plugin. A second Claude Code run with no plugin and no skills, which knew Markback only from `AGENTS.md`: it pushed a screen, and after a box and a note came back it read them and said where they were. A plain script that runs only the commands `AGENTS.md` shows, which is part of `npm test`. Codex, Cursor and Gemini CLI have not been run against it yet. They should work, because each reads the files above as its own docs describe, and the skill folders meet the rules all three set.
 
 ## What stays on your computer
 
-Everything. The server listens only on this computer and refuses requests from any other page. Screens, marks and notes are plain files in `~/.review-wizard` (set `REVIEW_HOME` to move them). Nothing is sent anywhere, with one exception that you choose: speech. See below.
+Everything. The server listens only on this computer and refuses requests from any other page. Screens, marks and notes are plain files in `~/.review-wizard`, a folder that keeps Markback's first name (set `REVIEW_HOME` to move it). Nothing is sent anywhere, with one exception that you choose: speech. See below.
 
 ## Speaking (early)
 
@@ -55,6 +77,8 @@ This has been tested with a stand-in for the browser's speech engine, not yet wi
 | Chrome | On this computer. The first press fetches a language pack of about 60 MB from Google, once, if you agree. |
 | Safari, Edge, or Chrome with no pack for your language | The browser sends the sound to its maker: Apple, Google or Microsoft. It stays off until you turn it on, and the button says so. |
 | Others, or a window with the microphone blocked | No microphone: it says to open the page in Chrome. |
+
+Point as you speak: words said with the pointer on the picture land there, with an arrow to the spot. Words said with it off the picture go to the notes.
 
 A phrase that is only "looks good", "next", "back", "send" or "stop listening" acts. Any other words are notes, and you can correct them as you go.
 
@@ -184,4 +208,3 @@ Markback is made by [Pure Science Inc.](https://pure.science) and is © 2026 Pur
 It is open source under the MIT licence (see `LICENSE`). That means you may use it, change it and share it, for any purpose, including in paid work, as long as the copyright notice and licence go with your copies. It comes with no warranty.
 
 Questions, ideas or want to work with us: Adam Hyde, adam@pure.science.
-

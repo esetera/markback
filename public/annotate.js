@@ -179,15 +179,26 @@ export function fitZoom(room                                   , picture        
 
 /** How many words of what was said about a picture show at once. The rest waits behind a press. */
 export const GLANCE_WORDS = 12
+const GLANCE_CHARS = 90
 
 /** What to read at a glance: the first line or sentence, at most a few words, and whether there is more behind it. */
 export function glanceOf(text        , most         = GLANCE_WORDS)                                  {
   const trimmed = text.trim()
   const whole = trimmed.replace(/\s+/g, ' ')
   const firstLine = trimmed.split('\n')[0].replace(/\s+/g, ' ')
-  const first = /^.+?[.!?](?=\s|$)/.exec(firstLine)?.[0] ?? firstLine
+  let first = firstLine
+  // A stop in the first two words is a list number or a short form: "1. Check" and "Dr. Smith" are not whole sentences.
+  for (const stop of firstLine.matchAll(/[.!?](?=\s|$)|[。！？]/g)) {
+    const upTo = firstLine.slice(0, stop.index + 1)
+    if (upTo.split(' ').length >= 3 || /[。！？]$/.test(upTo)) {
+      first = upTo
+      break
+    }
+  }
   const words = first.split(' ')
-  const line = words.length > most ? `${words.slice(0, most).join(' ')}…` : first
+  let line = words.length > most ? `${words.slice(0, most).join(' ')}…` : first
+  // Words with no spaces between them can run on as far as any number of words.
+  if (line.length > GLANCE_CHARS) line = `${line.slice(0, GLANCE_CHARS - 1)}…`
   return { line, more: line !== whole }
 }
 
@@ -200,6 +211,7 @@ const CHANGE_PIXELS = 2
 /** More of the picture changed than this, or in more places, and there is nothing to point at: all of it is new. */
 const CHANGE_MOST_AREA = 0.4
 const CHANGE_MOST_PLACES = 12
+const CHANGE_MOST_COVERED = 0.5
 
 /**
  * Where two same-sized pictures differ, as boxes. An empty list: no difference big enough to see. Null: they cannot be
@@ -248,7 +260,9 @@ export function changedBoxes(a        , b        , cell         = CHANGE_CELL)  
     }
     boxes.push({ x: left * cell, y: top * cell, w: Math.min(a.width, (right + 1) * cell) - left * cell, h: Math.min(a.height, (bottom + 1) * cell) - top * cell })
   }
-  return boxes.length > CHANGE_MOST_PLACES ? null : boxes
+  // Scattered changes can join into one box over most of the picture, which says no more than all of it being new.
+  const covered = boxes.reduce((sum, box) => sum + box.w * box.h, 0)
+  return boxes.length > CHANGE_MOST_PLACES || covered > CHANGE_MOST_COVERED * a.width * a.height ? null : boxes
 }
 
 /** Where a picture differs from the one before it, in its own pixels. Null when that cannot be said. */
@@ -282,7 +296,7 @@ export function changesBetween(before                  , after                  
  * Each place a picture changed: a faint wash, corner ticks just outside it, and a flag that says Changed, so it cannot be taken
  * for part of the design. Only on screen, never in what is sent, and in a colour no mark can have.
  */
-export function paintChanged(ctx                          , boxes                       , pictureWidth        )       {
+export function paintChanged(ctx                          , boxes                       , pictureWidth        , pictureHeight        )       {
   const w = Math.max(2, strokeFor(pictureWidth) - 1)
   const gap = w * 2
   const size = Math.max(12, Math.round(pictureWidth / 100))
@@ -294,10 +308,11 @@ export function paintChanged(ctx                          , boxes               
   ctx.font = `600 ${size}px -apple-system, system-ui, sans-serif`
   ctx.textBaseline = 'middle'
   for (const box of boxes) {
-    const left = box.x - gap
-    const top = box.y - gap
-    const right = box.x + box.w + gap
-    const bottom = box.y + box.h + gap
+    // All of it on the picture, or it would be cut off at the edge.
+    const left = Math.max(w / 2, box.x - gap)
+    const top = Math.max(w / 2, box.y - gap)
+    const right = Math.min(pictureWidth - w / 2, box.x + box.w + gap)
+    const bottom = Math.min(pictureHeight - w / 2, box.y + box.h + gap)
     ctx.fillStyle = 'rgba(10, 138, 138, 0.1)'
     ctx.fillRect(left, top, right - left, bottom - top)
     const arm = Math.min(w * 7, (right - left) / 2.5, (bottom - top) / 2.5)
@@ -312,13 +327,14 @@ export function paintChanged(ctx                          , boxes               
       }
       ctx.stroke()
     }
-    // Above the place, or inside it when there is no room above.
+    // Above the place; below it when there is no room above, so it covers none of what changed.
     const flagWidth = ctx.measureText('Changed').width + size
-    const flagTop = top - flagHeight >= 0 ? top - flagHeight : top
+    const flagLeft = Math.max(0, Math.min(pictureWidth - flagWidth, left - w / 2))
+    const flagTop = top - flagHeight >= 0 ? top - flagHeight : Math.min(pictureHeight - flagHeight, bottom)
     ctx.fillStyle = colour
-    ctx.fillRect(left - w / 2, flagTop, flagWidth, flagHeight)
+    ctx.fillRect(flagLeft, flagTop, flagWidth, flagHeight)
     ctx.fillStyle = '#ffffff'
-    ctx.fillText('Changed', left - w / 2 + size / 2, flagTop + flagHeight / 2 + 1)
+    ctx.fillText('Changed', flagLeft + size / 2, flagTop + flagHeight / 2 + 1)
   }
   ctx.restore()
 }

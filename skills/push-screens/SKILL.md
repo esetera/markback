@@ -24,6 +24,7 @@ review push --app "My app" --screen "Home" --mode light --after after.png --befo
 - `--check` is what to look at, ten words or fewer. Ask a question. It can be given up to three times. It is read at a glance, so do not say what you did or why.
 - `--kind qa` (the default): something built, to check. `--kind proposal`: a new idea to shape, shown loudly as Proposal.
 - Pushing the same app, screen and mode again starts the next round on that step.
+- `--from "Codex"` says who pushed it. The default is Claude.
 - Pictures are copied, so temporary files are fine. PNG, JPEG, WebP and SVG all work.
 - Do not push hundreds of pages when ten will do. Offer a sample first.
 

@@ -9,6 +9,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs'
 import { extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
+import { pushSample, showApp } from './lib/first.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
@@ -109,6 +110,15 @@ const server = createServer(async (req, res) => {
       const path = inside(INBOX, decodeURIComponent(url.pathname.slice('/inbox/'.length)))
       return path && extname(path).toLowerCase() === '.png' ? sendFile(res, path, 'max-age=31536000, immutable') : json(res, 404, { error: 'No such picture' })
     }
+    if (req.method === 'POST' && url.pathname === '/api/show') {
+      const input = JSON.parse(await body(req))
+      try {
+        return json(res, 200, { appSlug: (await showApp(input.url)).appSlug })
+      } catch (error) {
+        return json(res, 400, { error: error.message })
+      }
+    }
+    if (req.method === 'POST' && url.pathname === '/api/sample') return json(res, 200, { appSlug: pushSample().appSlug })
     if (req.method === 'GET' && url.pathname === '/api/work') return json(res, 200, { items: listWork(), requests: listRequests() })
     if (req.method === 'POST' && url.pathname.startsWith('/api/work/')) {
       const input = JSON.parse(await body(req))

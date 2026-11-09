@@ -12,7 +12,7 @@ const home = mkdtempSync(join(tmpdir(), 'review-work-'))
 process.env.REVIEW_HOME = home
 after(() => rmSync(home, { recursive: true, force: true }))
 const { addNote, answered, askForIdeas, closeRequest, decide, listRequests, listWork, openRequests, postIdea, pushedFor, reorder, setStage, take } = await import('../lib/work.mjs')
-const { commandIn, routeFor } = await import('../public/mic.js').catch(() => ({}))
+const { commandIn, placeWords, routeFor } = await import('../public/mic.js')
 const { push, receive } = await import('../lib/store.mjs')
 const picture = join(home, 'p.png')
 writePicture(picture, 40, 30)
@@ -70,7 +70,7 @@ test('answers move an item on: marks another round, a proposal approved to build
   take({ by: 'S', id: item.id })
   const shot = (screen, kind = 'proposal') => {
     const e = push({ app: 'Flow', screen, after: picture, kind, item: item.id })
-    pushedFor(item.id, 'Flow', 'S')
+    pushedFor(item.id, 'Flow', 'S', kind)
     return e
   }
   const say = (e, verdict) => answered(receive({ appSlug: e.appSlug, id: e.id, png: null, shapes: [], notes: verdict === 'changes' ? 'Change it' : '', verdict, imageSize: null }))
@@ -135,4 +135,29 @@ test('from nothing: start makes its own folder, remembers its port, and the samp
     run('stop')
     rmSync(dirname(fresh), { recursive: true, force: true })
   }
+})
+
+test('spoken words land where the pointer was, and stay together while it stays', () => {
+  const words = (text, at) => text.split(' ').map(word => ({ word, at }))
+  assert.deepEqual(placeWords([...words('this heading', [100, 100]), ...words('is big', [120, 110]), ...words('and this button', [600, 400]), ...words('in general', null)]), [
+    { text: 'this heading is big', at: [100, 100] },
+    { text: 'and this button', at: [600, 400] },
+    { text: 'in general', at: null },
+  ])
+})
+
+test('a proposal pushed again after approval is still a proposal: approving it cannot finish a build', () => {
+  const asked = askForIdeas({ target: 'Again', count: 1 })
+  const item = idea(asked, 'Again idea')
+  decide(item.id, 'yes')
+  take({ by: 'S', id: item.id })
+  const shot = () => {
+    const e = push({ app: 'Again', screen: 'One', after: picture, kind: 'proposal', item: item.id })
+    pushedFor(item.id, 'Again', 'S', 'proposal')
+    return e
+  }
+  const say = e => answered(receive({ appSlug: e.appSlug, id: e.id, png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null }))
+  assert.deepEqual([say(shot()).stage, listWork().find(i => i.id === item.id).phase], ['queued', 'build'])
+  const again = say(shot())
+  assert.deepEqual([again.stage, again.phase], ['queued', 'build'], 'to be built, not done')
 })

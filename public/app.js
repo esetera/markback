@@ -129,6 +129,7 @@ const state = {
   arriving: false,
   broken: '',
   moreOf: '',
+  lineCut: false,
   changesOn: true,
 }
 if (prefs.get('strip') === 'hidden') document.body.classList.add('no-strip')
@@ -451,7 +452,37 @@ function renderKind(s) {
 
 /* ---------- speaking ---------- */
 
-const mic = { route: null, listener: null }
+const mic = { route: null, listener: null, pointer: null, hearing: null }
+
+/**
+ * Spoken words on the picture: a short arrow to where the pointer was, so they cover nothing of it, and the words at its tail,
+ * in lines that stay on the picture. Below the place, or above it near the foot.
+ */
+function spokenMarks(words, place) {
+  const size = textFor(state.size.w)
+  const ctx = $('canvas').getContext('2d')
+  ctx.font = `600 ${size}px -apple-system, system-ui, sans-serif`
+  const reach = size * 2.6
+  const below = place[1] + reach + size * 3 < state.size.h
+  const tail = [Math.min(place[0] + reach * 0.7, state.size.w * 0.78), below ? place[1] + reach : place[1] - reach]
+  const left = tail[0] + size * 0.4
+  const room = state.size.w - left - size
+  const lines = []
+  for (const word of words.split(' ')) {
+    const next = lines.length ? `${lines[lines.length - 1]} ${word}` : word
+    if (lines.length && ctx.measureText(next).width <= room) lines[lines.length - 1] = next
+    else lines.push(word)
+  }
+  const top = below ? tail[1] - size * 0.2 : tail[1] - size * 1.3 * lines.length + size * 0.2
+  return [
+    { tool: 'arrow', a: tail, b: place, color: state.colour, w: strokeFor(state.size.w) },
+    ...lines.map((text, n) => ({ tool: 'text', at: [left, top + n * size * 1.3], text, color: state.colour, size })),
+  ]
+}
+function placeSpoken(run) {
+  if (!state.size) return
+  for (const mark of spokenMarks(run.text, run.at)) commit(mark)
+}
 function renderMic() {
   const button = $('micBtn')
   const route = mic.route
@@ -498,6 +529,12 @@ async function pressMic() {
     },
     onState: renderMic,
     onProblem: words => toast(words, '', { problem: true }),
+    pointAt: () => mic.pointer,
+    onPlaced: placeSpoken,
+    onHearing: (words, place) => {
+      mic.hearing = words && place && state.size ? spokenMarks(words, place) : null
+      paint()
+    },
   })
   mic.listener.start()
 }
@@ -512,7 +549,7 @@ const moreButton = rest => (rest ? `<button class="more" data-more aria-expanded
 const moreWords = rest => (rest && moreOpen() ? `<div class="more-words">${esc(rest)}</div>` : '')
 function toggleMore() {
   const s = screen()
-  if (!s || !lookOf(s).rest) return
+  if (!s || !(lookOf(s).rest || state.lineCut)) return
   state.moreOf = moreOpen() ? '' : keyOf(s)
   placeChecks()
 }
@@ -525,7 +562,16 @@ function renderAbout(a, s) {
   // Said by whoever pushed it, never the app or the reviewer, and it says so.
   setHtml($('aboutSize'), longest ? `<span class="from">${esc(fromWords(s))}</span>${esc(longest)}` : '')
   const rest = s ? lookOf(s).rest : ''
-  setHtml($('aboutNote'), s && words(s) ? `<span class="from">${esc(fromWords(s))}</span><span class="line" title="${esc(rest || words(s))}">${esc(words(s))}</span>${moreButton(rest)}${moreWords(rest)}` : '')
+  const said = rest || (s ? words(s) : '')
+  const draw = () => setHtml($('aboutNote'), s && words(s) ? `<span class="from">${esc(fromWords(s))}</span><span class="line" title="${esc(said)}">${esc(words(s))}</span>${moreButton(rest || state.lineCut ? said : '')}${moreWords(rest || state.lineCut ? said : '')}` : '')
+  draw()
+  // A narrow window can cut even a short line: then there is more to see too.
+  const line = $('aboutNote').querySelector('.line')
+  const cut = !!line && !rest && line.scrollWidth > line.clientWidth
+  if (cut !== state.lineCut) {
+    state.lineCut = cut
+    draw()
+  }
 }
 
 const historyKey = s => `${s.appSlug}/${s.id}/${s.feedback?.length ?? 0}`
@@ -732,7 +778,7 @@ function renderState(a, s) {
   const card = $('stateCard')
   let html = ''
   if (!state.loaded) html = '<div class="spinner"></div><h2>Loading screens</h2>'
-  else if (!state.apps.length) html = '<h2>Nothing to review</h2><p>Screens show up here, by app, when a session pushes them.</p><pre>review push --app MyApp --screen "Home" --mode light --after after.png --before before.png</pre><p>This window checks for new screens every few seconds.</p>'
+  else if (!state.apps.length) html = firstRunHtml()
   else if (s && state.broken === s.after) html = `<h2>This picture did not load</h2><p>${esc(label(s))} cannot be passed without being seen. Write a note and press Send to say so, or move on.</p>`
   else if (state.stopped) html = stoppedHtml()
   else if (onDonePage()) {
@@ -882,6 +928,8 @@ function preloadAround(a) {
 
 function showPicture(s) {
   state.shownKey = keyOf(s) + s.after
+  // Closed on going anywhere else, so coming back does not find it open over the picture.
+  state.moreOf = ''
   state.broken = ''
   closeTextEntry(false)
   // Whatever was being drawn belonged to the screen that has gone: it must not land on this one.
@@ -943,6 +991,7 @@ function renderChangesButton() {
   button.setAttribute('aria-pressed', String(state.changesOn))
 }
 function toggleChanges() {
+  if (!changes.boxes?.length) return
   state.changesOn = !state.changesOn
   renderChangesButton()
   paint()
@@ -983,9 +1032,9 @@ function paint() {
   if (!s || !state.size) return
   ctx.clearRect(0, 0, state.size.w, state.size.h)
   if (sentMarks.img) ctx.drawImage(sentMarks.img, 0, 0, state.size.w, state.size.h)
-  if (state.changesOn && changes.boxes?.length) paintChanged(ctx, changes.boxes, state.size.w)
+  if (state.changesOn && changes.boxes?.length) paintChanged(ctx, changes.boxes, state.size.w, state.size.h)
   const marks = draftOf(s).marks
-  paintMarks(ctx, draft ? [...marks, draft] : marks)
+  paintMarks(ctx, [...marks, ...(draft ? [draft] : []), ...(mic.hearing ?? [])])
 }
 
 /** What lists a screen's state, after a draft starts or stops counting. */
@@ -1092,6 +1141,7 @@ $('canvas').addEventListener('pointerdown', event => {
   else draft = { tool: state.tool, a: p, b: p, color: state.colour, w }
 })
 $('canvas').addEventListener('pointermove', event => {
+  if (state.size) mic.pointer = at(event)
   if (pan) {
     $('scroller').scrollLeft = pan.left - (event.clientX - pan.x)
     $('scroller').scrollTop = pan.top - (event.clientY - pan.y)
@@ -1112,6 +1162,9 @@ const finish = () => {
 }
 $('canvas').addEventListener('click', event => {
   if (state.size && state.tool === 'text' && !textEntry) openTextEntry(event)
+})
+$('canvas').addEventListener('pointerleave', () => {
+  mic.pointer = null
 })
 $('canvas').addEventListener('pointerup', finish)
 $('canvas').addEventListener('pointercancel', finish)
@@ -1812,6 +1865,45 @@ $('drawerList').addEventListener('keydown', event => {
 $('center').addEventListener('click', event => {
   if (event.target.closest('[data-more]')) toggleMore()
 })
+/* The first minute: your own app, or one sentence to your agent, or a sample. */
+function firstRunHtml() {
+  return `<form class="first" data-first>
+    <h2>See your app, and mark it.</h2>
+    <div class="first-row"><input id="firstAddress" placeholder="http://localhost:3000" aria-label="Your app's address" autocomplete="off"><button class="btn primary" id="firstShow">Show it</button></div>
+    <p class="first-said" id="firstSaid" hidden></p>
+    <div class="first-or">No app yet? Say what you want, to your agent</div>
+    <div class="first-row"><code id="firstAsk">/markback:first-mark a recipe box for my family</code><button type="button" class="btn" data-first-copy>Copy</button></div>
+    <div class="first-or">Just looking</div>
+    <div class="first-row"><button type="button" class="btn" data-first-sample>Try the sample</button></div>
+  </form>`
+}
+async function firstRun(path, body) {
+  const said = $('firstSaid')
+  said.hidden = false
+  said.textContent = path === '/api/show' ? 'Taking a picture…' : ''
+  $('firstShow').disabled = true
+  try {
+    const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    const got = await res.json()
+    if (!res.ok) throw new Error(got.error)
+    location.hash = got.appSlug
+    await loadQueue()
+  } catch (error) {
+    said.textContent = error.message
+    $('firstShow').disabled = false
+  }
+}
+$('stateCard').addEventListener('submit', event => {
+  event.preventDefault()
+  void firstRun('/api/show', { url: $('firstAddress').value || $('firstAddress').placeholder })
+})
+$('stateCard').addEventListener('click', event => {
+  if (event.target.closest('[data-first-sample]')) void firstRun('/api/sample', {})
+  if (event.target.closest('[data-first-copy]')) {
+    void navigator.clipboard?.writeText($('firstAsk').textContent)
+    event.target.textContent = 'Copied'
+  }
+})
 $('stateCard').onclick = event => {
   if (event.target.closest('[data-look]')) go(0)
   if (event.target.closest('[data-go-on]')) goOn()
@@ -1980,9 +2072,9 @@ document.addEventListener('keydown', event => {
     event.preventDefault()
     $('notes').focus()
   } else if (key === 'v' || key === 'V') cycleView()
-  else if (key === 'c' || key === 'C') toggleChanges()
+  else if ((key === 'c' || key === 'C') && !event.repeat) toggleChanges()
   else if (key === 'd' || key === 'D') pressMic()
-  else if (key === 'i' || key === 'I') toggleMore()
+  else if ((key === 'i' || key === 'I') && !event.repeat) toggleMore()
   else if (/^[1-4]$/.test(key)) setColour(COLOURS[Number(key) - 1].value)
   else {
     const tool = { b: 'box', a: 'arrow', p: 'pen', t: 'text', m: 'pan' }[key.toLowerCase()]

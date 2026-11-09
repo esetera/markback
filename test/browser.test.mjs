@@ -44,7 +44,8 @@ after(async () => {
 async function rig() {
   const home = mkdtempSync(join(tmpdir(), 'review-browser-'))
   const port = await freePort()
-  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port }
+  // REVIEW_CHROME here is for driving these tests; a picture of an app is taken by the Chrome a person would have.
+  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_CHROME: '' }
   // Wide: it fills the room, and what to check is the line under the bar. `tall` leaves room beside it.
   const picture = join(home, 'p.png')
   writePicture(picture, 1600, 900)
@@ -663,8 +664,8 @@ test('with only set aside left, the finished page says so and offers the way bac
 test('what to check stands beside a picture that leaves room, without shrinking it; a wide one keeps the line', { skip }, async () => {
   const { push, open, tall, queue } = await rig()
   push('Tall', ['A'], null, ['--check', 'The heading is level', '--check', 'The margin holds'], tall)
-  push('Tall', ['B'], () => 'First point. Second point! Third point?', [], tall)
-  push('Wide', ['W'], () => 'One sentence. Two sentences.')
+  push('Tall', ['B'], () => 'A first point. Second point! Third point?', [], tall)
+  push('Wide', ['W'], () => 'One whole sentence. Two sentences.')
   assert.deepEqual((await queue('tall')).screens[0].check, ['The heading is level', 'The margin holds'])
   const { page, errors } = await open('tall', { undo: 60000 })
   const checks = page.locator('#checks')
@@ -679,12 +680,12 @@ test('what to check stands beside a picture that leaves room, without shrinking 
   assert.equal(Math.round(stage.height), 960 - 40 - 46 - 14, 'the picture has all the height')
   await page.keyboard.press('ArrowRight')
   await settled(page)
-  assert.deepEqual(await checks.locator('li').allInnerTexts(), ['First point.'], 'from the note, its first sentence')
+  assert.deepEqual(await checks.locator('li').allInnerTexts(), ['A first point.'], 'from the note, its first sentence')
   await page.keyboard.press('i')
   assert.match(await checks.innerText(), /Third point\?/)
   const wide = await open('wide', { undo: 60000 })
   assert.equal(await wide.page.locator('#checks').isVisible(), false)
-  assert.match(await wide.page.locator('#aboutNote').innerText(), /One sentence\.\s*More/)
+  assert.match(await wide.page.locator('#aboutNote').innerText(), /One whole sentence\.\s*More/)
   assert.deepEqual(errors, [])
 })
 
@@ -1641,6 +1642,72 @@ test('speaking: words come as they are heard, settle, stay correctable; a bare c
   await page.locator('#notes').blur()
   await page.keyboard.press('d')
   assert.equal(await page.locator('#micBtn').getAttribute('aria-pressed'), 'false', 'D stops it')
+  assert.deepEqual(errors, [])
+})
+
+test('the first minute: an address becomes a screen to mark, and where nothing answers it says so', { skip }, async t => {
+  const driving = process.env.REVIEW_CHROME
+  delete process.env.REVIEW_CHROME
+  const chrome = (await import('../lib/first.mjs')).findChrome()
+  if (driving) process.env.REVIEW_CHROME = driving
+  if (!chrome) return t.skip('no Chrome on this computer')
+  const r = await rig()
+  const context = await browser.newContext({ viewport: { width: 1300, height: 860 } })
+  const page = await context.newPage()
+  const errors = []
+  page.on('pageerror', e => errors.push(e.message))
+  await page.goto(`http://localhost:${r.port}/`)
+  await page.locator('#firstAddress').fill('http://127.0.0.1:1')
+  await page.getByRole('button', { name: 'Show it' }).click()
+  await page.locator('#firstSaid').getByText('Is your app running?').waitFor({ timeout: 15000 })
+  await page.locator('#firstAddress').fill('not a place at all')
+  await page.keyboard.press('Enter')
+  await page.locator('#firstSaid').getByText('is not an address').waitFor({ timeout: 8000 })
+  await page.locator('#firstAddress').fill(`127.0.0.1:${r.port}/work.html`)
+  await page.getByRole('button', { name: 'Show it' }).click()
+  await page.locator('#canvas').waitFor({ timeout: 50000 })
+  await page.waitForFunction(() => document.getElementById('canvas').width > 1000, null, { timeout: 8000 })
+  assert.match(await page.locator('#aboutNote').innerText(), /Draw on anything/)
+  assert.match(await page.locator('#crumbs').innerText(), /127\.0\.0\.1/)
+  assert.deepEqual(errors, [])
+})
+
+test('the first minute: the sample, from an empty page', { skip }, async () => {
+  const r = await rig()
+  const page = await (await browser.newContext({ viewport: { width: 1300, height: 860 } })).newPage()
+  await page.goto(`http://localhost:${r.port}/`)
+  await page.getByRole('button', { name: 'Try the sample' }).click()
+  await page.locator('#canvas').waitFor({ timeout: 8000 })
+  assert.match(await page.locator('#crumbs').innerText(), /Sample/)
+})
+
+test('point and speak: words land on what the pointer was at, off the picture they are notes, and they send as text marks', { skip }, async () => {
+  const r = await rig()
+  r.push('Point', ['A', 'B'], null)
+  const { page, errors } = await withSpeech(r, 'point')
+  await page.locator('#micBtn').click()
+  await page.waitForFunction(() => window.FAKE)
+  const c = await page.locator('#canvas').boundingBox()
+  await page.mouse.move(c.x + 200, c.y + 200)
+  await page.evaluate(() => window.say('this heading', false))
+  assert.equal(await page.locator('#notes').inputValue(), '', 'heard words show on the picture, not in the notes')
+  await page.mouse.move(c.x + 700, c.y + 500)
+  await page.evaluate(() => window.say('this heading and that button', false))
+  await page.evaluate(() => window.say('this heading and that button', true))
+  const marks = await page.evaluate(() => JSON.parse(localStorage.getItem('review:point/a/1')).marks.filter(m => m.tool === 'text').map(m => [m.tool, m.text, Math.round(m.at[0])]))
+  assert.deepEqual(marks.map(m => m[1]), ['this heading', 'and that button'])
+  assert.ok(marks[0][2] < marks[1][2], 'each where the pointer was')
+  await page.mouse.move(5, 5)
+  await page.evaluate(() => window.say('the whole page feels tight', true))
+  assert.equal(await page.locator('#notes').inputValue(), 'the whole page feels tight', 'off the picture it is a note')
+  await page.locator('#micBtn').click()
+  await page.locator('#notes').blur()
+  await page.keyboard.press('Meta+Enter')
+  const sent = await waitFor(() => r.read('Point').find(x => x.screenId === 'a'))
+  assert.deepEqual(sent.shapes.map(s => [s.type, s.text]), [['arrow', undefined], ['text', 'this heading'], ['arrow', undefined], ['text', 'and that button']])
+  const c0 = sent.imageSize.w / c.width
+  assert.ok(Math.abs(sent.shapes[0].to.x - 200 * c0) < 3 && Math.abs(sent.shapes[0].to.y - 200 * c0) < 3, 'the arrow points at where the pointer was')
+  assert.equal(sent.notes, 'the whole page feels tight')
   assert.deepEqual(errors, [])
 })
 

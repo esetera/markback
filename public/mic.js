@@ -14,6 +14,24 @@ export function commandIn(phrase) {
   return COMMANDS[String(phrase).toLowerCase().replace(/[^a-z ]+/g, '').trim()] ?? null
 }
 
+/** How far the pointer must move, in picture pixels, before the next word starts a new mark. */
+export const SAME_PLACE = 90
+
+/**
+ * Words, each with where the pointer was when it was heard, as runs that stay together: a run on the picture becomes a mark
+ * there, and a run with no place goes to the notes. A small wobble stays one run.
+ */
+export function placeWords(words, near = SAME_PLACE) {
+  const runs = []
+  for (const { word, at } of words) {
+    const last = runs[runs.length - 1]
+    const same = last && (last.at && at ? Math.hypot(last.at[0] - at[0], last.at[1] - at[1]) <= near : !last.at && !at)
+    if (same) last.text += ` ${word}`
+    else runs.push({ text: word, at })
+  }
+  return runs
+}
+
 /** Which route, from what this browser says. Plain, so it can be tested without one. */
 export function routeFor({ hasSpeech, micState, onDevice, vendor }) {
   if (micState === 'denied') return { route: 'none', why: 'This window has no microphone. Open this page in Chrome to speak.' }
@@ -53,8 +71,10 @@ export async function installPack(lang) {
  * Listens and writes into whichever box `box()` gives. Words still being heard show as they come and are replaced as they
  * settle. What is typed meanwhile stays. `onCommand` gets a phrase that was only a command, and it leaves no words behind.
  */
-export function createListener({ box, local, lang, onCommand, onState, onProblem }) {
+export function createListener({ box, local, lang, onCommand, onState, onProblem, pointAt = () => null, onPlaced = null, onHearing = () => {} }) {
   let rec = null
+  // Where the pointer was as each word of this phrase first came.
+  let trail = []
   let wanted = false
   let hearing = ''
   let hearingIn = null
@@ -84,13 +104,27 @@ export function createListener({ box, local, lang, onCommand, onState, onProblem
         put(el, el.value)
         if (command === 'stop') stop()
         else onCommand(command)
-      } else if (words) put(el, joined(el.value, words))
+      } else if (words) {
+        // A word's place, by when it was first heard. The settled words can differ a little from those heard on the way.
+        const said = words.split(/\s+/)
+        const placed = said.map((word, n) => ({ word, at: trail.length ? trail[Math.min(trail.length - 1, Math.floor((n * trail.length) / said.length))] : pointAt() }))
+        for (const run of onPlaced ? placeWords(placed) : [{ text: words, at: null }]) {
+          if (run.at) onPlaced(run)
+          else put(el, joined(el.value, run.text))
+        }
+      }
+      trail = []
+      onHearing('', null)
     }
     let still = ''
     for (let i = event.resultIndex; i < event.results.length; i++) if (!event.results[i].isFinal) still += event.results[i][0].transcript
     dropHearing()
     still = still.trim()
-    if (still) {
+    const count = still ? still.split(/\s+/).length : 0
+    while (trail.length < count) trail.push(pointAt())
+    if (still && onPlaced && trail[trail.length - 1]) {
+      onHearing(still, trail[trail.length - 1])
+    } else if (still) {
       const before = el.value
       const shown = joined(before, still)
       hearing = shown.slice(before.length)

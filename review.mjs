@@ -11,6 +11,7 @@
  *   review clear --app MyApp
  *
  *   review demo                                 a sample to try it on
+ *   review see <address> [--app MyApp]          a picture of your running app, ready to mark
  *   review sketch --in sheet.json --out sheet.svg
  *
  *   review ideas [--json]                       what has been asked for and not answered
@@ -23,14 +24,20 @@
  *   review show --item <id> [--json]            one item, with its notes: read again while working
  *   review note --item <id> --text "..." [--by "who"]
  *   review stage --item <id> --to queued|progress|ready|done
+ *
+ *   review install-skills [--to ~/.agents/skills] [--agents-md <project folder> [--no-path]]
+ *                                               the skills for Codex, Cursor, Gemini CLI and others; AGENTS.md for the rest
  */
 
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HOME, INBOX, PORT, clearApp, isSetAside, listApps, listScreens, push, readInbox, rememberPort, slug } from './lib/store.mjs'
-import { SAMPLE, sketch } from './lib/sketch.mjs'
+import { pushSample, showApp } from './lib/first.mjs'
+import { sketch } from './lib/sketch.mjs'
+import { installSkills } from './lib/skills.mjs'
 import { addNote, closeRequest, listWork, openRequests, postIdea, pushedFor, setStage, take } from './lib/work.mjs'
 
 const [command, ...rest] = process.argv.slice(2)
@@ -169,7 +176,7 @@ async function stop() {
 
 if (command === 'push') {
   const entry = push({ app: need('app'), screen: need('screen'), mode: flags.mode || '', after: need('after'), before: flags.before || '', note: flags.note || '', check: flags.check ?? [], kind: flags.kind || 'qa', item: typeof flags.item === 'string' ? flags.item : '', from: typeof flags.from === 'string' ? flags.from : 'Claude' })
-  if (entry.item) pushedFor(entry.item, entry.app, entry.from)
+  if (entry.item) pushedFor(entry.item, entry.app, entry.from, entry.kind)
   const all = listScreens(entry.appSlug)
   // Long words go unread, and they cost time before anyone can act.
   if ([entry.note, ...(entry.check ?? [])].some(words => words.trim().split(/\s+/).length > 10)) console.error('Too long: say what to look at in ten words or fewer. Only the first sentence shows; the rest waits behind More.')
@@ -215,6 +222,11 @@ if (command === 'push') {
     if (Date.now() > deadline) fail(`No feedback for ${app} before the timeout.${aside ? ' It is set aside, not answered.' : ''}`)
     await sleep(2000)
   }
+} else if (command === 'install-skills') {
+  const to = typeof flags.to === 'string' ? flags.to.replace(/^~(?=\/|$)/, homedir()) : join(homedir(), '.agents', 'skills')
+  const project = typeof flags['agents-md'] === 'string' ? flags['agents-md'].replace(/^~(?=\/|$)/, homedir()) : null
+  for (const path of installSkills({ to, agentsMdIn: project, pathInAgentsMd: !flags['no-path'] })) console.log(`Wrote ${path}`)
+  console.log('Codex, Cursor and Gemini CLI read skills from ~/.agents/skills. Run this again after updating Markback.')
 } else if (command === 'clear') {
   clearApp(need('app'))
   console.log(`Took ${flags.app} off the review page. Its feedback stays in ${join(INBOX, slug(flags.app))}.`)
@@ -226,11 +238,15 @@ if (command === 'push') {
   writeFileSync(need('out'), sketch(JSON.parse(readFileSync(need('in'), 'utf8'))))
   console.log(`Wrote ${flags.out}`)
 } else if (command === 'demo') {
-  const picture = join(HOME, 'sample.svg')
-  mkdirSync(HOME, { recursive: true })
-  writeFileSync(picture, sketch(SAMPLE))
-  push({ app: 'Sample', screen: 'Try it', after: picture, check: ['Draw a box round something', 'Then press Send'], from: 'the sample' })
+  pushSample()
   console.log(`A sample is waiting. Open http://localhost:${PORT}/#sample`)
+} else if (command === 'see') {
+  try {
+    const shown = await showApp(rest[0] && !rest[0].startsWith('--') ? rest[0] : flags.url, { app: typeof flags.app === 'string' ? flags.app : '', screen: typeof flags.screen === 'string' ? flags.screen : 'First look', files: true, kind: flags.kind || 'qa' })
+    console.log(`It is ready to mark. Open http://localhost:${PORT}/#${shown.appSlug}`)
+  } catch (error) {
+    fail(error.message)
+  }
 } else if (command === 'ideas') {
   await ideas(rest[0] && !rest[0].startsWith('--') ? rest[0] : 'list')
 } else if (command === 'queue') {
@@ -250,6 +266,6 @@ if (command === 'push') {
 } else if (command === 'stage') {
   showItem(setStage(need('item'), need('to'), typeof flags.by === 'string' ? flags.by : 'a session'))
 } else {
-  console.log(`review start | stop | demo | sketch | push | list | wait | read | clear | ideas | queue | take | show | note | stage   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
+  console.log(`review start | stop | see | demo | sketch | push | list | wait | read | clear | ideas | queue | take | show | note | stage | install-skills   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
   if (command) process.exit(1)
 }

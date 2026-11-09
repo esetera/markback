@@ -13,22 +13,23 @@
     "start": "node server.mjs",
     "test": "node --test test/*.test.mjs"
   },
+  "author": "Pure Science Inc. <adam@pure.science>",
+  "homepage": "https://github.com/purescience-inc/markback",
   "license": "MIT",
   "files": [
     ".claude-plugin",
     "bin",
     "docs/picture.png",
+    "docs/icon.svg",
+    "docs/icon.png",
     "lib",
     "public",
     "skills",
+    "AGENTS.md",
     "README.md",
     "LICENSE",
     "package.json",
     "review.mjs",
-    "server.mjs",
-    "docs/icon.svg",
-    "docs/icon.png"
-  ],
-  "author": "Pure Science Inc. <adam@pure.science>",
-  "homepage": "https://github.com/purescience-inc/markback"
+    "server.mjs"
+  ]
 }

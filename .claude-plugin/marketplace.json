@@ -4,6 +4,9 @@
     "name": "Pure Science Inc.",
     "email": "adam@pure.science"
   },
+  "metadata": {
+    "description": "Markback: review screens by drawing on them. Each mark comes back to your agent as a request."
+  },
   "plugins": [
     {
       "name": "markback",
