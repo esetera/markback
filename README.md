@@ -36,10 +36,10 @@ Run it in your project's folder. Then ask Codex: review my app.
 **Kimi Code**
 
 ```bash
-git clone https://github.com/purescience-inc/markback && kimi --skills-dir ./markback/skills
+git clone https://github.com/purescience-inc/markback ~/markback
 ```
 
-To carry on a session later: `kimi -S <session> -p "..."`.
+Then, in your project: `kimi --skills-dir ~/markback/skills`. For that run, Markback's skills stand in for your others. To go back into a session: `kimi --skills-dir ~/markback/skills -S` (it lets you pick one).
 
 Other agents that can run commands should work too: CodeWhale is next to be tried.
 
@@ -90,7 +90,7 @@ codex exec -s workspace-write "Here is a screen I want reviewed: shot.png. Put i
 
 In Codex's sandbox, taking a new screenshot with Chrome needs leave to run outside it: say yes when asked. Pushing only writes files, so it works inside the sandbox even when `review start` cannot see the page.
 
-**Kimi Code** takes the skills with `--skills-dir`: `kimi --skills-dir ./markback/skills`, and `kimi -S <session> -p "..."` to carry on.
+**Kimi Code** takes the skills with `--skills-dir`, in place of your others for that run: `kimi --skills-dir ~/markback/skills`, with `-S` to go back into a session.
 
 **Any other agent** that reads `AGENTS.md` (Codex and Cursor do, and others): add Markback's part to your project's `AGENTS.md`. It goes between two markers, so your own words stay and a rerun replaces only that part. It names where your Markback folder is; add `--no-path` to say it in words instead, for a file you commit.
 
