@@ -5,7 +5,8 @@
  *
  *   node scripts/vendor-annotate.mjs --from path/to/annotate.ts
  *
- * Set MARKBACK_ANNOTATE_FROM to that file and `npm test` checks the two still match.
+ * Set MARKBACK_ANNOTATE_FROM to that file and `npm test` checks the two still match. A maintainers' tool: the TypeScript is
+ * not public, and stripping types needs Node 22.13 or later.
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { stripTypeScriptTypes } from 'node:module'
