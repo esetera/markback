@@ -6,35 +6,36 @@ The person reviews screens by drawing on them in a local page. You push screensh
 
 Working on Markback itself? This file is made from `skills/*/SKILL.md` by `node scripts/agents-md.mjs`: change the skills, not this file, and run `npm test`.
 
-## first-mark
+## markback
 
-_From one sentence or a running app to the person's first mark, in about a minute. Use when someone says what they want built and wants to see it, or names an app to review._
+_Start Markback in a project, or from one sentence: the person is drawing on their app's screens within a minute, with nothing to paste. Use when someone types /markback, wants to see or review their app, or says what they want built._
 
-The goal is a screen the person can draw on within a minute. Speed matters more than polish: their marks will do the rest.
+The goal is the person drawing on their own app's screens within a minute. Never ask them for an address, and never hand them one to paste.
 
 Start from what the person said.
 
-### If it is an address, or an app is already running
+### In their project
+
+Run this in the project's folder:
 
 ```bash
-review start
-review see http://localhost:3000 --app "My app"
+review project
 ```
 
-### If it is a sentence
+It finds how the app runs, takes pictures of its main screens, names the review after the folder, and opens the review page in their browser. Then tell them: "I've opened it. Draw on what you want changed, then press Send." Stop there.
+
+- **"Your app runs with npm run dev, and it is not running":** starting it runs their code. Ask them first, in one line. On a yes, run `review project --yes`.
+- **"There is no app in this folder yet":** make the first screen from what they said (below).
+
+### No app yet
 
 1. Infer what the application needs: its main screen, its real content, what a person does first. Do not ask questions.
-2. Write that one screen as a single HTML file, with believable content. No build step, and no back end yet.
-3. Show it:
-
-```bash
-review start
-review see "file://$PWD/first.html" --app "My app" --kind proposal
-```
+2. Write that one screen as a single HTML file, `index.html`, with believable content. No build step, and no back end yet.
+3. Run `review project` again. It finds the page and opens it.
 
 ### Then
 
-Tell them the page's address and say: draw on anything, then press Send. Stop there. To act on what comes back, use the `read-marks` skill.
+To act on what comes back, use the `read-marks` skill.
 
 If `review` is not found, use `node review.mjs` in the Markback folder in its place.
 

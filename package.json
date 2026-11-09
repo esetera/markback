@@ -7,6 +7,7 @@
     "node": ">=22.6"
   },
   "bin": {
+    "markback": "./bin/markback",
     "review": "./bin/review"
   },
   "scripts": {

@@ -63,7 +63,7 @@ const commandsIn = text => [...text.matchAll(/```bash\n([\s\S]*?)```/g)].flatMap
 test('every command AGENTS.md teaches is one the CLI knows, with flags it reads', () => {
   const source = readFileSync(CLI, 'utf8') + readFileSync(join(ROOT, 'lib', 'skills.mjs'), 'utf8')
   const lines = commandsIn(AGENTS)
-  assert.ok(lines.length >= 15, `${lines.length} commands taught`)
+  assert.ok(lines.length >= 10, `${lines.length} commands taught`)
   for (const line of lines) {
     const [, command, ...rest] = words(line)
     assert.ok(source.includes(`command === '${command}'`) || ['ideas'].includes(command), `${command} is a command`)

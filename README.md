@@ -13,9 +13,28 @@ Markback is the third part. The first two are your own agent's work, such as Cla
 
 ![The review page, with a box and a note drawn on a sample](docs/picture.png)
 
-## Try it in a minute
+## Start with your project
 
-You need [Node](https://nodejs.org) 22.6 or later and nothing else: it has no dependencies.
+You need [Node](https://nodejs.org) 22.6 or later, and Chrome or Edge for the pictures. Nothing else: it has no dependencies.
+
+1. Install it once, in Claude Code:
+
+   ```bash
+   claude plugin marketplace add purescience-inc/markback && claude plugin install markback@markback
+   ```
+
+2. In your project, type `/markback`. It finds how your app runs, starts it if you say yes, takes pictures of its main screens, and opens them in your browser. There is no address to paste.
+3. Draw on what you want changed, and press **Send**. Your agent reads each mark as a request.
+
+No app yet? `/markback a recipe box for my family` makes the first screen from your words.
+
+Any agent that runs commands can do the same, and so can you: install the command once, then run `markback` in your project's folder.
+
+```bash
+npm install -g github:purescience-inc/markback
+```
+
+## Try it without a project
 
 ```bash
 git clone https://github.com/purescience-inc/markback
@@ -30,15 +49,15 @@ Open the address it prints, draw on the sample, and press Send. Then read what c
 node review.mjs read --app Sample --latest
 ```
 
-Or show your own running app, ready to mark (this needs Chrome or Edge): `node review.mjs see http://localhost:3000`.
+Or show any running app, ready to mark: `node review.mjs see http://localhost:3000`.
 
 If the port is taken: `node review.mjs start --port 5742`. To stop: `node review.mjs stop`.
 
 ## Your agent
 
-Markback is a command and plain files, so it works with any agent that can run a shell command. What it teaches agents lives in five skills: `first-mark`, `push-screens`, `read-marks`, `workflow-sketches` and `ideas-and-queue`. Everything below is made from those same five files, so no agent is taught something different.
+Markback is a command and plain files, so it works with any agent that can run a shell command. What it teaches agents lives in five skills: `markback`, `push-screens`, `read-marks`, `workflow-sketches` and `ideas-and-queue`. Everything below is made from those same five files, so no agent is taught something different.
 
-**Claude Code**, in one step. It gives every session the `review` command and the five skills. Try `/markback:first-mark a recipe box for my family`.
+**Claude Code**, in one step. It gives every session the `review` command and the five skills. Try `/markback` in a project, or `/markback a recipe box for my family` in an empty folder. If another command already has that name, `/markback:markback` always works.
 
 ```bash
 claude plugin marketplace add purescience-inc/markback && claude plugin install markback@markback

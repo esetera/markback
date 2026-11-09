@@ -1868,11 +1868,13 @@ $('center').addEventListener('click', event => {
 /* The first minute: your own app, or one sentence to your agent, or a sample. */
 function firstRunHtml() {
   return `<form class="first" data-first>
-    <h2>See your app, and mark it.</h2>
+    <h2>Two ways to start.</h2>
+    <div class="first-or">1. Your app's address, on this computer or online</div>
     <div class="first-row"><input id="firstAddress" placeholder="http://localhost:3000" aria-label="Your app's address" autocomplete="off"><button class="btn primary" id="firstShow">Show it</button></div>
     <p class="first-said" id="firstSaid" hidden></p>
-    <div class="first-or">No app yet? Say what you want, to your agent</div>
-    <div class="first-row"><code id="firstAsk">/markback:first-mark a recipe box for my family</code><button type="button" class="btn" data-first-copy>Copy</button></div>
+    <div class="first-or">2. In your agent, in your project: it finds the app and opens it here</div>
+    <div class="first-row"><code id="firstAsk">/markback</code><button type="button" class="btn" data-first-copy>Copy</button></div>
+    <p class="first-said">No app yet? Say what you want after it: <b>/markback a recipe box for my family</b>. In a terminal, <b>markback</b> in the project's folder does the same.</p>
     <div class="first-or">Just looking</div>
     <div class="first-row"><button type="button" class="btn" data-first-sample>Try the sample</button></div>
   </form>`
