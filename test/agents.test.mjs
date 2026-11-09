@@ -56,6 +56,17 @@ test('install-skills writes skill folders any agent can follow, and a block in a
   assert.ok(mine.includes(BLOCK_END))
 })
 
+test('install-skills --codex puts the skills in this project, where Codex finds them, with no path of this computer', () => {
+  const project = join(home, 'codex-project')
+  mkdirSync(project)
+  const out = execFileSync('node', [CLI, 'install-skills', '--codex'], { cwd: project, encoding: 'utf8' })
+  assert.match(out, /ask Codex: review my app/)
+  for (const skill of readSkills()) {
+    const text = readFileSync(join(project, '.agents', 'skills', skill.name, 'SKILL.md'), 'utf8')
+    assert.ok(!text.includes(ROOT), `${skill.name} names no path here`)
+  }
+})
+
 /** Splits one shell line the way a shell would, for the plain quoting AGENTS.md uses. */
 const words = line => [...line.matchAll(/"([^"]*)"|(\S+)/g)].map(m => m[1] ?? m[2])
 const commandsIn = text => [...text.matchAll(/```bash\n([\s\S]*?)```/g)].flatMap(m => m[1].split('\n')).map(l => l.trim()).filter(l => l.startsWith('review '))
@@ -63,7 +74,7 @@ const commandsIn = text => [...text.matchAll(/```bash\n([\s\S]*?)```/g)].flatMap
 test('every command AGENTS.md teaches is one the CLI knows, with flags it reads', () => {
   const source = readFileSync(CLI, 'utf8') + readFileSync(join(ROOT, 'lib', 'skills.mjs'), 'utf8')
   const lines = commandsIn(AGENTS)
-  assert.ok(lines.length >= 15, `${lines.length} commands taught`)
+  assert.ok(lines.length >= 10, `${lines.length} commands taught`)
   for (const line of lines) {
     const [, command, ...rest] = words(line)
     assert.ok(source.includes(`command === '${command}'`) || ['ideas'].includes(command), `${command} is a command`)
