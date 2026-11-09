@@ -1,6 +1,6 @@
 import { burnCanvas, changesBetween, COLOURS, fitZoom, isReal, paintChanged, paintMarks, redone, shapeOf, strokeFor, textFor, undone, withMark, withMarks, ZOOM_STEP, ZOOM_WHEEL_STEP, zoomedBy } from './annotate.js'
 import { createListener, findRoute, installPack } from './mic.js'
-import { afterSend, answerWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, nextWords, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from './flow.js'
+import { afterSend, answerWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from './flow.js'
 
 /**
  * The wizard is the review: the picture fills the window, with one thin bar above it, what it is about under that, and a slim
@@ -212,6 +212,10 @@ function tallyOf(a) {
   return { set, changes, good, untouched, reviewed: changes.length + good.length }
 }
 const label = s => `${s.screen}${s.mode ? ` (${s.mode})` : ''}`
+/** The screen in the bar: its name first to be kept, and light or dark quiet after it. */
+const screenCrumb = s => `<b title="${esc(label(s))}">${esc(s.screen)}</b>${s.mode ? `<span class="crumb-mode">${esc(s.mode)}</span>` : ''}`
+/** Waiting in every review still offered. */
+const waitingInAll = () => state.apps.filter(x => !x.setAside).reduce((n, x) => n + openOf(x).length, 0)
 /** Whose words the note is. Anything already queued came from a session too. */
 const fromWords = s => `From ${s?.from || 'Claude'}`
 /** A screen as the latest list has it. */
@@ -442,12 +446,12 @@ function renderAnswers(a, s) {
   if (!line) document.body.classList.remove('answers-open')
 }
 
-/* Proposal says it loudly: this is a new idea to shape, not something built to check. */
+/* Proposal says it plainly, in ink and bold: a new idea to shape, not something built to check. QA is the usual case and quiet. */
 function renderKind(s) {
   const proposal = s?.kind === 'proposal'
   $('kindTag').hidden = !s
   $('kindTag').className = `kind${proposal ? ' proposal' : ''}`
-  setHtml($('kindTag'), proposal ? `<i>${ICONS.tag}</i><b>Proposal</b>` : 'QA')
+  $('kindTag').textContent = proposal ? 'Proposal' : 'QA'
 }
 
 /* ---------- speaking ---------- */
@@ -603,15 +607,12 @@ function renderSegment(a) {
   // Opening the wizard: where this starts, with one press to be in.
   if (state.arriving && a && !onDonePage()) {
     const place = placeOf(a)
-    const waiting = state.apps.filter(x => !x.setAside).reduce((n, x) => n + openOf(x).length, 0)
-    const reviews = state.apps.filter(offered).length
     $('segment').hidden = false
     $('segment').className = 'segment new-group'
     return setHtml($('segment'), `<div class="segment-in">
-      <p class="finished">${waiting} screen${waiting === 1 ? '' : 's'} waiting, in ${reviews} review${reviews === 1 ? '' : 's'}.</p>
       <p class="starting">You are starting with:</p>
       <h1>${esc(placeWords(place))}</h1>
-      <p class="what">${esc(nextWords(place, openOf(a).length, a.screens.length))}</p>
+      <p class="what">${esc(`${place.group ? `${place.title}: ` : ''}${countWords(openOf(a).length, waitingInAll())}`)}</p>
       <div class="actions"><button class="btn primary" data-start>Start<span class="kbd">↩</span></button><button class="btn" data-stop>Stop here<span class="kbd">S</span></button></div>
     </div>`)
   }
@@ -633,7 +634,7 @@ function renderSegment(a) {
     <p class="starting">You are now starting a new review:</p>
     <span class="new-word">${sameGroup ? '' : 'A different group'}</span>
     <h1>${esc(placeWords(there))}</h1>
-    <p class="what">${esc(nextWords(there, openOf(target).length, target.screens.length))}</p>
+    <p class="what">${esc(`${there.group ? `${there.title}: ` : ''}${countWords(openOf(target).length, waitingInAll())}`)}</p>
     <div class="actions">
       <button class="btn primary" data-start>Start<span class="kbd">↩</span></button>
       ${restOfGroup(from).length ? `<button class="btn" data-rest-aside>Set the rest of this group aside<span class="kbd">X</span></button>` : ''}
@@ -826,16 +827,17 @@ function render() {
   renderFoot(a, s)
   renderDrawer()
   document.body.classList.toggle('no-screen', !s)
-  const overall = state.apps.filter(x => !x.setAside).reduce((n, x) => n + openOf(x).length, 0)
-  const asideCount = state.apps.filter(x => x.setAside).length
-  $('overall').textContent = state.loaded && state.apps.length ? `· ${overall} waiting overall${asideCount ? ` · ${asideCount} set aside` : ''}` : ''
+  // Nothing to draw on until a picture is up: the overlay hides the tools and the views with it.
+  document.body.classList.toggle('covered', covered)
+  // One count, and only where a picture is: the overlay says it in full.
+  $('overall').textContent = s && a ? countWords(openOf(a).length, waitingInAll(), { short: true }) : ''
+  $('overall').title = s && a ? `Screen ${state.index + 1} of ${a.screens.length}. ${countWords(openOf(a).length, waitingInAll())}.` : ''
   $('stopHere').hidden = !s
   document.body.classList.toggle('no-apps', state.loaded && !state.apps.length)
   $('notes').disabled = !s
   if (!a) {
     renderKind(null)
     setHtml($('crumbs'), '')
-    $('position').textContent = ''
     $('back').disabled = $('next').disabled = true
     setHtml($('views'), '')
     return
@@ -843,10 +845,11 @@ function render() {
   renderKind(s)
   const total = a.screens.length
   const here = placeOf(a)
+  // A group called Proposal or Built only says again what the label says: the name alone is enough.
+  const kindGroup = /^(proposal|built|qa)$/i.test(here.group ?? '')
   setHtml($('crumbs'), here.group
-    ? `<span class="crumb-app" title="${esc(a.name)}">${esc(placeWords(here))}</span><span class="sep-slash">/</span><b title="${esc(a.name)}">${esc(here.title)}</b>${s ? `<span class="sep-slash">/</span><span class="crumb-app">${esc(label(s))}</span>` : ''}`
-    : `<span class="crumb-app">${esc(a.name)}</span>${s ? `<span class="sep-slash">/</span><b>${esc(label(s))}</b>` : ''}`)
-  $('position').textContent = s ? `${placeOf(a).group ? `this ${placeOf(a).noun.trim() || 'one'} ` : ''}${state.index + 1} of ${total}` : ''
+    ? `${kindGroup ? '' : `<span class="crumb-app" title="${esc(a.name)}">${esc(placeWords(here))}</span><span class="sep-slash">/</span>`}<span class="crumb-app" title="${esc(a.name)}">${esc(here.title)}</span>${s ? `<span class="sep-slash">/</span>${screenCrumb(s)}` : ''}`
+    : `<span class="crumb-app" title="${esc(a.name)}">${esc(barName(a.name))}</span>${s ? `<span class="sep-slash">/</span>${screenCrumb(s)}` : ''}`)
   $('back').disabled = !s || state.index === 0
   $('next').disabled = !s || state.index >= total - 1
   if (!s) {

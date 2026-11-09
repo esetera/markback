@@ -93,7 +93,7 @@ async function rig() {
   return { push, read, queue, open, home, port, env, start, stop, clear, tall }
 }
 
-const at = async page => Number(/(\d+) of/.exec(await page.locator('#position').innerText())[1])
+const at = async page => Number(/Screen (\d+) of/.exec(await page.locator('#overall').getAttribute('title'))[1])
 const settled = page => page.waitForTimeout(90)
 const waitFor = async get => {
   for (let i = 0; i < 100; i++) {
@@ -366,7 +366,7 @@ test('the end of an app is an overlay: what is finished, what is starting. It wa
   assert.match(words, /Finished: First\. 4 answered, 2 with changes\./)
   assert.match(words, /You are now starting a new review:/)
   assert.match(words, /Second/)
-  assert.match(words, /3 screens/)
+  assert.match(words, /3 left/)
   assert.equal(await page.locator('#submitModal').isVisible(), false, 'no last step')
   assert.ok((await page.locator('#segment h1').boundingBox()).height >= 40, 'large')
   // It does not fade.
@@ -547,11 +547,12 @@ test('apps form a group: the bar says which, and how much is left', { skip }, as
   push('Lone: only one', ['A'], null)
   const { page, errors } = await open('alpha-style-beta-part', { undo: 60000 })
   assert.match(await page.locator('#crumbs').innerText(), /Alpha-style, 2 of 2\s*\/\s*Beta part/)
-  assert.equal(await page.locator('#position').innerText(), 'this one 1 of 2')
-  assert.match(await page.locator('#overall').innerText(), /4 waiting overall/)
+  // One count: what is left here, then in all. Where in the review is a hover away.
+  assert.match(await page.locator('#overall').getAttribute('title'), /^Screen 1 of 2\./)
+  assert.equal(await page.locator('#overall').innerText(), '2 left · 4 in all')
   await page.keyboard.press('g')
   await settled(page)
-  assert.match(await page.locator('#overall').innerText(), /3 waiting overall/)
+  assert.equal(await page.locator('#overall').innerText(), '1 left · 3 in all')
   assert.deepEqual(errors, [])
 })
 
@@ -568,7 +569,7 @@ test('going on within a group, and into another: the overlay says which, and a n
   let words = await page.locator('#segment').innerText()
   assert.match(words, /Finished: One\. 1 answered\./)
   assert.match(words, /Alpha-style, 2 of 3/)
-  assert.match(words, /Three, 1 screen\b/)
+  assert.match(words, /Three: 1 left in this review · 5 in all/)
   const small = await page.locator('#segment h1').evaluate(el => parseFloat(getComputedStyle(el).fontSize))
   // Set the rest of this group aside: nothing is answered, and what comes next is the other group.
   await page.keyboard.press('x')
@@ -653,11 +654,12 @@ test('with only set aside left, the finished page says so and offers the way bac
   await page.locator('#stateCard').getByText('Nothing more is offered').waitFor()
   assert.match(await page.locator('#stateCard').innerText(), /1 screen in 1 review you set aside has not been answered/)
   await page.locator('#stateCard [data-list]').waitFor()
-  assert.match(await page.locator('#overall').innerText(), /0 waiting overall · 1 set aside/)
   // Another browser: still set aside.
   const other = await (await page.context().browser().newContext()).newPage()
   await other.goto(page.url())
-  await other.waitForFunction(() => document.getElementById('overall').textContent.includes('1 set aside'))
+  await other.waitForFunction(() => document.getElementById('crumbs').textContent.includes('Here now'))
+  await other.keyboard.press('l')
+  await other.waitForFunction(() => document.getElementById('drawerList').textContent.includes('Set aside'))
   assert.deepEqual(errors, [])
 })
 
@@ -1265,7 +1267,7 @@ test('opened with no address, it starts at the next thing to review, says so, an
   await page.goto(`http://127.0.0.1:${port}/?undo=40`)
   await page.locator('#segment').getByText('You are starting with:').waitFor()
   assert.equal(await page.locator('#segment h1').innerText(), 'Beta-style, 2 of 2')
-  assert.match(await page.locator('#segment').innerText(), /Waiting, 3 screens/)
+  assert.match(await page.locator('#segment').innerText(), /Waiting: 3 left in this review · 4 in all/)
   assert.equal(await page.locator('#drawer').isVisible(), false)
   assert.equal(await page.locator('#inspector').isVisible(), false)
   assert.equal(new URL(page.url()).hash, '', 'not yet a place to come back to')
@@ -1544,7 +1546,13 @@ test('the queue: four parts, drag or keys set the order, notes reach the session
   const { page, errors } = await openWork(r)
   const names = () => page.locator('[data-lane="queued"] .name').allInnerTexts()
   assert.deepEqual(await names(), ['First', 'Second', 'Third', 'Fourth'])
-  for (const words of ['Queued', 'In progress', 'Ready for you', 'Done']) await page.locator('.section-head', { hasText: words }).waitFor()
+  await page.locator('.section-head', { hasText: 'Queued' }).waitFor()
+  // Empty parts say so together, in one line; what it is asked is plain words, and every note button looks alike.
+  assert.equal(await page.locator('.empty-line').innerText(), 'Nothing in progress, ready for you or done.')
+  assert.equal(await page.locator('.section-head').count(), 1)
+  assert.deepEqual([...new Set(await page.locator('[data-lane="queued"] .phase').allInnerTexts())], ['Proposal'])
+  assert.equal(await page.locator('.tag').count(), 0, 'no labels in colour')
+  assert.equal(await page.locator('.row .target').count(), 0, 'all for the same thing: no column for it')
   await page.locator('[data-lane="queued"] .row').nth(3).dragTo(page.locator('[data-lane="queued"] .row').nth(0), { targetPosition: { x: 40, y: 3 } })
   await page.waitForFunction(() => document.querySelector('[data-lane="queued"] .name')?.textContent === 'Fourth')
   assert.deepEqual(await names(), ['Fourth', 'First', 'Second', 'Third'], 'dragged to the top')
@@ -1560,7 +1568,11 @@ test('the queue: four parts, drag or keys set the order, notes reach the session
   await page.keyboard.press('Enter')
   await page.getByText('Do this one carefully').waitFor()
   assert.match(work(r, 'take', '--by', 'Session A'), /Fourth[\s\S]*Do this one carefully/, 'the session gets the top one, with the note')
-  await page.locator('[data-lane="progress"]').getByText('Session A').waitFor({ timeout: 6000 })
+  // One session has it all: the head says who, not a column.
+  await page.locator('.section-head', { hasText: 'In progress' }).getByText('Session A').waitFor({ timeout: 6000 })
+  assert.equal(await page.locator('.row .who').count(), 0)
+  assert.equal(await page.locator('[data-lane="queued"] .note-btn.has-notes').count(), 0)
+  assert.equal(await page.locator('[data-lane="progress"] .note-btn').innerText(), '1')
   // Still open from before: a press would fold it.
   await page.locator('[data-note-box]').fill('Said while it works')
   await page.keyboard.press('Enter')
