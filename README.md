@@ -185,3 +185,7 @@ It is open source under the MIT licence (see `LICENSE`). That means you may use 
 
 Questions, ideas or want to work with us: Adam Hyde, adam@pure.science.
 
+
+---
+
+[pure.science](https://pure.science)
