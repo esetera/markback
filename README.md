@@ -96,6 +96,17 @@ Gemini CLI reads `GEMINI.md` unless told otherwise. To have it read `AGENTS.md` 
 
 **Tried with Claude Code and Codex.** Kimi Code, Cursor, Gemini CLI and others that run commands should work. What was run: Claude Code, with the plugin, including `/markback` in a project from a cold start. Codex, with the skills in `.agents/skills`: it pushed a screen, read the marks and acted on them, pushed round 2, and drew a sketch. A second Claude Code run with no plugin and no skills, which knew Markback only from `AGENTS.md`: it pushed a screen, and after a box and a note came back it read them and said where they were. A plain script that runs only the commands `AGENTS.md` shows, which is part of `npm test`. Cursor and Gemini CLI have not been run yet; each reads the files above as its own docs describe.
 
+## Plugins
+
+A plugin adds a command to `review`, or a new way to export an app's marks. The first one turns marks into a Markdown checklist for an issue or a pull request:
+
+```bash
+review plugin add https://github.com/purescience-inc/markback-plugins
+review export --app "My app" --as markdown --out marks.md
+```
+
+Adding one says what it adds and asks first. Plugins run code on your computer, so add only ones you trust. `review plugin list` shows them; `review plugin remove <name>` takes one away. To write your own, see [markback-plugins](https://github.com/purescience-inc/markback-plugins).
+
 ## What stays on your computer
 
 Everything. The server listens only on this computer and refuses requests from any other page. Screens, marks and notes are plain files in `~/.review-wizard`, a folder that keeps Markback's first name (set `REVIEW_HOME` to move it). Nothing is sent anywhere, with one exception that you choose: speech. See below.
