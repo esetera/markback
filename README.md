@@ -4,6 +4,8 @@
 
 **A new way of building apps.**
 
+Home page and film: https://pure.science/markback
+
 1. Models already know a lot about the application you mean: a simple command gets you far.
 2. Agents can infer the back end from what the front end needs.
 3. Building apps isn't prompting; it's annotating.
