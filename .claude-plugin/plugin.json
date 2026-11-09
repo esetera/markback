@@ -1,5 +1,9 @@
 {
-  "name": "review-app",
+  "name": "markback",
   "description": "Review screens by drawing on them. Agents push screenshots; you mark them up in a local page; each mark comes back as a request.",
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "author": {
+    "name": "Pure Science Inc.",
+    "email": "adam@pure.science"
+  }
 }

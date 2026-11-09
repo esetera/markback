@@ -1,4 +1,6 @@
-# Review app
+<img src="docs/icon.svg" alt="Markback" width="96" height="96">
+
+# Markback
 
 **A new way of building apps.**
 
@@ -16,8 +18,8 @@ This app is the third part. The first two are your own agent's work, such as Cla
 You need [Node](https://nodejs.org) 22.6 or later and nothing else: it has no dependencies.
 
 ```bash
-git clone https://github.com/purescience-inc/review-app
-cd review-app
+git clone https://github.com/purescience-inc/markback
+cd markback
 node review.mjs start
 node review.mjs demo
 ```
@@ -33,7 +35,7 @@ If the port is taken: `node review.mjs start --port 5742`. To stop: `node review
 ## With Claude Code, in one step
 
 ```bash
-claude plugin marketplace add purescience-inc/review-app && claude plugin install review-app@review-app
+claude plugin marketplace add purescience-inc/markback && claude plugin install markback@markback
 ```
 
 That gives every session the `review` command and four skills: `push-screens`, `read-marks`, `workflow-sketches` and `ideas-and-queue`. Agents then push screens instead of pasting pictures in chat.
@@ -174,3 +176,12 @@ npm test
 The browser tests borrow Playwright from any project that has it: `REVIEW_PLAYWRIGHT_FROM=/path/to/package.json REVIEW_CHROME=/path/to/chrome npm test`. Without them they are skipped.
 
 Tried on macOS. It uses only Node's own parts and should run on Linux and Windows; those are not yet tried.
+
+## Who makes it
+
+Markback is made by [Pure Science Inc.](https://pure.science) and is © 2026 Pure Science Inc.
+
+It is open source under the MIT licence (see `LICENSE`). That means you may use it, change it and share it, for any purpose, including in paid work, as long as the copyright notice and licence go with your copies. It comes with no warranty.
+
+Questions, ideas or want to work with us: Adam Hyde, adam@pure.science.
+

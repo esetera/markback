@@ -1,5 +1,5 @@
 {
-  "name": "review-app",
+  "name": "markback",
   "version": "0.1.0",
   "description": "Building apps is not prompting, it is annotating. Agents push screenshots; you mark them up; each mark comes back as a request.",
   "type": "module",
@@ -25,6 +25,10 @@
     "LICENSE",
     "package.json",
     "review.mjs",
-    "server.mjs"
-  ]
+    "server.mjs",
+    "docs/icon.svg",
+    "docs/icon.png"
+  ],
+  "author": "Pure Science Inc. <adam@pure.science>",
+  "homepage": "https://github.com/purescience-inc/markback"
 }

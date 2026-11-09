@@ -1,5 +1,14 @@
 {
-  "name": "review-app",
-  "owner": { "name": "review-app" },
-  "plugins": [{ "name": "review-app", "source": "./", "description": "Review screens by drawing on them." }]
+  "name": "markback",
+  "owner": {
+    "name": "Pure Science Inc.",
+    "email": "adam@pure.science"
+  },
+  "plugins": [
+    {
+      "name": "markback",
+      "source": "./",
+      "description": "Review screens by drawing on them."
+    }
+  ]
 }

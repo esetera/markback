@@ -164,4 +164,4 @@ server.on('error', error => {
   process.exit(1)
 })
 // This computer only: nothing here is reachable from another machine.
-server.listen(PORT, '127.0.0.1', () => console.log(`Review app on http://localhost:${PORT}`))
+server.listen(PORT, '127.0.0.1', () => console.log(`Markback on http://localhost:${PORT}`))
