@@ -208,3 +208,7 @@ Markback is made by [Pure Science Inc.](https://pure.science) and is © 2026 Pur
 It is open source under the MIT licence (see `LICENSE`). That means you may use it, change it and share it, for any purpose, including in paid work, as long as the copyright notice and licence go with your copies. It comes with no warranty.
 
 Questions, ideas or want to work with us: Adam Hyde, adam@pure.science.
+
+---
+
+[pure.science](https://pure.science)
