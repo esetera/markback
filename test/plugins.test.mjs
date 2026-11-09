@@ -106,4 +106,19 @@ test('adding over a plugin says it replaces it; one export name, one plugin; rem
   const clash = plugin('clash', { name: 'clash', exports: { count: 'c.mjs' } }, { 'c.mjs': 'export default () => ""' })
   assert.match(spawnSync('node', [CLI, 'plugin', 'add', clash, '--yes'], { env, encoding: 'utf8' }).stderr, /hello already adds an export called count/)
   assert.match(spawnSync('node', [CLI, 'plugin', 'remove'], { env, encoding: 'utf8' }).stderr, /Say which/)
+  const pair = join(home, 'sources', 'pair')
+  for (const name of ['pair-a', 'pair-b']) {
+    mkdirSync(join(pair, name), { recursive: true })
+    writeFileSync(join(pair, name, 'plugin.json'), JSON.stringify({ name, exports: { same: 'x.mjs' } }))
+    writeFileSync(join(pair, name, 'x.mjs'), 'export default () => ""')
+  }
+  assert.match(spawnSync('node', [CLI, 'plugin', 'add', pair, '--yes'], { env, encoding: 'utf8' }).stderr, /already adds an export called same/)
+})
+
+test('a link in a plugin that leads outside its folder is not copied in', () => {
+  const dir = plugin('leaky', { name: 'leaky', exports: { leaky: 'x.mjs' } }, { 'x.mjs': 'export default () => ""' })
+  symlinkSync(home, join(dir, 'everything'))
+  review('plugin', 'add', dir, '--yes')
+  assert.equal(existsSync(join(home, 'plugins', 'leaky', 'x.mjs')), true)
+  assert.equal(existsSync(join(home, 'plugins', 'leaky', 'everything')), false)
 })

@@ -375,7 +375,7 @@ if (command === 'push') {
       const found = pluginsIn(source.dir)
       const have = listPlugins()
       for (const p of found) for (const name of Object.keys(p.exports)) {
-        const other = have.find(h => h.name !== p.name && h.exports[name])
+        const other = [...have.filter(h => !found.some(f => f.name === h.name)), ...found].find(h => h.name !== p.name && h.exports[name])
         if (other) throw new Error(`${other.name} already adds an export called ${name}. Remove it first, or keep this one out.`)
       }
       console.log('Plugins run code on your computer. Add only ones you trust.')
