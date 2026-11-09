@@ -15,24 +15,27 @@ Markback is the third part. The first two are your own agent's work, such as Cla
 
 ## Start with your project
 
-You need [Node](https://nodejs.org) 22.6 or later, and Chrome or Edge for the pictures. Nothing else: it has no dependencies.
+You need [Node](https://nodejs.org) 22.6 or later, and Chrome or Edge for the pictures.
 
-1. Install it once, in Claude Code:
-
-   ```bash
-   claude plugin marketplace add purescience-inc/markback && claude plugin install markback@markback
-   ```
-
-2. In your project, type `/markback`. It finds how your app runs, starts it if you say yes, takes pictures of its main screens, and opens them in your browser. There is no address to paste.
-3. Draw on what you want changed, and press **Send**. Your agent reads each mark as a request.
-
-No app yet? `/markback a recipe box for my family` makes the first screen from your words.
-
-Any agent that runs commands can do the same, and so can you: install the command once, then run `markback` in your project's folder.
+**Claude Code**
 
 ```bash
-npm install -g github:purescience-inc/markback
+claude plugin marketplace add purescience-inc/markback && claude plugin install markback@markback
 ```
+
+Then, in your project, type `/markback`.
+
+**Codex**
+
+```bash
+npm install -g github:purescience-inc/markback && review install-skills --codex
+```
+
+Run it in your project's folder. Then ask Codex: review my app.
+
+Other agents that can run commands should work too: Kimi Code and CodeWhale are next to be tried.
+
+Markback finds how your app runs, starts it if you say yes, takes pictures of its main screens and opens them in your browser: draw on what you want changed, and press **Send**. No app yet? Say what you want, for example `/markback a recipe box for my family`.
 
 ## Try it without a project
 
@@ -69,7 +72,17 @@ claude plugin marketplace add purescience-inc/markback && claude plugin install 
 node review.mjs install-skills
 ```
 
-Run it again after you update Markback. To put it in one project only, add `--to <project>/.agents/skills`.
+Run it again after you update Markback. To put it in one project only, add `--to <project>/.agents/skills`; `markback` (and `/markback`) does that for the project it runs in.
+
+**Codex**, in a project with the skills in `.agents/skills`:
+
+```bash
+codex exec -s workspace-write "Here is a screen I want reviewed: shot.png. Put it in front of me for review."
+```
+
+In Codex's sandbox, taking a new screenshot with Chrome needs leave to run outside it: say yes when asked. Pushing only writes files, so it works inside the sandbox even when `review start` cannot see the page.
+
+**Kimi Code** takes the skills with `--skills-dir` (not yet tried): `kimi --skills-dir /path/to/markback/skills -p "…"`.
 
 **Any other agent** that reads `AGENTS.md` (Codex and Cursor do, and others): add Markback's part to your project's `AGENTS.md`. It goes between two markers, so your own words stay and a rerun replaces only that part. It names where your Markback folder is; add `--no-path` to say it in words instead, for a file you commit.
 
@@ -81,7 +94,7 @@ Gemini CLI reads `GEMINI.md` unless told otherwise. To have it read `AGENTS.md` 
 
 `npm install -g .` from the cloned folder puts `review` on your PATH. Without that, agents use `node /path/to/markback/review.mjs`, and the installed skills already say so.
 
-**What has really been tried.** Claude Code, with the plugin. A second Claude Code run with no plugin and no skills, which knew Markback only from `AGENTS.md`: it pushed a screen, and after a box and a note came back it read them and said where they were. A plain script that runs only the commands `AGENTS.md` shows, which is part of `npm test`. Codex, Cursor and Gemini CLI have not been run against it yet. They should work, because each reads the files above as its own docs describe, and the skill folders meet the rules all three set.
+**Tried with Claude Code and Codex.** Kimi Code, Cursor, Gemini CLI and others that run commands should work. What was run: Claude Code, with the plugin, including `/markback` in a project from a cold start. Codex, with the skills in `.agents/skills`: it pushed a screen, read the marks and acted on them, pushed round 2, and drew a sketch. A second Claude Code run with no plugin and no skills, which knew Markback only from `AGENTS.md`: it pushed a screen, and after a box and a note came back it read them and said where they were. A plain script that runs only the commands `AGENTS.md` shows, which is part of `npm test`. Cursor and Gemini CLI have not been run yet; each reads the files above as its own docs describe.
 
 ## What stays on your computer
 

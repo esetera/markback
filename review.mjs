@@ -29,7 +29,7 @@
  *                                               them in your browser (the markback command is this)
  *   review open [--app MyApp]                   opens the review page in your browser
  *
- *   review install-skills [--to ~/.agents/skills] [--agents-md <project folder> [--no-path]]
+ *   review install-skills [--to ~/.agents/skills | --codex] [--agents-md <project folder> [--no-path]]
  *                                               the skills for Codex, Cursor, Gemini CLI and others; AGENTS.md for the rest
  */
 
@@ -153,7 +153,25 @@ const askYes = question => new Promise(resolveAnswer => {
     resolveAnswer(/^\s*y(es)?\s*$/i.test(answer))
   })
 })
-const up = port => fetch(`http://127.0.0.1:${port}/api/queue`).then(r => r.ok, () => false)
+const readPid = () => {
+  try {
+    return Number(readFileSync(PID_FILE, 'utf8'))
+  } catch {
+    return 0
+  }
+}
+const alive = pid => {
+  if (!pid) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // Not ours to signal, but there.
+    return error.code === 'EPERM'
+  }
+}
+// A port that takes the call and never answers is not the page.
+const up = port => fetch(`http://127.0.0.1:${port}/api/queue`, { signal: AbortSignal.timeout(1500) }).then(r => r.ok, () => false)
 
 /** Runs the server on its own, so it outlasts this command. Nothing leaves this computer. */
 async function start() {
@@ -162,19 +180,22 @@ async function start() {
     if (flags.port) rememberPort(port)
     return console.log(`Already running: http://localhost:${port}`)
   }
+  // A sandbox can stop this command reaching the page while the page runs. Its process still says so.
+  if (alive(readPid()) && !flags.port) return console.log(`Already running: http://localhost:${port}`)
   mkdirSync(HOME, { recursive: true })
   const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'server.mjs')], { detached: true, stdio: 'ignore', env: { ...process.env, REVIEW_PORT: String(port) } })
   child.unref()
-  writeFileSync(PID_FILE, String(child.pid))
   for (let i = 0; i < 50; i++) {
     if (await up(port)) {
+      // Only a server that answered is ours to stop later.
+      writeFileSync(PID_FILE, String(child.pid))
       rememberPort(port)
       return console.log(`Open http://localhost:${port}\nYour screens and answers stay on this computer, in ${HOME}`)
     }
     if (child.exitCode !== null) break
     await sleep(100)
   }
-  fail(`It did not start. Port ${port} may be taken: try review start --port ${port + 1}`)
+  fail(`It did not start. Port ${port} may be taken, or the page may already run there where this command cannot see it. Pushing works without the page: try review push, or review start --port ${port + 1}`)
 }
 
 async function stop() {
@@ -238,6 +259,11 @@ if (command === 'push') {
   }
 } else if (command === 'project') {
   await start()
+  // Where Codex, Cursor and Gemini CLI look in a project. Without this computer's paths: the folder may be committed.
+  const agentSkills = join(process.cwd(), '.agents', 'skills')
+  const fresh = !existsSync(join(agentSkills, 'markback'))
+  installSkills({ to: agentSkills, root: null })
+  if (fresh) console.log("Put Markback's skills in .agents/skills, where Codex and other agents find them.")
   const found = await findApp(process.cwd())
   let url = found.running
   if (!url && found.run) {
@@ -276,10 +302,11 @@ if (command === 'push') {
   if (!(await up(PORT))) fail('The review page is not running. Start it with: review start')
   console.log((await openPage(page)) ? `I've opened it in your browser. (${page})` : `Open ${page}`)
 } else if (command === 'install-skills') {
-  const to = typeof flags.to === 'string' ? flags.to.replace(/^~(?=\/|$)/, homedir()) : join(homedir(), '.agents', 'skills')
+  // --codex: into this project, where Codex finds them, and without this computer's paths, since the folder may be committed.
+  const to = flags.codex ? join(process.cwd(), '.agents', 'skills') : typeof flags.to === 'string' ? flags.to.replace(/^~(?=\/|$)/, homedir()) : join(homedir(), '.agents', 'skills')
   const project = typeof flags['agents-md'] === 'string' ? flags['agents-md'].replace(/^~(?=\/|$)/, homedir()) : null
-  for (const path of installSkills({ to, agentsMdIn: project, pathInAgentsMd: !flags['no-path'] })) console.log(`Wrote ${path}`)
-  console.log('Codex, Cursor and Gemini CLI read skills from ~/.agents/skills. Run this again after updating Markback.')
+  for (const path of installSkills({ to, agentsMdIn: project, pathInAgentsMd: !flags['no-path'], ...(flags.codex ? { root: null } : {}) })) console.log(`Wrote ${path}`)
+  console.log(flags.codex ? 'Codex finds them in this project. Now ask Codex: review my app.' : 'Codex, Cursor and Gemini CLI read skills from ~/.agents/skills. Run this again after updating Markback.')
 } else if (command === 'clear') {
   clearApp(need('app'))
   console.log(`Took ${flags.app} off the review page. Its feedback stays in ${join(INBOX, slug(flags.app))}.`)

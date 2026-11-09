@@ -31,4 +31,4 @@ It finds how the app runs, takes pictures of its main screens, names the review 
 
 To act on what comes back, use the `read-marks` skill.
 
-If `review` is not found, use `node "${CLAUDE_PLUGIN_ROOT}/review.mjs"` in its place.
+If `review` is not found, use `node <markback folder>/review.mjs` in its place (in Claude Code, `node "${CLAUDE_PLUGIN_ROOT}/review.mjs"`).

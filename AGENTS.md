@@ -51,7 +51,7 @@ The person reviews by drawing on real screens in a local page. Push the screens,
 review start
 ```
 
-It prints the address, by default http://localhost:5741. If `review` is not found, use `node review.mjs` in the Markback folder in its place. If the port is taken: `review start --port 5742`.
+It prints the address, by default http://localhost:5741. If `review` is not found, use `node review.mjs` in the Markback folder in its place. If the port is taken: `review start --port 5742`. Pushing only writes files, so it works with the page closed, or where a sandbox stops `start` from seeing it.
 
 ### Push one screen at a time
 
