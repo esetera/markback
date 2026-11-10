@@ -2639,3 +2639,84 @@ test('the listening notice and the list of earlier marks keep apart', { skip }, 
   assert.ok(card && first.y >= card.y + card.height, `the first row ${first.y} is under the notice ${card.y + card.height}`)
   assert.deepEqual(errors, [])
 })
+
+/** Round 3 of screen One of `app`: mark 1 was ticked fixed on round 2, and the picture changed there again since. */
+async function cameBackRound(r, app, others = []) {
+  const plain = join(r.home, 'plain.png')
+  const moved = join(r.home, 'moved.png')
+  writePicture(plain, 1600, 900)
+  writePicture(moved, 1600, 900, { x: 120, y: 120, w: 200, h: 120 })
+  const slug = app.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  await twoRounds(r, app, three.slice(0, 1), [[], plain], plain)
+  const s = (await r.queue(slug)).screens.find(x => x.id === 'one')
+  await fetch(`http://127.0.0.1:${r.port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: slug, id: 'one', after: s.after, round: 2, verdict: 'approved', notes: '', imageSize: { w: 1600, h: 900 }, said: { 1: 'fixed' }, shapes: [] }) })
+  r.push(app, ['One'], null, [], moved)
+  if (others.length) r.push(app, others, null)
+  return slug
+}
+
+test('a came back? on a screen swept up with a mark drawn goes as not answered, and is asked again', { skip }, async () => {
+  const r = await rig()
+  const slug = await cameBackRound(r, 'Swept', ['Two'])
+  const { page, errors } = await r.open(slug, { undo: 40 })
+  await page.locator('#asked [data-ask="1"]').waitFor()
+  await page.waitForFunction(() => /Came back\?/.test(document.querySelector('#asked [data-ask="1"]').textContent))
+  await draw(page, 0.6, 0.6, 0.8, 0.8)
+  await page.keyboard.press('ArrowRight')
+  await settled(page)
+  await page.keyboard.press('g')
+  const sent = await waitFor(() => r.read('Swept').find(x => x.screen === 'One' && x.round === 3))
+  assert.deepEqual(sent.asked.map(a => [a.n, a.said, a.cameBack]), [[1, null, true]])
+  r.push('Swept', ['One'], null)
+  assert.equal((await r.queue(slug)).screens.find(x => x.id === 'one').asked.find(a => a.n === 1).state, 'open')
+  assert.deepEqual(errors, [])
+})
+
+test('a came back? on a screen sent by Looks good for the rest, opened or never opened, is asked again next round', { skip }, async () => {
+  for (const [app, opened] of [['Restseen', true], ['Restunseen', false]]) {
+    const r = await rig()
+    const slug = await cameBackRound(r, app, ['Zero'])
+    const { page, errors } = await r.open(`${slug}/${opened ? 'one' : 'zero'}`, { undo: 40 })
+    await page.waitForTimeout(600)
+    await page.keyboard.press('o')
+    await page.locator('#sheetRest').click()
+    await page.locator('#submitYes').click()
+    await waitFor(() => r.read(app).find(x => x.screen === 'One' && x.round === 3))
+    // The change is still there in round 4: it is asked, never held quietly as fixed.
+    r.push(app, ['One'], null, [], join(r.home, 'moved.png'))
+    const next = await r.open(`${slug}/one`, { undo: 60000 })
+    await next.page.locator('#asked [data-ask="1"]').waitFor({ timeout: 5000 })
+    assert.deepEqual([...errors, ...next.errors], [], app)
+  }
+})
+
+test('a held mark answered with no page at all is compared next with the picture it was seen fixed on, and found came back', { skip }, async () => {
+  const r = await rig()
+  const slug = await cameBackRound(r, 'Nopage')
+  const s = (await r.queue(slug)).screens[0]
+  // Round 3 sent with the rest by something that never compared: nothing flagged.
+  await fetch(`http://127.0.0.1:${r.port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: slug, id: 'one', after: s.after, round: 3, verdict: 'approved', noComment: true, notes: 'No comment.', imageSize: null, shapes: [] }) })
+  r.push('Nopage', ['One'], null, [], join(r.home, 'moved.png'))
+  const { page, errors } = await r.open(slug, { undo: 60000 })
+  const row = page.locator('#asked [data-ask="1"]')
+  await row.waitFor({ timeout: 5000 })
+  assert.match(await row.innerText(), /Came back\?/)
+  assert.deepEqual(errors, [])
+})
+
+test('partial ticks say what the choices are, and Looks good for the rest says whose ticks it does not send', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Hints', three)
+  r.push('Hints', ['Two'], null)
+  const { page, errors } = await r.open('hints', { undo: 40 })
+  await page.locator('#asked').waitFor()
+  await page.locator('#asked [data-ask="1"] [data-ask-say="fixed"]').click()
+  assert.equal(await page.locator('#asked .ask-hint').innerText(), '2 still to check. Tick them, say which still stand, or press Looks good to say all are fixed.')
+  await page.locator('#asked [data-ask="2"] [data-ask-say="fixed"]').click()
+  assert.equal(await page.locator('#asked .ask-hint').innerText(), '1 still to check. Tick it, say it still stands, or press Looks good to say all are fixed.')
+  await page.keyboard.press('o')
+  await page.locator('#sheetRest').click()
+  await page.locator('#submitModal').waitFor()
+  assert.match(await page.locator('#submitBody').innerText(), /Your ticks on these are not sent: One/)
+  assert.deepEqual(errors, [])
+})

@@ -191,13 +191,16 @@ const overlaps = (a, b) => !!a && !!b && a.x < b.x + b.w && b.x < a.x + a.w && a
 /**
  * A screen's earlier marks, as the page shows them. `open`: asked for and not yet ticked fixed in an answer. `back`: ticked
  * fixed before, and the picture changed there again, so it may have come back. `held`: the other fixed ones, kept quietly.
- * `changed` is where the picture differs from its before, in the picture's pixels.
+ * `changed` is where the picture differs from what it is compared with, in the picture's pixels, or a function giving that
+ * for each mark.
  */
 export function askedOf(screen, changed = null, size = null) {
   const all = Array.isArray(screen?.asked) ? screen.asked : []
   const open = all.filter(a => a.state !== 'fixed')
   const fixed = all.filter(a => a.state === 'fixed')
-  const back = fixed.filter(a => (changed ?? []).some(box => overlaps(placeOn(a, size), box)))
+  // Each held mark can be compared with a picture of its own: `changed` is then a function of the mark.
+  const boxesFor = typeof changed === 'function' ? changed : () => changed
+  const back = fixed.filter(a => (boxesFor(a) ?? []).some(box => overlaps(placeOn(a, size), box)))
   return { open, back, held: fixed.filter(a => !back.includes(a)), rows: [...open, ...back] }
 }
 

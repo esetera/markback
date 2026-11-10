@@ -199,7 +199,7 @@ function draftOf(s) {
   const notes = saved?.notes ?? ''
   // What was said of the earlier marks counts only on the picture it was said on: their numbers belong to it.
   const said = (sure && saved?.said) || {}
-  const d = { after: s.after, marks, notes, said, good: sure && !!saved?.good, pending: sure && !!saved?.pending, pendingAt: (sure && saved?.pendingAt) || 0, unsure: !sure && (marks.some(isReal) || !!notes.trim()), undo: [], redo: [] }
+  const d = { after: s.after, marks, notes, said, back: (sure && saved?.back) || [], checked: (sure && saved?.checked) || [], good: sure && !!saved?.good, pending: sure && !!saved?.pending, pendingAt: (sure && saved?.pendingAt) || 0, unsure: !sure && (marks.some(isReal) || !!notes.trim()), undo: [], redo: [] }
   drafts.set(key, d)
   return d
 }
@@ -207,7 +207,7 @@ function draftOf(s) {
 const leftBehindOn = s => leftBehind(s.round, r => store.get(`${s.appSlug}/${s.id}/${r}`), isReal)
 const saveDraft = s => {
   const d = draftOf(s)
-  store.set(keyOf(s), d.marks.length || d.notes.trim() || d.good || Object.keys(d.said).length ? { marks: d.marks, notes: d.notes, said: d.said, good: d.good, pending: d.pending, pendingAt: d.pendingAt, after: d.unsure ? undefined : s.after } : null)
+  store.set(keyOf(s), d.marks.length || d.notes.trim() || d.good || Object.keys(d.said).length || d.back?.length ? { marks: d.marks, notes: d.notes, said: d.said, back: d.back, checked: d.checked, good: d.good, pending: d.pending, pendingAt: d.pendingAt, after: d.unsure ? undefined : s.after } : null)
 }
 /** What this screen's draft would send: 'changes', 'approved', or null when nothing is on it yet. */
 function verdictOf(s) {
@@ -1395,6 +1395,8 @@ function preloadAround(a) {
   for (const each of [...ahead, a.screens[state.index + 1], a.screens[state.index - 1]]) {
     if (each) void pictureAt(`/images/${each.after}`).catch(() => undefined)
   }
+  // Held marks on every screen of the review are compared now, so one swept unseen still says it came back.
+  for (const each of a.screens) if (each.status === 'waiting' && askedOf(each).held.length) compareHeld(each)
 }
 
 function showPicture(s) {
@@ -1430,7 +1432,7 @@ function showPicture(s) {
   const held = pictures.get(url)
   $('beforeImg').src = s.before ? `/images/${s.before}` : ''
   showChanges(s)
-  showLastChanges(s)
+  compareHeld(s)
   // Ready: in this same step, with nothing in between. Not yet: the last picture stays until this one is there.
   if (held?.ready) return put(held.img)
   state.size = null
@@ -1542,10 +1544,7 @@ function showChanges(s) {
     renderChangesButton()
     // A mark fixed before, where the picture changed again, may have come back: the list can grow by it.
     const s = screen()
-    if (s && askedOf(s).held.length) {
-      renderAsked(s)
-      if (state.fitted) fit()
-    }
+    if (s && askedOf(s).held.length) compareHeld(s)
     paint()
   })).catch(() => undefined)
 }
@@ -1606,11 +1605,18 @@ function saidOf(s) {
   // A word taken back here is null: it hides the one said before.
   return Object.fromEntries(Object.entries({ ...all, ...d.said }).filter(([, word]) => word))
 }
-/** A screen's earlier marks. Held ones are compared with the before, or with the last round's picture when there is none. */
-function askedNow(s) {
-  const changed = s.before ? (changes.key === `${s.before}|${s.after}` ? changes.boxes : null) : lastChanges.key && lastChanges.key === `${s.lastAfter}|${s.after}` ? lastChanges.boxes : null
-  return askedOf(s, changed, state.size)
+/**
+ * The picture a held mark is compared with: the one it was last seen fixed on, or else the before, or else the last round's.
+ * A screen swept unseen never moves it on, so a mark that came back then is still found in a later round.
+ */
+const compareOf = (s, a) => (a.checkedAfter && a.checkedAfter !== s.after ? a.checkedAfter : s.before || s.lastAfter || '')
+/** Where the picture changed from what each held mark is compared with, once that is worked out. */
+const changedFor = s => a => {
+  const pic = compareOf(s, a)
+  return pic ? changes.known.get(`${pic}|${s.after}`) ?? null : null
 }
+/** A screen's earlier marks, with the held ones flagged that may have come back. */
+const askedNow = s => askedOf(s, changedFor(s), state.size)
 /** The list stands beside the picture, in the After view, until it is closed. */
 const askedShown = s => !!s && state.view === 'after' && (!state.askedShut.has(keyOf(s)) || !askedBeside()) && askedNow(s).rows.length > 0
 const askedBeside = () => $('scroller').clientWidth - 14 - (ASKED_WIDE + 16) >= ASKED_MIN_PICTURE
@@ -1621,24 +1627,58 @@ function placeAsked(below = !askedBeside()) {
   $('asked').style.width = `${below ? Math.max(0, Math.min(ASKED_WIDE * 2, $('scroller').clientWidth - 30)) : ASKED_WIDE}px`
 }
 
-/** With no before, held marks are compared with the last round's picture. Worked out only when there are some. */
-const lastChanges = { key: '', boxes: null }
-function showLastChanges(s) {
-  const key = !s.before && s.lastAfter && askedOf(s).held.length ? `${s.lastAfter}|${s.after}` : ''
-  if (lastChanges.key === key) return
-  lastChanges.key = key
-  lastChanges.boxes = changes.known.get(key) ?? null
-  if (!key || changes.known.has(key)) return
-  void Promise.all([pictureAt(`/images/${s.lastAfter}`), pictureAt(`/images/${s.after}`)]).then(([last, now]) => setTimeout(() => {
-    const boxes = changesBetween(last, now)
-    changes.known.set(key, boxes)
-    if (lastChanges.key !== key) return
-    lastChanges.boxes = boxes
+/** Held marks flagged as came back? on each screen, as the page found them: they go with every answer for that screen. */
+const flaggedHere = new Map()
+/**
+ * Compares a screen's held marks with the pictures they were last seen fixed on, for any screen, in view or not. What it finds is
+ * written into that screen's draft at once, so however the screen goes, its answer says which came back and was not answered.
+ */
+function compareHeld(s) {
+  const held = askedOf(s).held
+  const pics = [...new Set(held.map(a => compareOf(s, a)).filter(Boolean))]
+  if (!pics.length) return
+  // Drawn again only when something was worked out just now, or what is flagged changed: this runs on every look.
+  const done = (fresh = false) => {
+    if (!flagBack(s) && !fresh) return
     const here = screen()
-    if (here) renderAsked(here)
-    if (state.fitted) fit()
-    paint()
-  })).catch(() => undefined)
+    if (here && keyOf(here) === keyOf(s)) {
+      renderAsked(here)
+      if (state.fitted) fit()
+      paint()
+    }
+  }
+  const todo = pics.filter(pic => !changes.known.has(`${pic}|${s.after}`))
+  if (!todo.length && sizes.has(s.after)) return done()
+  void pictureAt(`/images/${s.after}`).then(now => {
+    sizes.set(s.after, { w: now.naturalWidth, h: now.naturalHeight })
+    return Promise.all(todo.map(pic => pictureAt(`/images/${pic}`).then(then => changes.known.set(`${pic}|${s.after}`, changesBetween(then, now)))))
+  }).then(() => setTimeout(() => done(true))).catch(() => undefined)
+}
+/** Picture sizes seen, so a screen not in view can be compared too. */
+const sizes = new Map()
+/** Writes what the comparison found into the screen's draft: the held marks flagged, and those seen unchanged. True when it changed. */
+function flagBack(s) {
+  const size = sizes.get(s.after) ?? (screen() && keyOf(screen()) === keyOf(s) ? state.size : null)
+  const asked = askedOf(s, changedFor(s), size)
+  const compared = asked.held.filter(a => changedFor(s)(a))
+  const back = asked.back.map(a => a.n)
+  flaggedHere.set(keyOf(s), back)
+  const d = draftOf(s)
+  const checked = compared.map(a => a.n)
+  if (String(d.back ?? []) === String(back) && String(d.checked ?? []) === String(checked)) return false
+  d.back = back
+  d.checked = checked
+  saveDraft(s)
+  return true
+}
+/**
+ * The part of any answer about the earlier marks, for any screen, from its entry and its draft. Every way an answer goes uses
+ * this: Send, Looks good, the sweep, Looks good for the rest, a retry, a draft picked up in another tab. A flagged mark the
+ * person said nothing of is never decided for them.
+ */
+function askedPart(s, d, { noComment = false } = {}) {
+  const back = [...new Set([...(d?.back ?? []), ...(flaggedHere.get(keyOf(s)) ?? [])])]
+  return { said: noComment ? {} : (d?.said ?? {}), back, checked: noComment ? [] : (d?.checked ?? []).filter(n => !back.includes(n)) }
 }
 
 function renderAsked(s) {
@@ -1674,7 +1714,9 @@ function renderAsked(s) {
   }
   // What to do next, in a line: a "came back?" first, since it is never decided for the person.
   const open = unansweredBack(s).length
-  const hint = open ? `${open} came back? Say Still fixed or Came back.` : !verdictOf(s) && allChecked(s) ? 'All checked. Press Looks good.' : ''
+  const left = asked.open.filter(a => !said[a.n]).length
+  const some = asked.rows.some(a => said[a.n])
+  const hint = open ? `${open} came back? Say Still fixed or Came back.` : !verdictOf(s) && allChecked(s) ? 'All checked. Press Looks good.' : !verdictOf(s) && some && left ? `${left} still to check. ${left === 1 ? 'Tick it, say it still stands' : 'Tick them, say which still stand'}, or press Looks good to say all are fixed.` : ''
   const head = narrow ? `<span class="asked-count${count.done ? ' done' : ''}">${esc(count.words)}</span>` : `<button class="tool" data-asked-shut ${tip('Hide this list', 'K')}>${ICONS.close}</button>`
   setHtml(box, `<h2><span>You asked for these last time</span>${head}</h2>${hint ? `<p class="ask-hint">${esc(hint)}</p>` : ''}<ol>${asked.rows.map(row).join('')}</ol>${held ? `<p class="ask-held">${held} more you ticked fixed before. Each is flagged here if the picture changes there again.</p>` : ''}`)
   keepApart()
@@ -2047,7 +2089,7 @@ function closeTextEntry(keep) {
  * Sends one screen: the marks burned into a PNG plus the shapes as numbers, or an
  * approval with neither. Every path writes the same inbox entries.
  */
-async function sendOne(s, verdict, { noComment = false, back = [] } = {}) {
+async function sendOne(s, verdict, { noComment = false } = {}) {
   const key = keyOf(s)
   const d = draftOf(s)
   // A picture that will not load must not hold back what is said about it: the marks go as numbers.
@@ -2074,9 +2116,8 @@ async function sendOne(s, verdict, { noComment = false, back = [] } = {}) {
     shapes: marks.map(m => (isWords(m) ? wordsShape(m) : isPin(m) ? pinShape(m, wide) : shapeOf(m, ctx))),
     imageSize: size,
     png,
-    // The ticks ride along with the answer. Sent with the rest, unseen, a screen says nothing of them.
-    said: noComment ? {} : said,
-    ...(back.length ? { unanswered: back } : {}),
+    // The ticks ride along with the answer, and the held marks flagged on it go too. Sent with the rest, unseen, it ticks nothing.
+    ...askedPart(s, { ...d, said }, { noComment }),
   }
   if (noComment) body.noComment = true
   const res = await fetch('/api/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {
@@ -2139,9 +2180,7 @@ function queueAnswer(s, verdict, { noComment = false, wait = UNDO_MS, resumed = 
   d.pending = true
   if (!resumed || !d.pendingAt) d.pendingAt = Date.now()
   saveDraft(s)
-  // The "came back?" marks left unanswered are seen at the press, on the screen in view: the record says so, never fixed.
-  const back = screen() && keyOf(screen()) === key && !noComment ? unansweredBack(s).map(a => a.n) : []
-  const job = { s, verdict, noComment, resumed, back, timer: setTimeout(() => goOut(key), wait) }
+  const job = { s, verdict, noComment, resumed, timer: setTimeout(() => goOut(key), wait) }
   queued.set(key, job)
   lastQueued = job
   return job
@@ -2165,7 +2204,7 @@ function goOut(key) {
   job.going = true
   sending = sending.then(async () => {
     try {
-      await sendOne(job.s, job.verdict, { noComment: job.noComment, back: job.back })
+      await sendOne(job.s, job.verdict, { noComment: job.noComment })
       queued.delete(key)
     } catch (error) {
       queued.delete(key)
@@ -2232,7 +2271,7 @@ addEventListener('pagehide', () => {
     if (job.going || job.verdict !== 'approved') continue
     clearTimeout(job.timer)
     queued.delete(key)
-    const body = { appSlug: job.s.appSlug, id: job.s.id, after: job.s.after, round: job.s.round, verdict: 'approved', notes: job.noComment ? 'No comment.' : '', shapes: [], imageSize: null, png: null, ...(job.noComment ? { noComment: true } : {}) }
+    const body = { appSlug: job.s.appSlug, id: job.s.id, after: job.s.after, round: job.s.round, verdict: 'approved', notes: job.noComment ? 'No comment.' : '', shapes: [], imageSize: null, png: null, ...askedPart(job.s, draftOf(job.s), { noComment: job.noComment }), ...(job.noComment ? { noComment: true } : {}) }
     // The draft stays: nothing here can know this arrived. The next look clears it if it did, and sends it if it did not.
     void fetch('/api/send', { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => undefined)
   }
@@ -2382,10 +2421,13 @@ function openSubmit() {
   const t = tallyOf(a)
   if (!t.set.length) return
   const left = t.untouched.filter(s => leftBehindOn(s).length)
+  // Ticks alone are not an answer: these go as not looked at, and the person is told before they go.
+  const ticked = t.untouched.filter(s => fixedTicks(draftOf(s)))
   const names = list => (list.length > 8 ? `${list.slice(0, 6).map(s => esc(label(s))).join(', ')} and ${list.length - 6} more` : list.map(s => esc(label(s))).join(', '))
   setHtml($('submitBody'), `<div class="summary">
     ${[['draft-changes', 'With marks or notes', t.changes], ['draft-good', 'Looks good', t.good], ['draft-good', 'No comment, counts as Looks good', t.untouched]].map(([mk, title, list]) => (list.length ? `<div class="srow"><span class="line"><i class="mk ${mk}"></i></span><span class="line">${title}</span><span class="line count">${list.length}</span></div><div class="names">${names(list)}</div>` : '')).join('')}
     ${left.length ? `<div class="names warn">${names(left)}: marks or notes on an older picture were not sent. See Earlier answers.</div>` : ''}
+    ${ticked.length ? `<div class="names warn">Your ticks on these are not sent: ${names(ticked)}. Go back and press Looks good or Send on each to send them.</div>` : ''}
   </div>`)
   $('submitStatus').textContent = ''
   $('submitStatus').classList.remove('error')
@@ -2414,7 +2456,7 @@ async function runSubmit() {
     await sending
     for (const job of jobs) {
       $('submitStatus').textContent = `Sending ${done + 1} of ${jobs.length}…`
-      await sendOne(job.s, job.verdict, { noComment: job.noComment, back: job.back })
+      await sendOne(job.s, job.verdict, { noComment: job.noComment })
       done++
     }
     $('submitModal').hidden = true

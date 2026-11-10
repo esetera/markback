@@ -391,3 +391,40 @@ test('Looks good for the rest applies no tick that rode along, and a came back? 
   assert.match(execFileSync('node', [CLI, 'read', '--app', 'Rest ticks', '--latest'], { env, encoding: 'utf8' }), /1\. came back\? not answered, so look again/)
   assert.deepEqual(push({ app: 'Rest ticks', screen: 'One', after: picture }).asked.map(a => [a.n, a.state]), [[1, 'open'], [2, 'fixed']], 'asked again')
 })
+
+test('a came back? flagged by the page is never carried on as fixed, however the screen goes', () => {
+  push({ app: 'Flagged', screen: 'One', after: picture })
+  receive({ appSlug: 'flagged', id: 'one', png: null, shapes: [box(1), box(2)], notes: '', verdict: 'changes', imageSize: null })
+  const second = push({ app: 'Flagged', screen: 'One', after: picture })
+  receive({ appSlug: 'flagged', id: 'one', png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null, said: { 1: 'fixed', 2: 'fixed' } })
+  const third = push({ app: 'Flagged', screen: 'One', after: picture })
+  assert.deepEqual(third.asked.map(a => [a.n, a.state, a.checkedAfter]), [[1, 'fixed', second.after], [2, 'fixed', second.after]], 'compared next with the picture they were seen fixed on')
+  // Swept with a box drawn, the page having flagged 1: told as not answered.
+  const swept = receive({ appSlug: 'flagged', id: 'one', png: null, shapes: [box(5)], notes: '', verdict: 'changes', imageSize: null, back: [1], checked: [2] })
+  assert.deepEqual(swept.asked.map(a => [a.n, a.said, a.cameBack]), [[1, null, true]])
+  later()
+  // A retry or another tab that does not say it: still not fixed.
+  const again = receive({ appSlug: 'flagged', id: 'one', png: null, shapes: [box(6)], notes: '', verdict: 'changes', imageSize: null })
+  assert.deepEqual(again.asked.map(a => [a.n, a.said, a.cameBack]), [[1, null, true]])
+  const fourth = push({ app: 'Flagged', screen: 'One', after: picture })
+  assert.deepEqual(fourth.asked.filter(a => a.n <= 2).map(a => [a.n, a.state]), [[1, 'open'], [2, 'fixed']])
+  assert.equal(fourth.asked.find(a => a.n === 2).checkedAfter, third.after, 'seen unchanged on round 3: compared with it next')
+  // Said still fixed, the flag goes.
+  receive({ appSlug: 'flagged', id: 'one', png: null, shapes: [], notes: '', verdict: 'changes', imageSize: null, back: [2] })
+  later()
+  const kept = receive({ appSlug: 'flagged', id: 'one', png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null, said: { 2: 'fixed' } })
+  assert.deepEqual(kept.asked.filter(a => a.n === 2).map(a => a.said), ['fixed'])
+  assert.equal(push({ app: 'Flagged', screen: 'One', after: picture }).asked.find(a => a.n === 2).state, 'fixed')
+})
+
+test('a held mark on a screen swept unseen keeps the picture it was seen fixed on, so a later round can still find it came back', () => {
+  push({ app: 'Unseen held', screen: 'One', after: picture })
+  receive({ appSlug: 'unseen-held', id: 'one', png: null, shapes: [box(1)], notes: '', verdict: 'changes', imageSize: null })
+  const fixedOn = push({ app: 'Unseen held', screen: 'One', after: picture })
+  receive({ appSlug: 'unseen-held', id: 'one', png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null, said: { 1: 'fixed' } })
+  push({ app: 'Unseen held', screen: 'One', after: picture })
+  // Looks good for the rest: unseen, so what it says of held marks moves nothing on.
+  receive({ appSlug: 'unseen-held', id: 'one', png: null, shapes: [], notes: 'No comment.', verdict: 'approved', imageSize: null, noComment: true, checked: [1] })
+  const later4 = push({ app: 'Unseen held', screen: 'One', after: picture })
+  assert.deepEqual(later4.asked.map(a => [a.state, a.checkedAfter]), [['fixed', fixedOn.after]])
+})
