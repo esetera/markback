@@ -1,4 +1,5 @@
 import { createListener, findRoute, installPack } from './mic.js'
+import { SETUP_LINE, signOf, signShows, unheardWords, waited } from './listen.js'
 
 /**
  * Ideas and the queue. It reads the same files the sessions read, every few seconds, so it says what is true. Nothing here
@@ -20,6 +21,8 @@ const state = {
   page: location.hash === '#ideas' ? 'ideas' : 'queue',
   items: [],
   requests: [],
+  // Who listens and what waits unheard. Unset with a server from before it said so.
+  listening: null,
   open: new Set(),
   folded: new Set(['done', 'later', 'no']),
   focus: null,
@@ -59,6 +62,7 @@ async function load(force = false) {
   last = text
   state.items = got.items
   state.requests = got.requests
+  state.listening = got.listening ?? null
   // Never redraw under someone's hands.
   if (!dragging) render()
 }
@@ -80,13 +84,24 @@ const owners = () => new Set(inStage('progress').map(i => i.owner || ''))
 const showWho = () => owners().size > 1
 const columns = () => ['34px', 'minmax(0, 1fr)', '150px', ...(showTarget() ? ['140px'] : []), ...(showWho() ? ['150px'] : []), '140px'].join(' ')
 
+/** When it last joined the queue: how long it has waited is counted from here. */
+const queuedSince = item => (item.history ?? []).filter(h => h.stage === 'queued').at(-1)?.at ?? item.at
+const copyRow = line => `<div class="copy-line"><code>${esc(line)}</code><button class="btn" data-copy="${esc(line)}">Copy</button></div>`
+/** At the top, when what is on this page waits and no agent will hear it: what that means, and what to do. */
+function listenStrip(kind) {
+  const l = state.listening
+  if (!l?.unheard?.[kind]) return ''
+  const w = unheardWords({ agents: l.agents, wake: l.wake, unheard: { queue: 0, ideas: 0, marks: 0, [kind]: l.unheard[kind] } })
+  return `<div class="heard-strip${w.state === 'warn' ? ' warn' : ''}" role="status"><p>${esc(w.head)}</p><p class="sub">${esc(w.sub)}</p>${w.log ? `<p class="sub">It last said:</p><pre>${esc(w.log)}</pre>` : ''}${w.line ? copyRow(w.line) : ''}${w.setup ? `<p class="sub">Your agent can start by itself next time. Ask it once:</p>${copyRow(SETUP_LINE)}` : ''}</div>`
+}
+
 function row(item, at, stage) {
   const queued = stage === 'queued'
   const lane = inStage(stage)
   const notes = item.notes?.length ?? 0
   return `<div class="row" tabindex="0" data-id="${esc(item.id)}"${queued ? ' draggable="true"' : ''} aria-label="${esc(item.title)}" style="grid-template-columns: ${columns()}">
     <span class="pos">${queued ? at + 1 : ''}</span>
-    <span class="name">${esc(item.title)}</span>
+    <span class="cell"><span class="name">${esc(item.title)}</span>${queued ? `<span class="wait${state.listening?.unheard?.queue ? ' unheard' : ''}">Waiting ${waited(queuedSince(item))}. No agent has taken it.</span>` : ''}</span>
     ${phaseWords(item)}
     ${showTarget() ? `<span class="target" title="${esc(item.target)}">${esc(item.target)}</span>` : ''}
     ${showWho() ? `<span class="who">${esc(stage === 'progress' ? item.owner : '')}</span>` : ''}
@@ -114,7 +129,7 @@ const nothingLine = stages => {
 function queuePage() {
   const empty = STAGES.filter(([stage]) => !inStage(stage).length).map(([stage]) => stage)
   const one = owners().size === 1 ? [...owners()][0] : ''
-  return `${STAGES.filter(([stage]) => !empty.includes(stage)).map(([stage, words]) => {
+  return `${listenStrip('queue')}${STAGES.filter(([stage]) => !empty.includes(stage)).map(([stage, words]) => {
     const list = inStage(stage)
     const shown = stage === 'done' ? list.slice().reverse() : list
     const folded = state.folded.has(stage)
@@ -142,7 +157,7 @@ function ideasPage() {
     const folded = state.folded.has(stage)
     return `<section><h2 class="section-head"><button data-fold="${stage}" aria-expanded="${!folded}">${folded ? '▸' : '▾'} ${words}</button> <span>${list.length}</span></h2>${folded ? '' : `<div class="rows">${list.map(ideaRow).join('')}</div>`}</section>`
   }
-  return `<form class="ask" id="askForm">
+  return `${listenStrip('ideas')}<form class="ask" id="askForm">
       <label for="target">Ideas for</label>
       <input id="target" list="targets" placeholder="An app, a server, anything" value="${esc(state.target)}" autocomplete="off">
       <datalist id="targets">${known.map(t => `<option value="${esc(t)}">`).join('')}</datalist>
@@ -163,6 +178,11 @@ function render() {
   document.title = `Markback · ${state.page === 'ideas' ? 'Ideas' : 'Queue'}`
   $('page').innerHTML = `<div class="work-inner">${state.page === 'ideas' ? ideasPage() : queuePage()}</div>`
   if (state.focus) document.querySelector(`[data-id="${CSS.escape(state.focus)}"]`)?.focus({ preventScroll: false })
+  // Said only when work waits that no agent will hear. While one listens, the bar says nothing.
+  const sign = signOf(state.listening)
+  $('heardLine').className = `heard-line is-${sign.state}`
+  $('heardLine').textContent = signShows(sign) ? sign.words : ''
+  $('heardLine').title = sign.tip
   renderMic()
 }
 
@@ -266,6 +286,14 @@ page.addEventListener('click', event => {
     if (state.folded.has(key)) state.folded.delete(key)
     else state.folded.add(key)
     return render()
+  }
+  const copy = event.target.closest('[data-copy]')
+  if (copy) {
+    // The clipboard can be refused. The line is selected instead, ready to copy with the keys.
+    return void (navigator.clipboard?.writeText(copy.dataset.copy) ?? Promise.reject(new Error('no clipboard'))).then(() => { copy.textContent = 'Copied' }, () => {
+      getSelection().selectAllChildren(copy.previousElementSibling)
+      copy.textContent = 'Selected: copy it'
+    })
   }
   const add = event.target.closest('[data-add-note]')
   if (add) return addNoteFrom(add.parentElement.querySelector('[data-note-box]'))
@@ -396,3 +424,5 @@ void findRoute().then(route => {
 
 await load(true)
 setInterval(() => void load().catch(() => undefined), 3000)
+// How long each item has waited is said again every minute, also when nothing else changes.
+setInterval(() => !dragging && render(), 60000)

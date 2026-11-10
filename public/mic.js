@@ -14,24 +14,6 @@ export function commandIn(phrase) {
   return COMMANDS[String(phrase).toLowerCase().replace(/[^a-z ]+/g, '').trim()] ?? null
 }
 
-/** How far the pointer must move, in picture pixels, before the next word starts a new mark. */
-export const SAME_PLACE = 90
-
-/**
- * Words, each with where the pointer was when it was heard, as runs that stay together: a run on the picture becomes a mark
- * there, and a run with no place goes to the notes. A small wobble stays one run.
- */
-export function placeWords(words, near = SAME_PLACE) {
-  const runs = []
-  for (const { word, at } of words) {
-    const last = runs[runs.length - 1]
-    const same = last && (last.at && at ? Math.hypot(last.at[0] - at[0], last.at[1] - at[1]) <= near : !last.at && !at)
-    if (same) last.text += ` ${word}`
-    else runs.push({ text: word, at })
-  }
-  return runs
-}
-
 /** Which route, from what this browser says. Plain, so it can be tested without one. */
 export function routeFor({ hasSpeech, micState, onDevice, vendor }) {
   if (micState === 'denied') return { route: 'none', why: 'This window has no microphone. Open this page in Chrome to speak.' }
@@ -71,11 +53,11 @@ export async function installPack(lang) {
  * Listens and writes into whichever box `box()` gives. Words still being heard show as they come and are replaced as they
  * settle. What is typed meanwhile stays. `onCommand` gets a phrase that was only a command, and it leaves no words behind.
  */
-export function createListener({ box, local, lang, onCommand, onState, onProblem, pointAt = () => null, onPlaced = null, onHearing = () => {} }) {
+export function createListener({ box, local, lang, onCommand, onState, onProblem }) {
   let rec = null
-  // Where the pointer was as each word of this phrase first came.
-  let trail = []
   let wanted = false
+  // The phrase being heard belongs to a box that has gone: what is left of it is let go, to its last settled word.
+  let skipping = false
   let hearing = ''
   let hearingIn = null
 
@@ -93,6 +75,11 @@ export function createListener({ box, local, lang, onCommand, onState, onProblem
   const joined = (before, words) => `${before}${before && !/\s$/.test(before) ? ' ' : ''}${words}`
 
   const heard = event => {
+    if (skipping) {
+      // The rest of that phrase must not land in whatever box is asked for next.
+      for (let i = event.resultIndex; i < event.results.length; i++) if (event.results[i].isFinal) skipping = false
+      return
+    }
     const el = box()
     if (!el) return
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -104,27 +91,13 @@ export function createListener({ box, local, lang, onCommand, onState, onProblem
         put(el, el.value)
         if (command === 'stop') stop()
         else onCommand(command)
-      } else if (words) {
-        // A word's place, by when it was first heard. The settled words can differ a little from those heard on the way.
-        const said = words.split(/\s+/)
-        const placed = said.map((word, n) => ({ word, at: trail.length ? trail[Math.min(trail.length - 1, Math.floor((n * trail.length) / said.length))] : pointAt() }))
-        for (const run of onPlaced ? placeWords(placed) : [{ text: words, at: null }]) {
-          if (run.at) onPlaced(run)
-          else put(el, joined(el.value, run.text))
-        }
-      }
-      trail = []
-      onHearing('', null)
+      } else if (words) put(el, joined(el.value, words))
     }
     let still = ''
     for (let i = event.resultIndex; i < event.results.length; i++) if (!event.results[i].isFinal) still += event.results[i][0].transcript
     dropHearing()
     still = still.trim()
-    const count = still ? still.split(/\s+/).length : 0
-    while (trail.length < count) trail.push(pointAt())
-    if (still && onPlaced && trail[trail.length - 1]) {
-      onHearing(still, trail[trail.length - 1])
-    } else if (still) {
+    if (still) {
       const before = el.value
       const shown = joined(before, still)
       hearing = shown.slice(before.length)
@@ -134,26 +107,31 @@ export function createListener({ box, local, lang, onCommand, onState, onProblem
   }
 
   function begin() {
-    rec = new (Recognition())()
-    rec.lang = lang
-    rec.continuous = true
-    rec.interimResults = true
-    if (local) rec.processLocally = true
-    rec.onresult = heard
-    rec.onerror = event => {
-      if (event.error === 'no-speech' || event.error === 'aborted') return
+    // Each recogniser answers only while it is the one in use: one that is still ending must not hear, or start another.
+    const mine = new (Recognition())()
+    rec = mine
+    // A new recogniser hears a new phrase: nothing is left over to let go.
+    skipping = false
+    mine.lang = lang
+    mine.continuous = true
+    mine.interimResults = true
+    if (local) mine.processLocally = true
+    mine.onresult = event => rec === mine && heard(event)
+    mine.onerror = event => {
+      if (rec !== mine || event.error === 'no-speech' || event.error === 'aborted') return
       wanted = false
       onProblem(event.error === 'not-allowed' ? 'The microphone is blocked. Allow it for this page in the browser.' : `Speech stopped: ${event.error}.`)
     }
     // It stops by itself after a silence. Still on means carry on.
-    rec.onend = () => {
+    mine.onend = () => {
+      if (rec !== mine) return
       if (wanted) begin()
       else {
         dropHearing()
         onState(false)
       }
     }
-    rec.start()
+    mine.start()
   }
 
   function start() {
@@ -164,8 +142,21 @@ export function createListener({ box, local, lang, onCommand, onState, onProblem
   }
   function stop() {
     wanted = false
-    rec?.stop()
+    skipping = false
+    const ending = rec
+    rec = null
+    ending?.stop()
+    // Words half heard when it is turned off stay where they are, as heard so far. Nothing more of the phrase is taken.
+    hearing = ''
+    hearingIn = null
     onState(false)
   }
-  return { start, stop, toggle: () => (wanted ? stop() : start()), get on() { return wanted } }
+  /** The box the phrase was going to has gone: keep what was heard so far there, and let the rest of the phrase go. */
+  function skip() {
+    if (!hearing) return
+    hearing = ''
+    hearingIn = null
+    skipping = true
+  }
+  return { start, stop, skip, toggle: () => (wanted ? stop() : start()), get on() { return wanted } }
 }
