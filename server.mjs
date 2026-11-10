@@ -5,11 +5,14 @@
  */
 
 import { createServer } from 'node:http'
-import { readFileSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
+import { filmOf, leftOutLine, saveFilm, savedPart } from './lib/film.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
+import { hasReader, stopReading, wordsForPicture } from './lib/read-words.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
 import { appsOf, madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
 // Only what reads the wake command and turns it on and off. What sets the command is not imported here, on purpose:
@@ -42,6 +45,29 @@ function history(appSlug, id) {
       afterUrl: urlFor(IMAGES, '/images/', r.afterImage),
       beforeUrl: urlFor(IMAGES, '/images/', r.beforeImage),
     }))
+}
+
+/** True while a film is being saved. */
+let filming = false
+
+/** One screen's film for the page: each round, and the steps that play, with addresses for the pictures. */
+function film(appSlug, id) {
+  const made = filmOf(appSlug, id)
+  if (!made) return null
+  const address = path => urlFor(IMAGES, '/images/', path) || urlFor(INBOX, '/inbox/', path)
+  const part = savedPart(made)
+  return {
+    screen: made.screen,
+    mode: made.mode,
+    finished: made.finished,
+    missing: made.missing,
+    seconds: made.seconds,
+    // A round is shown in the strip as it was left: marked, when it was marked.
+    rounds: made.rounds.map(r => ({ round: r.round, url: address(r.marked.at(-1) ?? r.picture), answer: r.answer })),
+    steps: made.steps.map(step => ({ at: step.at, url: address(step.file), marked: step.marked, seconds: step.seconds })),
+    // What Save the film would hold, said before it is pressed: why it cannot be saved, or the older rounds a file leaves out.
+    save: { why: part.why, leftOut: leftOutLine(part) },
+  }
 }
 
 /** A file under root, or null when the path tries to leave it. */
@@ -128,9 +154,16 @@ const server = createServer(async (req, res) => {
   // Only this computer's own pages: another site open in the browser must not write here, or read by renaming itself.
   if (!isLocal(req)) return json(res, 403, { error: 'Only this computer can use this.' })
   try {
+    // `reader`: whether this computer can read words off a picture, so the page shows the words tool only where it can work.
     if (req.method === 'GET' && url.pathname === '/api/queue') {
       const apps = listApps()
-      return json(res, 200, { apps, listening: listening(apps) })
+      return json(res, 200, { apps, listening: listening(apps), reader: hasReader() })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/read-words') {
+      // A picture pushed with no word list: its words are read here, once, and the list is kept beside it. The answer comes at
+      // once, reading or not, so a read never holds one of the few connections a browser opens to a server.
+      const input = JSON.parse(await body(req))
+      return json(res, 200, wordsForPicture(String(input.after ?? '')))
     }
     if (req.method === 'GET' && url.pathname.startsWith('/images/')) {
       const path = inside(IMAGES, decodeURIComponent(url.pathname.slice('/images/'.length)))
@@ -139,6 +172,29 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/api/history') {
       return json(res, 200, { records: history(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '') })
+    }
+    if (req.method === 'GET' && url.pathname === '/api/film') {
+      return json(res, 200, { film: film(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '') })
+    }
+    if (req.method === 'GET' && url.pathname === '/api/film/file') {
+      // The film as a video, made when asked for and not kept. It needs ffmpeg: without it, a plain line says so.
+      const made = filmOf(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '')
+      if (!made) return json(res, 404, { error: 'No such screen' })
+      // One at a time: each takes the computer's whole attention for a while, and a second would only slow the first.
+      if (filming) return json(res, 409, { error: 'A film is being made already. Try again when it is done.' })
+      const dir = mkdtempSync(join(tmpdir(), 'markback-film-'))
+      filming = true
+      try {
+        const out = join(dir, 'film.mp4')
+        await saveFilm(made, out)
+        res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store', 'content-disposition': `attachment; filename="${made.appSlug}-${made.id}-film.mp4"` })
+        return res.end(readFileSync(out))
+      } catch (error) {
+        return json(res, 400, { error: error.message })
+      } finally {
+        filming = false
+        rmSync(dir, { recursive: true, force: true })
+      }
     }
     if (req.method === 'GET' && url.pathname.startsWith('/inbox/')) {
       // Marked pictures the reviewer sent earlier; each send makes a new name, so they can be kept too.
@@ -250,4 +306,5 @@ server.listen(PORT, '127.0.0.1', () => {
 })
 // Stopped, it must not look as if it runs: the hooks ask before they hold an agent back.
 process.on('exit', serverGone)
-for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => process.exit(0))
+// Stopped (review stop, or Ctrl-C): a reader still at work stops too, rather than go on after the server.
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => void stopReading().finally(() => process.exit(0)))

@@ -77,6 +77,7 @@ const KEYS = [
     [['C'], 'Show or hide where it changed'],
     [['I'], 'The rest of the words'],
     [['K'], 'What you asked for last time: show or hide'],
+    [['R'], 'The film of this screen: each round and its marks, in order'],
     [['Q'], 'Panel view'],
     [['F'], 'Full screen'],
     [['Esc'], 'Close or cancel. Words stay'],
@@ -272,7 +273,9 @@ const liveScreen = s => state.apps.find(a => a.slug === s.appSlug)?.screens.find
 
 async function loadQueue() {
   const res = await fetch('/api/queue', { cache: 'no-store' })
-  const { apps, listening } = await res.json()
+  const { apps, reader, listening } = await res.json()
+  // Whether this computer can read words off a picture. It does not change while the server runs.
+  state.reader = reader === true
   setListening(listening)
   const text = JSON.stringify(apps)
   state.loaded = true
@@ -675,6 +678,202 @@ function closeSheet() {
   $('sheetModal').hidden = true
   for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = false
 }
+
+/* ---------- the film of one screen: each round's picture, then its marks, on to the newest, over the whole page ---------- */
+
+/** How long a step stays, when a test says so. The film's own times come with it, in seconds. */
+const FILM_MS = Number(new URLSearchParams(location.search).get('film')) || 0
+/** `at` is the step on show. `picked` is true when a round was chosen and not reached by playing or stepping. */
+/** `loading` is the ask on its way, from the press until the film comes. `back` has the focus to go back to when it closes. */
+const film = { data: null, of: null, names: [], at: 0, playing: false, timer: null, picked: true, loading: null, back: null }
+const filmOpen = () => !$('film').hidden
+/** The step on show: the picture comes in over the last one, the strip says which round, and the button says what it does. */
+function showFilm() {
+  const { data, names } = film
+  const step = data.steps[film.at]
+  const top = $('filmImg')
+  const under = $('filmUnder')
+  if (top.getAttribute('src') !== step.url) {
+    // The last picture stays under the new one while it comes in, so nothing flashes between them.
+    under.hidden = !top.getAttribute('src') || matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (!under.hidden) under.src = top.src
+    top.classList.remove('fresh')
+    top.src = step.url
+    // Read once, so the browser starts the fade again from the beginning.
+    void top.offsetWidth
+    top.classList.add('fresh')
+  }
+  top.alt = `${names[step.at]}${step.marked ? ', as marked' : ''}`
+  for (const [i, el] of [...$('filmStrip').children].entries()) {
+    el.classList.toggle('current', i === step.at)
+    if (i === step.at) el.setAttribute('aria-current', 'true')
+    else el.removeAttribute('aria-current')
+  }
+  $('filmStrip').children[step.at]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  $('filmPlay').textContent = film.playing ? 'Pause' : 'Play'
+}
+/** Waits as long as the step on show stays, then goes to the next. It stops by itself on the last. */
+function runFilm() {
+  clearTimeout(film.timer)
+  if (!film.playing) return
+  film.timer = setTimeout(() => {
+    if (film.at >= film.data.steps.length - 1) film.playing = false
+    else film.at++
+    showFilm()
+    runFilm()
+  }, FILM_MS || film.data.steps[film.at].seconds * 1000)
+}
+function pauseFilm() {
+  clearTimeout(film.timer)
+  film.playing = false
+}
+function playFilm() {
+  if (!filmOpen()) return
+  if (film.playing) {
+    pauseFilm()
+    return showFilm()
+  }
+  const { steps } = film.data
+  // At the end, it plays again from the first picture. A round chosen in the strip plays from its own picture, before the marks.
+  if (film.at >= steps.length - 1) film.at = 0
+  else if (film.picked) film.at = steps.findIndex(step => step.at === steps[film.at].at)
+  film.picked = false
+  film.playing = true
+  showFilm()
+  runFilm()
+}
+/** One step back or on: a picture, then the same picture as marked, then the next round's picture. */
+function stepFilm(by) {
+  pauseFilm()
+  film.picked = false
+  film.at = Math.max(0, Math.min(film.data.steps.length - 1, film.at + by))
+  showFilm()
+}
+/** A round from the strip, as it was left: marked, when it was marked. */
+function pickFilmRound(round) {
+  pauseFilm()
+  film.picked = true
+  film.at = film.data.steps.findLastIndex(step => step.at === round)
+  showFilm()
+}
+/** The page behind the film, shut or open again: nothing there takes the focus, a key or a press while it is shut. */
+function shutBehindFilm(shut) {
+  for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = shut
+}
+/** The focus goes back where it was before the film: a press in the menu goes back to the menu's button. */
+function focusBeforeFilm() {
+  const back = film.back
+  film.back = null
+  if (back && back !== document.body && back.isConnected && back.checkVisibility() && !back.closest('[inert]')) back.focus({ preventScroll: true })
+  // Nowhere to go back to: the focus leaves the shut film, so no key lands on a button nobody sees.
+  else if (document.activeElement?.closest('#film')) document.activeElement.blur()
+}
+async function openFilm() {
+  const s = screen()
+  if (filmOpen()) return closeFilm()
+  if (!s || film.loading) return
+  const was = document.activeElement
+  film.back = was?.closest('#menu') ? $('menuOpen') : was
+  closeTextEntry(true)
+  closeMenu()
+  closeDrawer()
+  endPin()
+  // Shut from the press on, not from when the film comes: G pressed while it loads would answer the screen behind unseen.
+  shutBehindFilm(true)
+  const asked = {}
+  film.loading = asked
+  let data = null
+  try {
+    const res = await fetch(`/api/film?app=${encodeURIComponent(s.appSlug)}&id=${encodeURIComponent(s.id)}`, { cache: 'no-store' })
+    data = res.ok ? (await res.json()).film : null
+  } catch {
+    data = null
+  }
+  // Esc while it loaded, or another screen by now: the film is dropped. It would open over a screen it is not the film of.
+  const now = screen()
+  const wanted = film.loading === asked && now?.appSlug === s.appSlug && now?.id === s.id
+  if (film.loading === asked) film.loading = null
+  if (!wanted || !data?.steps?.length) {
+    shutBehindFilm(false)
+    focusBeforeFilm()
+    return wanted ? toast('No film of this screen', 'Its pictures are not in the store.', { problem: true }) : undefined
+  }
+  const last = data.rounds.length - 1
+  Object.assign(film, { data, of: { appSlug: s.appSlug, id: s.id }, names: data.rounds.map((r, i) => (data.finished && i === last ? 'Finished' : `Round ${r.round}`)), playing: false, picked: true })
+  const name = `${data.screen}${data.mode ? ` (${data.mode})` : ''}`
+  const seconds = Math.round(data.seconds)
+  $('filmTitle').textContent = `${name}: from first mark to ${data.finished ? 'finished' : 'now'}`
+  $('filmTitle').title = $('filmTitle').textContent
+  // A sketch is a drawing, and ffmpeg makes films of pictures: it plays here, and the page says so in place of the button.
+  const why = data.save?.why ?? ''
+  $('filmLength').textContent = `${data.rounds.length} round${data.rounds.length === 1 ? '' : 's'} · ${seconds} second${seconds === 1 ? '' : 's'}${data.missing > 0 ? ` · ${data.missing} older ${data.missing === 1 ? 'picture is' : 'pictures are'} gone` : ''}${why ? ' · Plays here only: a film of a sketch cannot be saved as a file' : ''}`
+  $('filmLength').title = why || $('filmLength').textContent
+  $('filmSave').hidden = !!why
+  // A long story is saved as its newest rounds. The button says so before it is pressed, and the note after.
+  $('filmSave').dataset.tip = `Save the film as a video file${data.save?.leftOut ? `. ${data.save.leftOut}` : ''}`
+  // What was said in a round is words, and not in its picture: it is on the round's name, for a pointer that rests there.
+  const said = r => (r.answer ? `: ${answerWords(r.answer)}${r.answer.notes && !r.answer.noComment ? `. ${r.answer.notes}` : ''}` : '')
+  $('filmStrip').innerHTML = data.rounds.map((r, i) => `<button class="film-round" data-round="${i}" title="${esc(`${film.names[i]}${said(r)}`)}"><span class="thumb"><img src="${esc(r.url)}" alt="" decoding="async"></span><span>${esc(film.names[i])}</span></button>`).join('')
+  // Every picture is asked for now, so each is there when its step comes.
+  for (const step of data.steps) new Image().src = step.url
+  $('filmImg').removeAttribute('src')
+  $('filmUnder').hidden = true
+  $('film').hidden = false
+  document.body.classList.add('film-open')
+  // It opens on the first round as it was left: the first marks.
+  film.at = data.steps.findLastIndex(step => step.at === 0)
+  showFilm()
+  $('filmPlay').focus()
+  return undefined
+}
+/** Esc while the film loads: it does not open, and the page is as it was. */
+function cancelFilm() {
+  film.loading = null
+  shutBehindFilm(false)
+  focusBeforeFilm()
+}
+function closeFilm() {
+  pauseFilm()
+  $('film').hidden = true
+  document.body.classList.remove('film-open')
+  shutBehindFilm(false)
+  focusBeforeFilm()
+}
+/** The film as a video file. The server makes it with ffmpeg, when this computer has it, and says so plainly when it has not. */
+async function saveFilm() {
+  const s = film.of
+  if (!s || $('filmSave').disabled) return
+  $('filmSave').disabled = true
+  try {
+    const res = await fetch(`/api/film/file?app=${encodeURIComponent(s.appSlug)}&id=${encodeURIComponent(s.id)}`, { cache: 'no-store' })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'The server did not make it.')
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(await res.blob())
+    link.download = `${s.appSlug}-${s.id}-film.mp4`
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000)
+    // A long story is saved as its newest rounds: the note says the older ones are not in the file.
+    toast('Film saved', `${link.download}${film.data.save?.leftOut ? `. ${film.data.save.leftOut}` : ''}`)
+  } catch (error) {
+    toast('The film was not saved', error.message, { problem: true })
+  } finally {
+    $('filmSave').disabled = false
+  }
+}
+$('filmPlay').onclick = playFilm
+$('filmSave').onclick = () => void saveFilm()
+$('filmClose').onclick = closeFilm
+$('filmStrip').onclick = event => {
+  const round = event.target.closest('[data-round]')
+  if (round) pickFilmRound(Number(round.dataset.round))
+}
+$('filmImg').addEventListener('animationend', () => {
+  $('filmUnder').hidden = true
+})
+/* Some browsers press a button when Space comes up, whatever was done when it went down. */
+document.addEventListener('keyup', event => {
+  if (filmOpen() && event.key === ' ') event.preventDefault()
+})
 
 /* The strip, in the panel view only: fifty thumbnails nobody is looking at would slow every swap. */
 function renderStrip(a) {
@@ -1210,6 +1409,7 @@ function renderMenu() {
   const group = a ? placeOf(a).group : null
   setHtml($('menu'), `
     <button data-menu="sheet" role="menuitem"${a ? '' : ' disabled'}><span>All screens of this review</span><span class="kbd">O</span></button>
+    <button data-menu="film" role="menuitem"${screen() && !onDonePage() ? '' : ' disabled'}><span>The film of this screen</span><span class="kbd">R</span></button>
     <button data-menu="list" role="menuitem"><span>Apps and screens</span><span class="kbd">L</span></button>
     <button data-menu="new" role="menuitem"><span>New project</span></button>
     <button data-menu="work" role="menuitem"><span>Ideas and queue</span><span class="kbd">W</span></button>
@@ -1325,13 +1525,16 @@ function render() {
   }
   // Not while the opening page is up: a reload there is still an opening.
   if (!state.arriving) history.replaceState(null, '', `#${a.slug}/${s.id}`)
-  setHtml($('toolButtons'), TOOLS.map(t => `<button class="tool${state.tool === t.id ? ' on' : ''}${t.id === 'words' && !wordsNow() ? ' unlit' : ''}" data-tool="${t.id}" ${tip(t.id === 'words' && !wordsNow() ? 'This picture has no word list: this draws a box' : t.tip, t.key)}>${ICONS[t.id]}</button>`).join(''))
+  // The words tool where it can work, unlit with why while it cannot yet. Hidden where it never can: then a box stands in.
+  const wordsTip = wordsNow() ? '' : wordsWhy(s)
+  const shownTool = toolNow()
+  setHtml($('toolButtons'), TOOLS.filter(t => t.id !== 'words' || wordsTip !== null).map(t => `<button class="tool${shownTool === t.id ? ' on' : ''}${t.id === 'words' && wordsTip ? ' unlit' : ''}" data-tool="${t.id}" ${tip(t.id === 'words' && wordsTip ? wordsTip : t.tip, t.key)}>${ICONS[t.id]}</button>`).join(''))
   setHtml($('colours'), COLOURS.map((c, i) => `<button class="tool swatch${state.colour === c.value ? ' on' : ''}" data-colour="${c.value}" style="--c:${c.value}" ${tip(c.label, String(i + 1))}><i></i></button>`).join(''))
   const views = s.before ? VIEWS : VIEWS.filter(v => v.id === 'after')
   if (!s.before) state.view = 'after'
   setHtml($('views'), views.length > 1 ? views.map(v => `<button class="btn${state.view === v.id ? ' on' : ''}" data-view="${v.id}" ${tip(`Show ${v.label.toLowerCase()}`, 'V')}>${v.label}</button>`).join('') : '')
   $('pair').className = `pair view-${state.view}`
-  $('scroller').className = `scroller tool-${state.tool}`
+  $('scroller').className = `scroller tool-${toolNow()}`
   $('afterCaption').textContent = state.view === 'side' ? 'After (draw here)' : 'After'
 
   if (state.shownKey !== keyOf(s) + s.after) showPicture(s)
@@ -1427,7 +1630,8 @@ function showPicture(s) {
     $('scroller').scrollTop = 0
     paint()
   }
-  loadWords(s)
+  loadWords(s.words)
+  readWordsOf(s)
   const url = `/images/${s.after}`
   const held = pictures.get(url)
   $('beforeImg').src = s.before ? `/images/${s.before}` : ''
@@ -1450,26 +1654,78 @@ function showPicture(s) {
 /* ---------- the words in a picture: a list saved with it, so the words themselves can be marked ---------- */
 
 const wordLists = new Map()
+/**
+ * Lists read off bare pictures by the server, as each picture's name has them: { state: 'reading' | 'done' | 'none' | 'failed'
+ * | 'not-readable', words }. Each picture is asked about once, when it is first on show, and never all at once.
+ */
+const readLists = new Map()
+/** The name of the list for a screen: given with the push, or read off its picture. '' while there is none. */
+const listOf = s => s?.words || readLists.get(s?.after)?.words || ''
 /** The list for the picture on show, in the picture's own pixels, or null: none came with it, or it has not arrived yet. */
 const wordsNow = () => {
   const s = screen()
-  const held = s?.words && wordLists.get(s.words)
-  if (!held || !state.size) return null
+  const held = listOf(s) && wordLists.get(listOf(s))
+  if (!held?.words || !state.size) return null
   // A list made at another scale, a sharper screenshot say, is fitted to the picture. Worked out once for each size.
   const k = held.wide ? state.size.w / held.wide : 1
   if (held.fitted?.k !== k) held.fitted = { k, words: k === 1 ? held.words : held.words.map(w => ({ ...w, x: w.x * k, y: w.y * k, w: w.w * k, h: w.h * k })) }
   return held.fitted.words
 }
-function loadWords(s) {
-  if (!s.words || wordLists.has(s.words)) return
-  wordLists.set(s.words, null)
-  fetch(`/images/${s.words}`).then(res => (res.ok ? res.json() : null)).then(list => {
+/**
+ * Why the words tool cannot mark words on this screen yet, as its tip, or null when it never can: the picture has no list and
+ * this computer has nothing to read one with. Then the tool is not shown at all.
+ */
+function wordsWhy(s) {
+  if (!s || (!listOf(s) && !state.reader)) return null
+  const held = wordLists.get(listOf(s))
+  if (held?.empty) return 'No words were found in this picture: this draws a box'
+  if (held?.gone) return 'This picture has no word list: this draws a box'
+  if (listOf(s)) return 'Loading the words in this picture. Until then this draws a box'
+  const read = readLists.get(s.after)
+  if (!read || read.state === 'reading') return 'Reading the words in this picture. Until then this draws a box'
+  return 'This picture has no word list: this draws a box'
+}
+/** The tool in use here: the words tool, where it is not shown, draws boxes, and comes back on a screen where it is. */
+const toolNow = () => (state.tool === 'words' && wordsWhy(screen()) === null && !wordsNow() ? 'box' : state.tool)
+function loadWords(name) {
+  if (!name || wordLists.has(name)) return
+  wordLists.set(name, null)
+  fetch(`/images/${name}`).then(res => (res.ok ? res.json() : null)).then(list => {
     const words = Array.isArray(list?.words) ? list.words.filter(w => typeof w?.t === 'string' && [w.x, w.y, w.w, w.h].every(Number.isFinite)) : []
-    wordLists.set(s.words, words.length ? { words, wide: Number(list.size?.w) || 0 } : null)
-    if (screen()?.words === s.words) render()
+    wordLists.set(name, words.length ? { words, wide: Number(list.size?.w) || 0 } : list ? { empty: true } : { gone: true })
+    if (listOf(screen()) === name) render()
   }).catch(() => {
     // No list after all: the tool draws a box, as it does for any picture without one.
+    wordLists.set(name, { gone: true })
+    if (listOf(screen()) === name) render()
   })
+}
+/**
+ * A picture pushed with no list: the server reads its words, here on this computer. It answers at once, so asking never holds a
+ * connection the pictures and answers need. While it is reading, the page asks again a moment later, for as long as that
+ * picture is on show. A picture moved past is not asked about again, and the server lets it go.
+ */
+let readTimer = null
+function readWordsOf(s) {
+  clearTimeout(readTimer)
+  const known = readLists.get(s.after)
+  if (s.words || !state.reader || (known && known.state !== 'reading')) return
+  if (!known) readLists.set(s.after, { state: 'reading' })
+  const again = () => {
+    readTimer = setTimeout(() => {
+      if (screen()?.after === s.after) readWordsOf(screen())
+    }, 900)
+  }
+  fetch('/api/read-words', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ after: s.after }) })
+    .then(res => res.json())
+    .then(out => {
+      if (out.reading) return again()
+      readLists.set(s.after, out.words ? { state: 'done', words: out.words } : { state: out.why || 'failed' })
+      loadWords(out.words)
+      if (screen()?.after === s.after) render()
+    })
+    // The server away for now: asked again while the picture is on show.
+    .catch(again)
 }
 /** The word a point is on, or the nearest one. Words are in reading order, so two of them name everything between. */
 function wordAt(words, [x, y], { near = false } = {}) {
@@ -1489,9 +1745,57 @@ function wordAt(words, [x, y], { near = false } = {}) {
   }
   return best
 }
+/** Two boxes on one line: they share more than half the height of the shorter. */
+const onLine = (a, b) => Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > Math.min(a.h, b.h) / 2
+/** Words in lines, top to bottom, each line left to right: a word is on the line its middle is in. */
+function inLines(list) {
+  const lines = []
+  for (const w of [...list].sort((a, b) => a.y + a.h / 2 - (b.y + b.h / 2))) {
+    const line = lines[lines.length - 1]
+    if (line && w.y + w.h / 2 <= line.bottom) {
+      line.words.push(w)
+      line.bottom = Math.max(line.bottom, w.y + w.h * 0.75)
+    } else lines.push({ words: [w], bottom: w.y + w.h })
+  }
+  return lines.map(line => line.words.sort((a, b) => a.x - b.x))
+}
+/**
+ * The words a drag from one word to another means, in the order they read. A list read off a picture can have its order wrong
+ * on a dense table or an odd layout, so where the picture itself says what is meant, the picture decides: along one line, the
+ * words on that line between the two ends; down one column or card, line by line inside it. Only a drag from one column to
+ * another goes by the list's order.
+ */
+function wordsBetween(words, from, to) {
+  const a = words[from]
+  const b = words[to]
+  const middleIn = (w, left, right) => w.x + w.w / 2 >= left && w.x + w.w / 2 <= right
+  if (onLine(a, b)) {
+    const left = Math.min(a.x, b.x)
+    const right = Math.max(a.x + a.w, b.x + b.w)
+    return words.filter(w => onLine(w, a) && middleIn(w, left, right)).sort((p, q) => p.x - q.x)
+  }
+  const [first, last] = a.y < b.y ? [a, b] : [b, a]
+  // The words in the rows the drag runs over, cut into blocks where nothing is written down the whole of them.
+  const rows = words.filter(w => w.y + w.h / 2 >= first.y && w.y + w.h / 2 <= last.y + last.h)
+  const tall = [...rows.map(w => w.h)].sort((p, q) => p - q)[rows.length >> 1]
+  const blocks = []
+  for (const w of [...rows].sort((p, q) => p.x - q.x)) {
+    const block = blocks[blocks.length - 1]
+    if (block && w.x - block.right < tall * 1.5) {
+      block.words.push(w)
+      block.right = Math.max(block.right, w.x + w.w)
+    } else blocks.push({ words: [w], right: w.x + w.w })
+  }
+  const block = blocks.find(one => one.words.includes(first))
+  if (!block || !block.words.includes(last)) return words.slice(Math.min(from, to), Math.max(from, to) + 1)
+  const lines = inLines(block.words)
+  const top = lines.findIndex(line => line.includes(first))
+  const foot = lines.findIndex(line => line.includes(last))
+  return lines.slice(top, foot + 1).flatMap((line, n) => line.filter(w => (n > 0 || w.x + w.w / 2 >= first.x) && (top + n < foot || w.x + w.w / 2 <= last.x + last.w)))
+}
 /** The words from one to another as a mark: what they say, a box round each line of them, and the box round them all. */
 function wordsMark(words, from, to, color) {
-  const picked = words.slice(Math.min(from, to), Math.max(from, to) + 1)
+  const picked = wordsBetween(words, from, to)
   const rects = []
   for (const w of picked) {
     const last = rects[rects.length - 1]
@@ -2004,7 +2308,7 @@ $('canvas').addEventListener('pointerdown', event => {
   const p = at(event)
   if (state.tool === 'speak') return void startPin(p)
   const w = strokeFor(markWidth())
-  const words = state.tool === 'words' ? wordsNow() : null
+  const words = toolNow() === 'words' ? wordsNow() : null
   if (words) {
     const on = wordAt(words, p, { near: true })
     if (on >= 0) draft = { ...wordsMark(words, on, on, state.colour), start: on }
@@ -2731,7 +3035,7 @@ function cycleView() {
   if (state.fitted) fit()
 }
 
-for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', newClose: 'close', sheetClose: 'close', viewerClose: 'close' })) $(id).innerHTML = ICONS[icon]
+for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', newClose: 'close', sheetClose: 'close', viewerClose: 'close', filmClose: 'close' })) $(id).innerHTML = ICONS[icon]
 
 $('listOpen').onclick = openDrawer
 $('back').onclick = () => go(state.index - 1)
@@ -2753,6 +3057,7 @@ $('menu').onclick = event => {
   else if (what === 'notices') void toggleNotices()
   else if (what === 'wake') void toggleWake()
   else if (what === 'sheet') openSheet()
+  else if (what === 'film') void openFilm()
   else if (what === 'keys') showHelp(true)
 }
 $('helpClose').onclick = () => showHelp(false)
@@ -2897,7 +3202,7 @@ for (const holder of [$('stateCard'), $('newModal')]) {
 /* New project, from the menu: the first screen's two ways in, over the page, with the projects there left as they are. */
 const newProjectOpen = () => !$('newModal').hidden
 /** A window over the page: while one is up, nothing behind it may change. */
-const windowUp = () => newProjectOpen() || sheetOpen() || ['helpModal', 'confirmModal', 'submitModal', 'viewer'].some(id => !$(id).hidden)
+const windowUp = () => newProjectOpen() || sheetOpen() || filmOpen() || ['helpModal', 'confirmModal', 'submitModal', 'viewer'].some(id => !$(id).hidden)
 // One for each time the window is open: an answer that comes after it closed knows it is late.
 let newWindow = { open: false }
 // The address of a picture the window started that is still being taken. One at a time: a second press would make two rounds.
@@ -3045,6 +3350,25 @@ document.addEventListener('keydown', event => {
     if (key === 'Escape' || ((key === 'o' || key === 'O') && !mod)) closeSheet()
     return
   }
+  // While the film loads, no key reaches the screen behind it either. Esc gives up waiting.
+  if (film.loading) {
+    if (!mod) event.preventDefault()
+    if (key === 'Escape') cancelFilm()
+    return
+  }
+  // The film takes every key while it is up: none reaches the screen behind it.
+  if (filmOpen()) {
+    if (key === 'Escape' || ((key === 'r' || key === 'R') && !mod)) closeFilm()
+    else if (key === 'ArrowLeft' || key === 'ArrowRight') {
+      event.preventDefault()
+      stepFilm(key === 'ArrowLeft' ? -1 : 1)
+    } else if (key === ' ' && !event.repeat) {
+      // Space plays and pauses wherever the focus is: it is never a press of the round or the button that has it.
+      event.preventDefault()
+      playFilm()
+    }
+    return
+  }
   // A change of review waits for a press. Nothing else gets past it: not G, not a held G, not a quick one.
   if (segmentUp()) {
     if (event.repeat) return event.preventDefault()
@@ -3122,10 +3446,12 @@ document.addEventListener('keydown', event => {
   else if ((key === 'd' || key === 'D') && event.shiftKey) pressMic()
   else if ((key === 'i' || key === 'I') && !event.repeat) toggleMore()
   else if ((key === 'k' || key === 'K') && !event.repeat) toggleAsked()
+  else if ((key === 'r' || key === 'R') && !event.repeat) void openFilm()
   else if (/^[1-4]$/.test(key)) setColour(COLOURS[Number(key) - 1].value)
   else {
     const tool = { b: 'box', a: 'arrow', p: 'pen', t: 'text', m: 'pan', e: 'words', d: 'speak' }[key.toLowerCase()]
-    if (tool) setTool(tool)
+    // Where the words tool is not shown, E does nothing: there is no list, and no way to make one here.
+    if (tool && !(tool === 'words' && wordsWhy(screen()) === null)) setTool(tool)
   }
 })
 

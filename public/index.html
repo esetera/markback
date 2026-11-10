@@ -122,6 +122,18 @@
     <div class="viewer-body"><img id="viewerImg" alt=""></div>
   </div>
 
+  <div class="film" id="film" role="dialog" aria-modal="true" aria-labelledby="filmTitle" hidden>
+    <div class="film-head">
+      <h2 id="filmTitle"></h2>
+      <span class="film-length" id="filmLength"></span>
+      <button class="btn" id="filmPlay" data-tip="Play or pause" data-key="Space">Play</button>
+      <button class="btn primary" id="filmSave" data-tip="Save the film as a video file">Save the film</button>
+      <button class="tool" id="filmClose" aria-label="Close" data-tip="Close" data-key="Esc"></button>
+    </div>
+    <div class="film-stage"><div class="film-fit"><img id="filmUnder" alt="" hidden><img id="filmImg" alt=""></div></div>
+    <div class="film-strip" id="filmStrip" role="group" aria-label="Rounds"></div>
+  </div>
+
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   <div class="tip" id="tip" hidden></div>
   <script type="module" src="/app.js"></script>
