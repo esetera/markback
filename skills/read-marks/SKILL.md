@@ -45,7 +45,7 @@ A mark can be read more than one way. Before you change anything, say back what 
 review inferred --app "My app" --screen "Home" --mode light --mark 1 --text "Make Book the main button"
 ```
 
-`--mark` is the mark's number as `review read` gives it. Say what you will do, in twelve words or fewer, not what the mark looks like. The person sees each line beside its mark, and answers **Yes, that** or corrects it in a few words.
+`--mark` is the mark's number as `review read` gives it. When `review read` shows more than one answer on a screen, each has `Answer: <time>` at the end of its first line: add `--answer <time>` for the one you read. Say what you will do, in twelve words or fewer, not what the mark looks like. The person sees each line beside its mark, and answers **Yes, that** or corrects it in a few words.
 
 Do not wait for them: go on with the work. Run `review wait --app "My app"` in the background as you work; it ends when they answer a line. `review read --app "My app" --latest` shows each line with what they said back. A correction stands in place of your reading: do what it says, and undo what you did on the wrong reading.
 

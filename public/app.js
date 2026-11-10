@@ -241,7 +241,7 @@ async function loadQueue() {
   state.loaded = true
   document.body.classList.remove('loading')
   resendKept()
-  if (text === lastQueue) return
+  if (text === lastQueue) return sayLooks()
   const wasLoaded = lastQueue !== ''
   lastQueue = text
   const before = screen()
@@ -306,8 +306,18 @@ async function loadQueue() {
   if (notice) toast(notice)
   if (fresh.length) announce(fresh, !notice)
   // On show, the lines are there to see. Anywhere else, a line says so, with a press to go and look.
-  const elsewhere = readNow.filter(s => !(screen()?.appSlug === s.appSlug && screen()?.id === s.id))
-  if (elsewhere.length && !notice && !fresh.length && !state.arriving) toast(`${elsewhere[0].inferred.from || 'Claude'} said what it read on ${label(elsewhere[0])}`, elsewhere.length > 1 ? `And on ${elsewhere.length - 1} more` : 'A line beside each mark: yes, or say what you meant', { look: `${elsewhere[0].appSlug}/${elsewhere[0].id}` })
+  for (const x of readNow) looks.set(`${x.appSlug}/${x.id}`, x)
+  sayLooks(!!notice || fresh.length > 0)
+}
+
+/** Readings that came on screens not on show, waiting to be said: held while another line is up, never dropped. */
+const looks = new Map()
+function sayLooks(busy = false) {
+  for (const [key, x] of looks) if (screen()?.appSlug === x.appSlug && screen()?.id === x.id) looks.delete(key)
+  if (!looks.size || busy || state.arriving || !$('toast').hidden) return
+  const [first, ...rest] = looks.values()
+  looks.clear()
+  toast(`${String(first.inferred.from || 'Claude').slice(0, 40)} said what it read on ${label(first)}`, rest.length ? `And on ${rest.length} more` : 'A line beside each mark: yes, or say what you meant', { look: `${first.appSlug}/${first.id}` })
 }
 
 /* ---------- something new to review: said in the tab's title always, and by a sound and a notice unless turned off ---------- */
@@ -1422,65 +1432,142 @@ function showSentMarks(s) {
 
 /** The reading whose words box is open, as `answer|n`. Only one at a time. */
 let correcting = ''
+/** When a key last went into the words box. Its box gone some other way than Enter or Esc, the next keys answer nothing. */
+let boxKeyAt = 0
+const BOX_GRACE_MS = 1500
+/** The answers that stand for this round, newest first: a Looks good stands alone, so nothing before it counts. */
+function standingAnswers(records, round) {
+  const out = []
+  for (const r of records ?? []) {
+    if (r.round !== round || r.olderPicture) continue
+    if (r.verdict !== 'changes') break
+    out.push(r)
+  }
+  return out
+}
+const shortFrom = r => String(r.from || 'Claude').slice(0, 40)
+function readingHtml(r, size) {
+  const key = r.key
+  // Beside the mark on its right, or its left. A mark across most of the picture has room on neither: the line goes under it.
+  const roomRight = size.w - (r.box.x + r.box.w)
+  const side = roomRight >= size.w * 0.25 ? 'right' : r.box.x >= size.w * 0.25 ? 'left' : 'under'
+  const x = ((side === 'right' ? r.box.x + r.box.w : Math.max(0, r.box.x)) / size.w) * 100
+  const y = (Math.max(0, side === 'under' ? r.box.y + r.box.h : r.box.y) / size.h) * 100
+  const yes = !!r.reply?.yes
+  const corrected = !yes && !!r.reply?.text
+  const from = esc(shortFrom(r))
+  const body = correcting === key
+    ? `<span class="rt">${esc(r.text)}</span><input data-correct value="${esc(r.reply?.text ?? '')}" placeholder="What you meant, then Enter" maxlength="300" aria-label="What you meant by mark ${r.n}">`
+    : yes ? `<span class="rt">${esc(r.text)}</span><span class="rs">${ICONS.check}Yes</span><button class="link" data-no>Change</button>`
+      : corrected ? `<span class="rt">${esc(r.text)}</span><span class="rc">${esc(r.reply.text)}</span><button class="link" data-no>Change</button>`
+        : `<span class="rt"><span class="rf">${from} read:</span>${esc(r.text)}</span><button data-yes>Yes, that</button><button data-no>No</button>`
+  return `<div class="reading${side === 'right' ? '' : ` ${side}`}${yes || corrected ? ' answered' : ''}${corrected ? ' corrected' : ''}" data-reading="${esc(key)}" style="left:${x.toFixed(3)}%;top:${y.toFixed(3)}%" title="What ${from} read mark ${r.n} to mean"><span class="rn">${r.n}</span>${body}</div>`
+}
 function renderReadings(s) {
-  const standing = standingAnswer(histories.get(historyKey(s)), s.round)
   const size = state.size
-  // Only on the answer standing for this picture, and only once the picture is there to place them on.
-  const readings = standing?.verdict === 'changes' && size && state.shownKey === keyOf(s) + s.after ? [...(standing.readings ?? [])].sort((x, y) => x.box.y - y.box.y) : []
-  if (!readings.some(r => `${standing.answer}|${r.n}` === correcting)) correcting = ''
-  const from = r => esc(r.from || 'Claude')
-  const html = readings.map(r => {
-    const key = `${standing.answer}|${r.n}`
-    // Beside the mark on its right, or on its left when the right has no room.
-    const left = (r.box.x + r.box.w) / size.w > 0.7
-    const x = ((left ? r.box.x : r.box.x + r.box.w) / size.w) * 100
-    const y = (Math.max(0, r.box.y) / size.h) * 100
-    const yes = !!r.reply?.yes
-    const corrected = !yes && !!r.reply?.text
-    const body = correcting === key
-      ? `<span class="rt">${esc(r.text)}</span><input data-correct value="${esc(r.reply?.text ?? '')}" placeholder="What you meant, then Enter" maxlength="300" aria-label="What you meant by mark ${r.n}">`
-      : yes ? `<span class="rt">${esc(r.text)}</span><span class="rs">${ICONS.check}Yes</span><button class="link" data-no>Change</button>`
-        : corrected ? `<span class="rt">${esc(r.text)}</span><span class="rc">${esc(r.reply.text)}</span><button class="link" data-no>Change</button>`
-          : `<span class="rt"><span class="rf">${from(r)} read:</span>${esc(r.text)}</span><button data-yes>Yes, that</button><button data-no>No</button>`
-    return `<div class="reading${left ? ' left' : ''}${yes || corrected ? ' answered' : ''}${corrected ? ' corrected' : ''}" data-reading="${esc(key)}" style="left:${x.toFixed(3)}%;top:${y.toFixed(3)}%" title="What ${from(r)} read mark ${r.n} to mean"><span class="rn">${r.n}</span>${body}</div>`
-  }).join('')
+  // Only on the answers standing for this picture, and only once the picture is there to place them on.
+  const answers = size && state.shownKey === keyOf(s) + s.after ? standingAnswers(histories.get(historyKey(s)), s.round) : []
+  const readings = answers.flatMap(a => (a.readings ?? []).map(r => ({ ...r, key: `${a.answer}|${r.n}` }))).sort((x, y) => x.box.y - y.box.y)
+  if (!readings.some(r => r.key === correcting)) correcting = ''
   // Come to look: the line that said they had come has done its work.
   if (readings.length && $('toast').querySelector(`[data-look-at="${CSS.escape(`${s.appSlug}/${s.id}`)}"]`)) hideToast()
-  if ($('readings')._html === html) return
-  const typing = $('readings').querySelector('[data-correct]')
-  setHtml($('readings'), html)
-  placeReadings()
-  // Opened just now: the words go straight in.
-  if (!typing) $('readings').querySelector('[data-correct]')?.focus()
+  // Card by card, so a card whose words box is open is never rebuilt: what is typed in it, and the keyboard, stay put.
+  const layer = $('readings')
+  const old = new Map([...layer.children].map(el => [el.dataset.reading, el]))
+  let moved = false
+  let prev = null
+  for (const r of readings) {
+    const html = readingHtml(r, size)
+    let el = old.get(r.key)
+    old.delete(r.key)
+    const open = el?.querySelector('[data-correct]')
+    if (el && open && r.key === correcting) {
+      // Said again by the agent while the box is open: only its words change beside the box.
+      const said = el.querySelector('.rt')
+      if (said && said.textContent !== r.text) {
+        said.textContent = r.text
+        moved = true
+      }
+    } else if (el?._html !== html) {
+      const made = document.createElement('template')
+      made.innerHTML = html
+      const fresh = made.content.firstElementChild
+      fresh._html = html
+      if (el) el.replaceWith(fresh)
+      else if (prev) prev.after(fresh)
+      else layer.prepend(fresh)
+      el = fresh
+      moved = true
+      // Opened just now: the words go straight in.
+      if (r.key === correcting) fresh.querySelector('[data-correct]')?.focus()
+    }
+    // Out of order: put back, unless it holds the keyboard, which moving would take away.
+    if (el.previousElementSibling !== prev && !el.contains(document.activeElement)) {
+      if (prev) prev.after(el)
+      else layer.prepend(el)
+      moved = true
+    }
+    prev = el
+  }
+  for (const el of old.values()) {
+    el.remove()
+    moved = true
+  }
+  if (moved) placeReadings()
 }
-/** Lines that would sit on each other are moved down until they do not, or up when down would take one off the picture. */
+/**
+ * Each line stays inside the part of the picture that can be seen, on both axes, and narrower in a narrow window. Lines that
+ * would sit on each other are moved down until they do not, or up when down would take one off the picture.
+ */
 function placeReadings() {
-  const bottom = $('stage').getBoundingClientRect().bottom
+  const cards = [...$('readings').children]
+  if (!cards.length) return
+  const stage = $('stage').getBoundingClientRect()
+  const view = $('scroller').getBoundingClientRect()
+  const room = { left: Math.max(stage.left, view.left) + 4, right: Math.min(stage.right, view.right, innerWidth) - 4, top: Math.max(stage.top, view.top) + 4, bottom: Math.min(stage.bottom, view.bottom) - 4 }
+  const seen = room.right - room.left > 40 && room.bottom - room.top > 20
   const placed = []
   const hits = r => placed.find(p => r.left < p.right && r.right > p.left && r.top < p.bottom && r.bottom > p.top)
   const shift = (card, by) => {
     card.style.marginTop = `${(parseFloat(card.style.marginTop) || 0) + by}px`
     return card.getBoundingClientRect()
   }
-  for (const card of $('readings').children) {
+  for (const card of cards) {
     card.style.marginTop = ''
+    card.style.marginLeft = ''
+    card.style.maxWidth = seen ? `${Math.max(160, Math.min(340, room.right - room.left))}px` : ''
     let r = card.getBoundingClientRect()
+    if (seen) {
+      const dx = r.left < room.left ? room.left - r.left : r.right > room.right ? room.right - r.right : 0
+      if (dx) {
+        card.style.marginLeft = `${dx}px`
+        r = card.getBoundingClientRect()
+      }
+    }
     for (let p = hits(r); p; p = hits(r)) r = shift(card, p.bottom - r.top + 4)
-    if (r.bottom > bottom) {
+    if (seen && r.bottom > room.bottom) {
       card.style.marginTop = ''
       r = card.getBoundingClientRect()
       for (let p = hits(r); p; p = hits(r)) r = shift(card, p.top - r.bottom - 4)
+      if (r.bottom > room.bottom) r = shift(card, room.bottom - r.bottom)
     }
+    if (seen && r.top < room.top) r = shift(card, room.top - r.top)
     placed.push(r)
   }
 }
+let placing = 0
+$('scroller').addEventListener('scroll', () => {
+  cancelAnimationFrame(placing)
+  placing = requestAnimationFrame(placeReadings)
+}, { passive: true })
 /** Yes, or a few words back. It shows at once; if the server does not take it, it goes back and says so. */
 async function sayBack(s, key, said) {
   const [answer, n] = [key.slice(0, key.lastIndexOf('|')), Number(key.slice(key.lastIndexOf('|') + 1))]
   const reading = histories.get(historyKey(s))?.find(r => r.answer === answer)?.readings?.find(r => r.n === n)
   const before = reading?.reply ?? null
   if (reading) reading.reply = said.yes ? { yes: true } : { text: said.text }
-  correcting = ''
+  // A box half typed on another line stays open with its words.
+  if (correcting === key) correcting = ''
   renderReadings(s)
   try {
     const res = await fetch('/api/reading', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: s.appSlug, id: s.id, answer, n, ...said }) })
@@ -1507,11 +1594,16 @@ $('readings').addEventListener('keydown', event => {
   // The keys are for the words: G, N or cmd-Enter here must not answer the screen.
   event.stopPropagation()
   const s = screen()
+  boxKeyAt = event.key === 'Enter' || event.key === 'Escape' ? 0 : Date.now()
   if (event.key === 'Escape' || (event.key === 'Enter' && !input.value.trim())) {
     correcting = ''
     if (s) renderReadings(s)
   } else if (event.key === 'Enter' && s) void sayBack(s, input.closest('[data-reading]').dataset.reading, { text: input.value.trim() })
 })
+// A press anywhere is the person choosing where to go next: their keys are theirs again.
+document.addEventListener('pointerdown', () => {
+  boxKeyAt = 0
+}, true)
 
 function updateButtons() {
   const a = app()
@@ -2561,6 +2653,11 @@ $('scroller').addEventListener('wheel', event => {
 new ResizeObserver(() => state.fitted && fit()).observe($('scroller'))
 
 document.addEventListener('keydown', event => {
+  // Words were going into a reading's box, and the box went away under them: the rest of those words must not work the page.
+  if (boxKeyAt && Date.now() - boxKeyAt < BOX_GRACE_MS && !event.target.closest?.('[data-correct]')) {
+    boxKeyAt = Date.now()
+    return event.preventDefault()
+  }
   const typing = event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement
   const mod = event.metaKey || event.ctrlKey
   const key = event.key

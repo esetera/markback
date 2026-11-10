@@ -204,6 +204,7 @@ body.covered .marking, body.covered #views, body.covered #zoomValue, body.covere
 .readings { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .reading { position: absolute; display: flex; align-items: center; gap: 6px; width: max-content; max-width: 340px; padding: 4px 6px 4px 4px; transform: translateX(8px); pointer-events: auto; background: var(--ground); color: var(--ink); border: 1px solid var(--edge); border-radius: var(--r); box-shadow: var(--sheet-lift); font-size: 12.5px; line-height: 17px; }
 .reading.left { transform: translateX(calc(-100% - 8px)); }
+.reading.under { transform: translateY(6px); }
 .reading .rn { flex: none; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 2px; background: var(--ink); color: var(--ground); font-weight: 700; font-size: 11px; line-height: 18px; text-align: center; }
 .reading .rt { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .reading .rf { color: var(--faint); margin-right: 4px; }

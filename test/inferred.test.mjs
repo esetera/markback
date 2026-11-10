@@ -81,3 +81,35 @@ test('review wait ends when a reading is answered, and gives the answer with wha
   const { stdout } = await waiting
   assert.match(stdout, /Read as: "Bigger title"\. They corrected it: "The subtitle, not the title"/)
 })
+
+test('a reading lands on the answer it read: with two on one picture, --answer says which, and without it it asks', async () => {
+  marked('Two', 'Home', [box(1, 1), box(30, 20)])
+  const now = Date.now()
+  while (Date.now() === now);
+  receive({ appSlug: 'two', id: 'home-light', png: null, shapes: [box(50, 5)], notes: '', verdict: 'changes', imageSize: { w: 80, h: 50 } })
+  const [first, second] = readInbox('two')
+  const refused = await fails('inferred', '--app', 'Two', '--screen', 'Home', '--mark', '1', '--text', 'x')
+  assert.match(refused, /Home has 2 answers on this picture: say which with --answer\./)
+  assert.ok(refused.includes(`${first.sentAt} (2 marks)`) && refused.includes(`${second.sentAt} (1 mark)`), refused)
+  // review read prints each answer's name beside its marks, the earlier one too.
+  const read = cli('read', '--app', 'Two', '--latest')
+  assert.ok(read.includes(`Answer: ${second.sentAt}`) && read.includes(`Answer: ${first.sentAt}`), read)
+  cli('inferred', '--app', 'Two', '--screen', 'Home', '--answer', first.sentAt, '--mark', '2', '--text', 'For the first answer')
+  cli('inferred', '--app', 'Two', '--screen', 'Home', '--answer', second.sentAt, '--mark', '1', '--text', 'For the second answer')
+  const [a, b] = readInbox('two')
+  assert.deepEqual(a.inferred.map(r => [r.n, r.text]), [[2, 'For the first answer']])
+  assert.deepEqual(b.inferred.map(r => [r.n, r.text]), [[1, 'For the second answer']])
+  assert.match(await fails('inferred', '--app', 'Two', '--screen', 'Home', '--answer', 'nope', '--mark', '1', '--text', 'x'), /No answer nope stands on Home/)
+  // A Looks good over them stands alone: their marks no longer stand.
+  receive({ appSlug: 'two', id: 'home-light', png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null })
+  assert.match(await fails('inferred', '--app', 'Two', '--screen', 'Home', '--answer', first.sentAt, '--mark', '1', '--text', 'x'), /answered Looks good/)
+})
+
+test('who read it is a short name on one line, however much is given', () => {
+  marked('Named', 'Home', [box(1, 1)])
+  cli('inferred', '--app', 'Named', '--screen', 'Home', '--mark', '1', '--text', 'x', '--from', `Codex\n${'X'.repeat(3000)}`)
+  const [reading] = readInbox('named')[0].inferred
+  assert.equal(reading.from, `Codex ${'X'.repeat(34)}`)
+  assert.equal(listApps().find(a => a.slug === 'named').screens[0].inferred.from, reading.from)
+  assert.equal(postReading({ app: 'Named', screen: 'Home', mark: 1, text: 'y', from: '   ' }).reading.from, 'Claude')
+})

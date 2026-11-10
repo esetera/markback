@@ -946,6 +946,81 @@ test('what the agent read each mark to mean: a line beside each, yes or a few wo
   assert.deepEqual(errors, [])
 })
 
+/** Two marks sent on the first screen of two, and a line said for each: the page left on the second. */
+async function twoReadings({ width = 1500, height = 960, colorScheme = 'light', marks = [[0.1, 0.1, 0.3, 0.3], [0.5, 0.6, 0.6, 0.7]] } = {}) {
+  const r = await rig()
+  r.push('Lines', ['One', 'Two'])
+  const opened = await r.open('lines', { width, height, colorScheme })
+  for (const m of marks) await draw(opened.page, ...m)
+  await opened.page.keyboard.press('Meta+Enter')
+  await waitFor(() => r.read('Lines').length)
+  const say = (mark, text) => execFileSync('node', [join(ROOT, 'review.mjs'), 'inferred', '--app', 'Lines', '--screen', 'One', '--mark', mark, '--text', text], { env: r.env, stdio: 'ignore' })
+  marks.forEach((m, i) => say(String(i + 1), `Line ${i + 1}`))
+  await opened.page.keyboard.press('ArrowLeft')
+  await opened.page.locator('.reading').nth(marks.length - 1).waitFor({ timeout: 8000 })
+  return { ...r, ...opened, say }
+}
+
+test('a line said again while the person writes in its box: the words and the keyboard stay, and no key answers the screen', { skip }, async () => {
+  const { page, errors, say, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|2"] [data-no]').click()
+  await page.keyboard.type('Not up')
+  say('2', 'Line 2, said again')
+  say('1', 'Line 1, said again')
+  await page.waitForFunction(() => document.querySelector('.reading[data-reading$="|1"]')?.textContent.includes('said again'), null, { timeout: 8000 })
+  await page.waitForFunction(() => document.querySelector('.reading[data-reading$="|2"] .rt')?.textContent.includes('said again'), null, { timeout: 8000 })
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-correct]')), true, 'the box still has the keyboard')
+  await page.keyboard.type(', go bigger')
+  assert.equal(await page.locator('[data-correct]').inputValue(), 'Not up, go bigger')
+  assert.equal(await at(page), 1)
+  // The box taken away under the words some other way: the rest of them work nothing.
+  await page.evaluate(() => document.querySelector('[data-correct]').closest('.reading').remove())
+  await page.keyboard.type('gn')
+  await settled(page)
+  assert.equal(await at(page), 1, 'G did not answer the screen')
+  assert.equal(await page.locator('#notes').inputValue(), '')
+  assert.equal(read('Lines').length, 1, 'nothing more was sent')
+  assert.deepEqual(errors, [])
+})
+
+test('Yes on one line keeps a half-written box on another, with its words', { skip }, async () => {
+  const { page, errors, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|2"] [data-no]').click()
+  await page.keyboard.type('half a corr')
+  await page.locator('.reading[data-reading$="|1"] [data-yes]').click()
+  await page.locator('.reading[data-reading$="|1"] .rs').waitFor()
+  assert.equal(await page.locator('[data-correct]').inputValue(), 'half a corr')
+  await waitFor(() => read('Lines')[0].inferred[0].reply?.yes)
+  assert.deepEqual(errors, [])
+})
+
+for (const [width, height, colorScheme] of [[1500, 960, 'light'], [520, 800, 'dark'], [380, 760, 'light']]) {
+  test(`every line can be reached at ${width} wide, ${colorScheme}: a mark across the picture too`, { skip }, async () => {
+    const { page, errors } = await twoReadings({ width, height, colorScheme, marks: [[0.1, 0.1, 0.3, 0.3], [0.02, 0.75, 0.95, 0.85], [0.75, 0.3, 0.9, 0.4]] })
+    const stage = await page.locator('#stage').boundingBox()
+    for (const button of await page.locator('.reading button').all()) {
+      const b = await button.boundingBox()
+      assert.ok(b.x >= stage.x && b.x + b.width <= Math.min(stage.x + stage.width, width) + 1, `${JSON.stringify(b)} inside ${JSON.stringify(stage)}`)
+      assert.ok(b.y >= stage.y - 1 && b.y + b.height <= stage.y + stage.height + 1, `${JSON.stringify(b)} inside ${JSON.stringify(stage)}`)
+    }
+    await page.locator('.reading[data-reading$="|2"] [data-yes]').click()
+    await page.locator('.reading[data-reading$="|2"] .rs').waitFor()
+    assert.deepEqual(errors, [])
+  })
+}
+
+test('the line that says readings came waits while another is up, and is said after', { skip }, async () => {
+  const { page, errors, say, push } = await twoReadings()
+  await page.keyboard.press('ArrowRight')
+  await settled(page)
+  say('1', 'Said again')
+  push('Lines', ['Three'])
+  await page.waitForFunction(() => /New: Three/.test(document.getElementById('toast').textContent), null, { timeout: 8000 })
+  await page.waitForFunction(() => document.querySelector('#toast [data-look-at]'), null, { timeout: 12000 })
+  assert.match(await page.locator('#toast').innerText(), /Claude said what it read on One/)
+  assert.deepEqual(errors, [])
+})
+
 test('no earlier answers, no line; a screen pushed again shows the old answer behind one, and its old marks stay off the new picture', { skip }, async () => {
   const { push, open } = await rig()
   push('Left', ['A', 'B'], null)

@@ -10,8 +10,9 @@
  *   review wait  --app MyApp [--all] [--timeout 3600] [--json]
  *   review read  --app MyApp [--since 2026-01-15T10:00:00Z] [--latest] [--json]
  *   review clear --app MyApp
- *   review inferred --app MyApp --screen "Home" [--mode light] --mark 1 --text "..."   what you read one mark to mean,
- *                                               shown beside it, so the reviewer can say yes or correct it before you build
+ *   review inferred --app MyApp --screen "Home" [--mode light] --mark 1 --text "..." [--answer <time>]
+ *                                               what you read one mark to mean, shown beside it, so the reviewer can say
+ *                                               yes or correct it before you build. --answer: which answer, as read prints it
  *
  *   review demo                                 a sample to try it on
  *   review see <address> [--app MyApp]          a picture of your running app, ready to mark
@@ -47,7 +48,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HOME, INBOX, PORT, clearApp, isSetAside, listApps, listScreens, postReading, push, readInbox, rememberPort, slug } from './lib/store.mjs'
+import { HOME, INBOX, PORT, answerId, clearApp, isSetAside, listApps, listScreens, postReading, push, readInbox, rememberPort, slug } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { showPdf } from './lib/pdf.mjs'
 import { PAGE_SCRIPT, printable, readWords, sayWords } from './lib/words.mjs'
@@ -89,7 +90,8 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 /** One feedback record as a change request someone can act on. */
 function describe(r) {
   const head = `${r.app} / ${r.screen}${r.mode ? ` (${r.mode})` : ''}, round ${r.round}: ${r.verdict === 'approved' ? (r.noComment ? 'LOOKS GOOD (no comment)' : 'LOOKS GOOD') : 'CHANGES ASKED'}${r.olderPicture ? ' (about an older picture; a new one has been pushed since)' : ''}`
-  const lines = [head]
+  // The name review inferred --answer takes, on the same line, so the lines under it stay as they were.
+  const lines = [r.verdict === 'changes' && r.shapes.length ? `${head}  Answer: ${answerId(r)}` : head]
   if (r.notes) lines.push(`  Notes: ${r.notes.replace(/\n/g, '\n         ')}`)
   for (const [i, s] of r.shapes.entries()) {
     const box = `x ${s.box.x}, y ${s.box.y}, ${s.box.w}x${s.box.h}`
@@ -294,7 +296,7 @@ if (command === 'push') {
   }
 } else if (command === 'inferred') {
   try {
-    const { record, reading } = postReading({ app: need('app'), screen: need('screen'), mode: flags.mode || '', mark: need('mark'), text: need('text'), from: typeof flags.from === 'string' ? flags.from : 'Claude' })
+    const { record, reading } = postReading({ app: need('app'), screen: need('screen'), mode: flags.mode || '', mark: need('mark'), text: need('text'), from: typeof flags.from === 'string' ? flags.from : 'Claude', answer: typeof flags.answer === 'string' ? flags.answer : '' })
     // One short line a mark: it is read beside the mark at a glance.
     if (reading.text.split(/\s+/).length > 12) console.error('Too long: one short line a mark, twelve words or fewer.')
     console.log(`Shown beside mark ${reading.n} on ${record.screen}${record.mode ? ` (${record.mode})` : ''}: ${printable(reading.text)}\nGo on with the work. review wait --app "${record.app}" ends when they say yes or correct it.`)
