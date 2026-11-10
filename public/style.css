@@ -397,6 +397,14 @@ body.answers-open:not(.panels) .insp-head { display: none; }
 .modal .phone-words .phone-problem { margin-top: 14px; padding: 8px 10px; color: var(--ink); border: 1px solid var(--danger); border-radius: var(--r); }
 /* While it is open to a phone the bar says so in words, in the colour that warns, until it is turned off. */
 #phoneOn { width: auto; gap: 6px; margin-left: 4px; padding: 0 8px; font-size: 12px; font-weight: 600; background: var(--danger); border-color: var(--danger); color: #fff; }
+/* Short of room, it keeps its colour and its icon, and says the rest in its tip. */
+@media (max-width: 1100px) { #phoneOn { width: 28px; padding: 0; } #phoneOn span { display: none; } }
+/* A window too narrow for the whole bar: the name goes first, then the bar takes a second row rather than run off the side. */
+@media (max-width: 1100px) {
+  body:not(.phone) { grid-template-rows: auto minmax(0, 1fr); }
+  body:not(.phone) .wordmark { display: none; }
+  body:not(.phone) .bar { flex-wrap: wrap; min-height: 40px; padding-top: 3px; padding-bottom: 3px; }
+}
 /* The two large buttons a phone has. Elsewhere the bar and the foot do their work. */
 #markBtn, #talkBtn { display: none; }
 
@@ -467,3 +475,18 @@ body.phone .modal-actions { flex-wrap: wrap; }
 body.phone .keys { columns: 1; }
 body.phone .phone-body { flex-direction: column; align-items: flex-start; }
 body.phone .text-entry { min-width: 150px; max-width: 70vw; }
+
+/* ---------- a phone held sideways: the picture takes the room, and what to look at and the buttons stand beside it ---------- */
+@media (orientation: landscape) and (max-height: 500px) {
+  body.phone .center { display: grid; grid-template-columns: minmax(0, 1fr) min(220px, 36vw); grid-template-rows: auto minmax(0, 1fr); }
+  body.phone .scroller { grid-column: 1; grid-row: 1 / span 2; }
+  body.phone .about { grid-column: 2; grid-row: 1; max-height: 34vh; overflow: auto; padding: 8px 10px 2px; border-top: 0; border-left: 1px solid var(--rule-firm); }
+  body.phone .about-note, body.phone .about-size { font-size: 14px; }
+  body.phone .foot, body.phone.no-talk .foot { grid-column: 2; grid-row: 2; grid-template-columns: 1fr; align-content: end; gap: 6px; padding: 6px 10px calc(8px + env(safe-area-inset-bottom)); border-top: 0; border-left: 1px solid var(--rule-firm); }
+  body.phone .foot .btn { height: 44px; }
+  body.phone .note-wrap textarea { min-height: 40px; padding: 8px 10px; }
+  /* Marking: the tools take the one row at the top, and the name and count wait until Mark is pressed again. */
+  body.phone.marking-on .crumbs, body.phone.marking-on .overall { display: none; }
+  body.phone.marking-on #toolButtons { flex: 0 1 auto; }
+  body.phone.marking-on .group.marking { border-top: 0; }
+}

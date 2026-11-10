@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
-import { PhoneProblem, WORDS as PHONE_WORDS, fromPhone, phoneMay, phoneOff, phoneOffSync, phoneOn, phoneStale, phoneStatus, warmUp } from './lib/phone.mjs'
+import { PhoneProblem, WORDS as PHONE_WORDS, cleanStale, phoneDoor, phoneMay, warmUp } from './lib/phone.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' }
@@ -92,29 +92,39 @@ function ownPage(req) {
     return false
   }
 }
+/** A request a proxy handed on: Tailscale's own headers, or the ones any proxy adds. The page's own listener never takes one. */
+const proxied = req => Object.keys(req.headers).some(name => name.startsWith('tailscale-') || ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto'].includes(name))
+
 /**
- * Every request. The server listens on 127.0.0.1 only, so only this computer can reach it. While review from a phone is on,
- * Tailscale hands it the phone's requests here, asked by the tailnet name and with the person's login in a header Tailscale
- * writes itself. Those may use only what phoneMay lets through: a phone reviews and marks, and runs nothing on this computer.
+ * Review from a phone: the door, a listener of its own on this computer, open only while it is on. Tailscale serves the door,
+ * and only the door, so every request on it is a phone's, whatever name it gives: the door lets in only the person's own login,
+ * and the handler lets those use only what phoneMay names.
  */
-async function handle(req, res) {
+const phone = phoneDoor({ serverPort: PORT, handle: (req, res) => handle(req, res, true) })
+
+/** Every request: from this computer on the page's own listener, or from a phone through the door. */
+async function handle(req, res, fromPhone = false) {
   const url = new URL(req.url, 'http://localhost')
-  const tailnet = !localHost(req) && fromPhone(req)
   // Only this computer's own pages: another site open in the browser must not write here, or read by renaming itself.
-  if (!(localHost(req) || tailnet) || !ownPage(req)) return json(res, 403, { error: !localHost(req) && phoneStatus().on ? 'Only this computer and your own devices can use this. Sign this device in to Tailscale as the same person as the computer.' : 'Only this computer can use this.' })
-  if (tailnet && !phoneMay(req.method, url.pathname)) return json(res, 403, { error: PHONE_WORDS.atComputer })
+  if (fromPhone ? !ownPage(req) : proxied(req) || !localHost(req) || !ownPage(req)) return json(res, 403, { error: 'Only this computer can use this.' })
+  if (fromPhone && !phoneMay(req.method, url.pathname)) return json(res, 403, { error: PHONE_WORDS.atComputer })
   try {
-    if (req.method === 'GET' && url.pathname === '/api/queue') return json(res, 200, { apps: listApps(), phone: phoneStatus() })
-    if (req.method === 'GET' && url.pathname === '/api/phone') return json(res, 200, phoneStatus())
+    if (req.method === 'GET' && url.pathname === '/api/queue') return json(res, 200, { apps: listApps(), phone: phone.status() })
+    if (req.method === 'GET' && url.pathname === '/api/phone') return json(res, 200, phone.status())
     if (req.method === 'POST' && url.pathname === '/api/phone') {
       const input = JSON.parse(await body(req))
+      // Turned on only from this computer itself: a phone can turn it off, never on or on for longer.
+      if (input.on === true && fromPhone) return json(res, 403, { error: 'Turn it on at the computer.' })
+      if (input.on !== true && fromPhone) {
+        // Closing the door drops every connection through it, this one too: the answer goes first.
+        res.on('finish', () => void phone.off())
+        return json(res, 200, { on: false, minutes: phone.status().minutes })
+      }
       try {
-        if (input.on !== true) await phoneOff()
-        // Turned on only from this computer itself: a phone can turn it off, never on or on for longer.
-        else if (tailnet) return json(res, 403, { error: 'Turn it on at the computer.' })
+        if (input.on !== true) await phone.off()
         // The certificate is made while the person reaches for the phone, not while the phone waits.
-        else void warmUp((await phoneOn({ port: PORT })).url)
-        return json(res, 200, phoneStatus())
+        else void warmUp((await phone.on()).url)
+        return json(res, 200, phone.status())
       } catch (error) {
         if (error instanceof PhoneProblem) return json(res, 400, { error: error.message })
         throw error
@@ -198,22 +208,17 @@ server.on('error', error => {
   process.exit(1)
 })
 // Review from a phone turns itself off: when its time is up, and when this server stops.
-let turningOff = false
-setInterval(() => {
-  if (turningOff || !phoneStale()) return
-  turningOff = true
-  void phoneOff().catch(() => undefined).finally(() => {
-    turningOff = false
-  })
-}, 1000).unref()
+setInterval(() => void phone.tick().catch(() => undefined), 1000).unref()
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   process.on(signal, () => {
     try {
-      phoneOffSync()
+      phone.offSync()
     } finally {
       process.exit(0)
     }
   })
 }
+// Whoever starts this server: what one before it left in Tailscale is taken down first, before anything listens.
+for (const problem of await cleanStale(PORT)) console.error(problem)
 // This computer only: nothing here is reachable from another machine. Review from a phone does not change that.
 server.listen(PORT, '127.0.0.1', () => console.log(`Markback on http://localhost:${PORT}`))

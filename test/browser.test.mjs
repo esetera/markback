@@ -2165,7 +2165,7 @@ test('review from a phone: the page turns it on, shows a code that reads as the 
   await page.locator('.phone-code svg').waitFor()
   assert.equal(await page.locator('.phone-address a').innerText(), 'https://my-mac.example.ts.net')
   await modal.getByText('The first time, it can take half a minute to open.', { exact: false }).waitFor()
-  assert.ok(tail.calls().includes(`serve --bg --https=443 http://127.0.0.1:${r.port}`))
+  assert.ok(tail.calls().some(call => /^serve --bg --https=443 http:\/\/127\.0\.0\.1:\d+$/.test(call) && !call.endsWith(`:${r.port}`)), 'the door, not the page\'s own port')
   const read = await readCode(await page.locator('.phone-code').innerHTML())
   if (read === null) t.diagnostic('this Chrome has no code reader: the code was not read back')
   else assert.equal(read, 'https://my-mac.example.ts.net', 'a camera reads the https address from the code')
@@ -2179,6 +2179,19 @@ test('review from a phone: the page turns it on, shows a code that reads as the 
   assert.deepEqual(tail.state().serve.Web, {})
   assert.equal(await page.locator('#phoneOn').isVisible(), false)
   assert.equal(tail.calls().some(call => /funnel/.test(call)), false)
+  // Tailscale cannot take it down: the window says so, with the command, and it stays shown as open until it is.
+  await modal.getByRole('button', { name: 'Turn it on' }).click()
+  await page.locator('.phone-code svg').waitFor()
+  tail.set({ down: true })
+  await modal.getByRole('button', { name: 'Turn it off' }).click()
+  await modal.getByText('Still open in Tailscale.').waitFor()
+  await modal.getByText('Run: tailscale serve --https=443 off', { exact: false }).waitFor()
+  assert.equal(await page.locator('#phoneOn').isVisible(), true)
+  tail.set({ down: false })
+  await modal.getByRole('button', { name: 'Try again' }).click()
+  await modal.getByRole('button', { name: 'Turn it on' }).waitFor()
+  assert.equal(await page.locator('#phoneOn').isVisible(), false)
+  assert.deepEqual(tail.state().serve.Web, {})
   // The one refusal on the way, which the window said in words, is all the browser complains of.
   assert.deepEqual(errors.filter(e => !/400 \(Bad Request\) .*\/api\/phone$/.test(e)), [])
 })
@@ -2190,7 +2203,9 @@ test('review from a phone: the page opened at the tailnet name, on a phone, mark
   execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, stdio: 'ignore' })
   // The name is this computer for this browser, as Tailscale's proxy makes it for a phone. The proxy also says who is asking.
   // Tailscale's address is https, which a browser counts as secure; this plain one is counted so too, as it would be.
-  const at = `http://my-mac.example.ts.net:${r.port}`
+  // Tailscale hands the phone's requests to the door, a listener of its own; the stand-in says which port it serves.
+  const door = new URL(tail.state().serve.Web['my-mac.example.ts.net:443'].Handlers['/'].Proxy).port
+  const at = `http://my-mac.example.ts.net:${door}`
   const far = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--host-resolver-rules=MAP my-mac.example.ts.net 127.0.0.1', `--unsafely-treat-insecure-origin-as-secure=${at}`] })
   try {
     const context = await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, extraHTTPHeaders: { 'Tailscale-User-Login': 'alice@example.com' } })
@@ -2233,9 +2248,39 @@ test('review from a phone: the page opened at the tailnet name, on a phone, mark
     const stranger = await (await far.newContext()).newPage()
     assert.equal((await stranger.goto(`${at}/`)).status(), 403)
     execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'off'], { env: r.env, stdio: 'ignore' })
-    assert.equal((await page.goto(`${at}/`)).status(), 403, 'off: the same phone is refused')
+    await assert.rejects(page.goto(`${at}/`), 'off: the door is closed, and the same phone reaches nothing')
     assert.deepEqual(errors, [])
   } finally {
     await far.close()
   }
+})
+
+test('no sideways scroll at any width, open to a phone or not, and a phone held sideways keeps room to mark', { skip }, async () => {
+  const tail = standInTailscale(mkdtempSync(join(tmpdir(), 'review-tailscale-')))
+  const r = await rig({ REVIEW_TAILSCALE: tail.program })
+  // A before picture brings out the views too: the fullest bar there is.
+  const before = join(r.home, 'before.png')
+  writePicture(before, 1600, 900, { x: 10, w: 300, y: 10, h: 40 })
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'push', '--app', 'A rather long app name here', '--screen', 'Home', '--after', join(r.home, 'p.png'), '--before', before, '--check', 'Do the cards line up?'], { env: r.env })
+  for (const on of [false, true]) {
+    if (on) execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, stdio: 'ignore' })
+    for (const width of [641, 760, 844, 932, 1006, 1100, 1280]) {
+      const { page } = await r.open('a-rather-long-app-name-here', { width, height: 800 })
+      await page.waitForFunction(want => !document.getElementById('phoneOn').hidden === want, on)
+      const m = await page.evaluate(() => ({ page: document.documentElement.scrollWidth, more: document.getElementById('menuOpen').getBoundingClientRect().right, bar: document.getElementById('phoneOn').getBoundingClientRect().right }))
+      assert.ok(m.page <= width && m.more <= width && m.bar <= width, `${width} px, ${on ? 'on' : 'off'}: ${JSON.stringify(m)}`)
+      await page.context().close()
+    }
+  }
+  // Sideways: the picture beside the buttons, not behind them, and a finger draws on it.
+  const { page } = await r.open('a-rather-long-app-name-here', { width: 640, height: 360, touch: true })
+  await page.locator('#markBtn').tap()
+  const c = await page.locator('#canvas').boundingBox()
+  const foot = await page.locator('#foot').boundingBox()
+  assert.ok(c.height >= 200, `the picture has room: ${Math.round(c.height)} px tall`)
+  assert.ok(foot.x >= c.x + c.width - 1, 'the buttons stand beside it')
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 640)
+  await page.locator('#toolButtons [data-tool=box]').tap()
+  await finger(page, [0.2, 0.2], [0.4, 0.4], [0.6, 0.6])
+  assert.deepEqual((await saved(page, 'a-rather-long-app-name-here', 'home')).marks.map(m => m.tool), ['box'])
 })

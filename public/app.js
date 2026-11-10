@@ -151,7 +151,8 @@ const state = {
  * A phone, or a window as narrow as one: a name and a count above, the picture, and three large buttons under it. The marking
  * tools fold away until Mark is pressed.
  */
-const narrow = matchMedia('(max-width: 640px)')
+// A phone held sideways is wider than that, but short, and touched: it is a phone too.
+const narrow = matchMedia('(max-width: 640px), (max-height: 500px) and (pointer: coarse)')
 const onPhone = () => narrow.matches
 /** A phone has no N key to press, so the notes box does not offer one. */
 const phoneLook = () => {
@@ -2506,10 +2507,14 @@ function renderPhone() {
   const st = phone.status
   $('phoneOn').hidden = !st.on
   $('phoneOn').innerHTML = `${ICONS.phone}<span>Open to your phone</span>`
-  $('phoneOn').dataset.tip = st.on ? `Your phone can open this page until ${when(st.until)}. Press to see the code, or to turn it off` : ''
+  $('phoneOn').dataset.tip = st.stuck ? 'Still open in Tailscale: press to see why' : st.on ? `Open to your phone until ${when(st.until)}. Press to see the code, or to turn it off` : ''
   if (!phoneOpen()) return
   const promise = `<p><b>Only your own devices can reach this</b>, signed in to Tailscale as you. Nothing is open to the internet.</p>`
-  if (st.on) {
+  if (st.stuck) {
+    // Shown as open until Tailscale has really stopped serving it, with the one command that does it by hand.
+    setHtml($('phoneBody'), `<div class="phone-words"><p><b>Still open in Tailscale.</b> The page no longer answers there, but Tailscale still serves the address.</p><p class="phone-problem" role="alert">${esc(st.problem)}</p></div>`)
+    setHtml($('phoneActions'), `<button class="btn" data-phone="close">Close</button><button class="btn primary" data-phone="off"${phone.busy ? ' disabled' : ''}>Try again</button>`)
+  } else if (st.on) {
     const code = qrSvg(st.url)
     // An address too long for the code is shown large, to type.
     setHtml($('phoneBody'), `${code ? `<div class="phone-code">${code}</div>` : ''}<div class="phone-words"><p><b>On until ${esc(when(st.until))}.</b> Scan the code with your phone's camera. The first time, it can take half a minute to open.</p>${promise}<p class="phone-address${code ? '' : ' large'}"><a href="${esc(st.url)}">${esc(st.url)}</a></p></div>`)
