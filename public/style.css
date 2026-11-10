@@ -365,6 +365,29 @@ body.answers-open:not(.panels) .insp-head { display: none; }
 .viewer-body { flex: 1; min-height: 0; overflow: auto; padding: 16px; display: flex; align-items: flex-start; justify-content: center; }
 .viewer-body img { max-width: 100%; box-shadow: 0 0 0 1px var(--sheet-edge); background: #fff; }
 
+/* ---------- the film of one screen: every round in order, over the whole page ---------- */
+.film { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--well); }
+.film-head { flex: none; display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 12px; background: var(--ground); border-bottom: 1px solid var(--rule-firm); }
+.film-head h2 { flex: 1 1 0; min-width: 0; margin: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.film-length { flex: none; margin-right: 2px; font-size: 14px; color: var(--soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.film-head .btn { flex: none; font-size: 14px; }
+/* The picture, whole, in all the room between the head and the strip. Two are stacked while one gives way to the next. */
+.film-stage { flex: 1 1 0; min-height: 0; position: relative; }
+.film-fit { position: absolute; inset: 16px; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; }
+.film-fit img { grid-area: 1 / 1; display: block; max-width: 100%; max-height: 100%; background: #fff; box-shadow: 0 0 0 1px var(--sheet-edge), var(--sheet-lift); user-select: none; -webkit-user-drag: none; }
+.film-fit img.fresh { animation: film-in 260ms ease-out; }
+@keyframes film-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .film-fit img.fresh { animation: none; } }
+.film-strip { flex: none; display: flex; gap: 8px; padding: 10px 10px 12px; background: var(--side); border-top: 1px solid var(--rule-firm); overflow-x: auto; }
+.film-round { flex: 1 1 0; min-width: 132px; max-width: 320px; display: flex; flex-direction: column; gap: 6px; padding: 2px; font: inherit; font-size: 13px; color: var(--ink); text-align: left; background: none; border: 0; cursor: pointer; }
+.film-round .thumb { display: flex; align-items: center; justify-content: center; height: clamp(84px, 19vh, 186px); background: var(--well); border: 1px solid var(--rule-firm); overflow: hidden; }
+.film-round img { display: block; max-width: 100%; max-height: 100%; }
+.film-round.current .thumb { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A note said while the film is up sits under its head: at the foot it would cover the rounds. */
+body.film-open .toast { bottom: auto; top: 58px; }
+.film-round:focus-visible { outline: 0; }
+.film-round:focus-visible .thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent); }
+
 .toast {
   position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); z-index: 70; display: flex; align-items: baseline; gap: 10px;
   max-width: min(560px, calc(100vw - 32px)); padding: 10px 14px; background: var(--ground); color: var(--ink);

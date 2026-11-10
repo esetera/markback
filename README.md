@@ -171,6 +171,7 @@ Light and dark are separate screens. The page is the review: the picture fills t
 - **What to look at:** one line, in ten words or fewer as pushed. It is the first sentence of the note, or the `--check` lines, three at most; **More** (I) opens the rest over the picture, so the picture does not move. When a fitted picture leaves room at its side, the lines stand there, level with its top, and never make it smaller.
 - **Where it changed:** with a before of the same size, corner ticks mark each place that differs. They show on screen only and never in what is sent. C hides them. They do not show when most of the picture changed, and a very faint change can go unmarked.
 - **All the screens:** the count in the bar ("4 left", or **O**) opens every screen of the review with where each stands. A press goes to one, and **Looks good for the rest** answers what is left.
+- **The film of a screen:** **R**, or the menu, plays one screen's story over the page: each round's picture, then the same picture as you marked it, on to the newest. It opens on the first marks. **Play** (Space) plays and pauses, ← and → go one step, and a press on a round shows it as it was left. **Save the film** writes it as a video file, where this computer has ffmpeg.
 - **Select words:** where a picture came with a word list, the words tool (**E**) marks the words themselves, as in a document. Without a list it draws a box.
 - **Something new:** the tab's title counts what waits. New screens are said on the page, and from behind another window by a sound and, if you allow it, a notice. The menu turns the sound and notices off.
 - **At the foot:** a slim notes box that grows up over the picture as you type, Looks good and Send. If there are answers already, a small line opens them.
@@ -203,6 +204,7 @@ Moving into another review is never quiet. A full overlay says what was finished
 | V | After, side by side, before |
 | C | Show or hide where it changed |
 | I | The rest of the words |
+| R | The film of this screen: each round and its marks, in order. In it, Space plays or pauses and ← → go one step |
 | Q | Panel view |
 | F | Full screen |
 | B A P T M | Box, arrow, pen, text, move |
@@ -260,6 +262,18 @@ review list                        # what is queued and its status
 review clear --app MyApp          # take the app off the page (feedback stays)
 ```
 
+### The film of a screen
+
+```
+review film --app MyApp --screen Home --out film.mp4
+```
+
+One screen's rounds as a short video: each round's picture, then the same picture as it was marked, on to the newest. The page plays the same film with no file: press **R** on the screen. Light and dark are separate screens, so say `--mode` where a screen has both.
+
+The film is made from files Markback already keeps. Every push keeps its picture, and every answer with marks keeps the marked picture. A round that was pushed over with no answer still has its picture. It cannot show marks that were drawn and never sent, and it does not show notes: they are words, not a picture. In the page, a round's notes show when the pointer rests on it.
+
+The video needs [ffmpeg](https://ffmpeg.org) on this computer. Markback does not install it, and says so in one line when it is missing. The film in the page needs nothing.
+
 Inbox: `~/.review-wizard/inbox/<app>/<screen>-<mode>-<time>.{png,json}`. The JSON:
 
 ```json
@@ -290,8 +304,10 @@ Every `box` is in the after picture's own pixels. `verdict` is `changes` or `app
 annotated image). A screen sent with the set with nothing on it is `approved` with `"notes": "No comment."` and an extra
 `"noComment": true`: it counts as Looks good, and the flag keeps it apart from a Looks good pressed on that screen.
 
-The page also reads `GET /api/history?app=<app>&id=<screen id>` (earlier answers for one screen) and
-`GET /inbox/<app>/<file>.png` (the marked pictures). Both only read.
+The page also reads `GET /api/history?app=<app>&id=<screen id>` (earlier answers for one screen),
+`GET /inbox/<app>/<file>.png` (the marked pictures) and `GET /api/film?app=<app>&id=<screen id>` (the rounds of one screen's
+film, and the steps that play). All three only read. `GET /api/film/file` with the same two gives the film as a video, made
+with ffmpeg when it is asked for and not kept.
 
 ## Ideas and the queue
 

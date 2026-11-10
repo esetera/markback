@@ -10,6 +10,7 @@
  *   review wait  --app MyApp [--all] [--timeout 3600] [--json]
  *   review read  --app MyApp [--since 2026-01-15T10:00:00Z] [--latest] [--json]
  *   review clear --app MyApp
+ *   review film  --app MyApp --screen "Home" [--mode light] --out film.mp4   one screen's rounds and marks as a video (needs ffmpeg)
  *
  *   review demo                                 a sample to try it on
  *   review see <address> [--app MyApp]          a picture of your running app, ready to mark
@@ -48,6 +49,7 @@ import { fileURLToPath } from 'node:url'
 import { HOME, INBOX, PORT, clearApp, isSetAside, listApps, listScreens, push, readInbox, rememberPort, slug } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { showPdf } from './lib/pdf.mjs'
+import { filmOf, filmScreen, saveFilm } from './lib/film.mjs'
 import { PAGE_SCRIPT, printable, readWords, sayWords } from './lib/words.mjs'
 import { sketch } from './lib/sketch.mjs'
 import { installSkills } from './lib/skills.mjs'
@@ -372,6 +374,15 @@ if (command === 'push') {
   } catch (error) {
     fail(error.message)
   }
+} else if (command === 'film') {
+  // One screen's story as a video file: each round's picture, then its marks. The page plays the same film with no file.
+  try {
+    const out = typeof flags.out === 'string' ? flags.out : fail('Say where to write it: --out film.mp4')
+    const made = await saveFilm(filmOf(need('app'), filmScreen(flags.app, need('screen'), typeof flags.mode === 'string' ? flags.mode : '')), out)
+    console.log(`Wrote ${flags.out}: ${made.rounds} round${made.rounds === 1 ? '' : 's'}, ${Math.round(made.seconds)} second${Math.round(made.seconds) === 1 ? '' : 's'}.`)
+  } catch (error) {
+    fail(error.message)
+  }
 } else if (command === 'check') {
   // Each line is said as its check ends, so a slow one is seen to be working.
   const { results, code } = await runChecks({ each: flags.json ? undefined : result => console.log(sayResult(result)) })
@@ -460,6 +471,6 @@ if (command === 'push') {
     fail(error.message)
   }
 } else {
-  console.log(`review start | stop | check | see | pdf | demo | sketch | push | list | wait | read | clear | ideas | queue | take | show | note | stage | project | open | install-skills | plugin | export   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
+  console.log(`review start | stop | check | see | pdf | demo | sketch | push | list | wait | read | clear | film | ideas | queue | take | show | note | stage | project | open | install-skills | plugin | export   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
   if (command) process.exit(1)
 }

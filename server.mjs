@@ -5,10 +5,12 @@
  */
 
 import { createServer } from 'node:http'
-import { readFileSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
+import { filmOf, saveFilm } from './lib/film.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
 
@@ -36,6 +38,23 @@ function history(appSlug, id) {
       afterUrl: urlFor(IMAGES, '/images/', r.afterImage),
       beforeUrl: urlFor(IMAGES, '/images/', r.beforeImage),
     }))
+}
+
+/** One screen's film for the page: each round, and the steps that play, with addresses for the pictures. */
+function film(appSlug, id) {
+  const made = filmOf(appSlug, id)
+  if (!made) return null
+  const address = path => urlFor(IMAGES, '/images/', path) || urlFor(INBOX, '/inbox/', path)
+  return {
+    screen: made.screen,
+    mode: made.mode,
+    finished: made.finished,
+    missing: made.missing,
+    seconds: made.seconds,
+    // A round is shown in the strip as it was left: marked, when it was marked.
+    rounds: made.rounds.map(r => ({ round: r.round, url: address(r.marked.at(-1) ?? r.picture), answer: r.answer })),
+    steps: made.steps.map(step => ({ at: step.at, url: address(step.file), marked: step.marked, seconds: step.seconds })),
+  }
 }
 
 /** A file under root, or null when the path tries to leave it. */
@@ -104,6 +123,25 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/api/history') {
       return json(res, 200, { records: history(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '') })
+    }
+    if (req.method === 'GET' && url.pathname === '/api/film') {
+      return json(res, 200, { film: film(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '') })
+    }
+    if (req.method === 'GET' && url.pathname === '/api/film/file') {
+      // The film as a video, made when asked for and not kept. It needs ffmpeg: without it, a plain line says so.
+      const made = filmOf(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '')
+      if (!made) return json(res, 404, { error: 'No such screen' })
+      const dir = mkdtempSync(join(tmpdir(), 'markback-film-'))
+      try {
+        const out = join(dir, 'film.mp4')
+        await saveFilm(made, out)
+        res.writeHead(200, { 'content-type': 'video/mp4', 'cache-control': 'no-store', 'content-disposition': `attachment; filename="${made.appSlug}-${made.id}-film.mp4"` })
+        return res.end(readFileSync(out))
+      } catch (error) {
+        return json(res, 400, { error: error.message })
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
     }
     if (req.method === 'GET' && url.pathname.startsWith('/inbox/')) {
       // Marked pictures the reviewer sent earlier; each send makes a new name, so they can be kept too.
