@@ -754,6 +754,7 @@ function focusBeforeFilm() {
 async function openFilm() {
   const s = screen()
   if (filmOpen()) return closeFilm()
+  if (wordsFirst()) return
   if (!s || film.loading) return
   const was = document.activeElement
   film.back = was?.closest('#menu') ? $('menuOpen') : was
@@ -1441,7 +1442,47 @@ function renderState(a, s) {
   card.hidden = !html
   setHtml(card, html)
   $('pair').hidden = !!html || !s
+  if ($('pair').hidden) keepAlone()
 }
+/**
+ * No picture on show (the review cleared, and nothing else left): an open box with words would go out of sight with it. It is
+ * kept, says why, and stands on the empty page with the keyboard still in it.
+ */
+function keepAlone() {
+  for (const card of [...$('readings').children]) {
+    const input = card.querySelector('[data-correct]')
+    if (!input || !(card.classList.contains('kept') || card.dataset.reading === correcting)) continue
+    if (!card.classList.contains('kept') && !input.value.trim()) continue
+    const had = card.contains(document.activeElement)
+    if (!card.classList.contains('kept')) keepWords(card, screen())
+    if (card.dataset.reading === correcting) correcting = ''
+    $('keptAlone').append(card)
+    for (const p of ['left', 'top', 'marginTop', 'marginLeft', 'maxWidth']) card.style[p] = ''
+    if (had) input.focus()
+  }
+}
+/* The words of the open box, kept in this browser as they are typed: a reload, or a tab closed by mistake, does not lose them. */
+let restoring = null
+const savedBoxWords = () => {
+  try {
+    return JSON.parse(prefs.get('box') || 'null')
+  } catch {
+    return null
+  }
+}
+function keepBoxWords(input) {
+  const card = input.closest('.reading')
+  const s = card?._screen
+  if (!s || card.classList.contains('kept')) return
+  prefs.set('box', input.value.trim() ? JSON.stringify({ appSlug: s.appSlug, id: s.id, after: s.after, key: card.dataset.reading, words: input.value }) : '')
+}
+const forgetBoxWords = () => prefs.set('box', '')
+// Leaving with words in a box that have not gone: the browser asks first.
+addEventListener('beforeunload', event => {
+  if (!boxCards().some(c => c.querySelector('[data-correct]')?.value.trim())) return
+  event.preventDefault()
+  event.returnValue = ''
+})
 
 function render() {
   const a = app()
@@ -1798,11 +1839,17 @@ const cardBefore = el => {
 }
 function renderReadings(s) {
   const size = state.size
+  const held = savedBoxWords()
+  if (!correcting && !restoring && held && held.appSlug === s.appSlug && held.id === s.id && held.after === s.after) {
+    correcting = held.key
+    restoring = held
+  }
   // Only on the answers standing for this picture, and only once the picture is there to place them on.
   const answers = size && state.shownKey === keyOf(s) + s.after ? standingAnswers(histories.get(historyKey(s)), s.round) : []
   // Two answers on one picture both have a mark 1: the older one's say so.
   const readings = answers.flatMap((a, i) => (a.readings ?? []).map(r => ({ ...r, key: `${a.answer}|${r.n}`, label: i ? `earlier ${r.n}` : String(r.n) }))).sort((x, y) => x.box.y - y.box.y)
   if (!readings.some(r => r.key === correcting)) correcting = ''
+  if (restoring && restoring.key !== correcting) restoring = null
   // Come to look: the line that said they had come has done its work.
   if (readings.length && $('toast').querySelector(`[data-look-at="${CSS.escape(`${s.appSlug}/${s.id}`)}"]`)) hideToast()
   // Card by card, so a card whose words box is open is never rebuilt: what is typed in it, and the keyboard, stay put.
@@ -1832,8 +1879,12 @@ function renderReadings(s) {
       else layer.prepend(fresh)
       el = fresh
       moved = true
-      // Opened just now: the words go straight in.
-      if (r.key === correcting) fresh.querySelector('[data-correct]')?.focus()
+      // Opened just now: the words go straight in, and words from before a reload or an Undo are back in it.
+      if (r.key === correcting) {
+        const input = fresh.querySelector('[data-correct]')
+        if (restoring?.key === r.key) input.value = restoring.words
+        input?.focus()
+      }
     }
     Object.assign(el, { _box: r.box, _size: size, _screen: s, _after: s.after })
     // Out of order: put back, unless it holds the keyboard, which moving would take away.
@@ -1867,8 +1918,8 @@ function keepWords(el, s) {
   const input = el.querySelector('[data-correct]')
   const was = el._screen
   const cleared = was && !state.apps.some(a => a.slug === was.appSlug)
-  const elsewhere = was && (was.appSlug !== s.appSlug || was.id !== s.id)
-  const why = cleared ? 'This review was cleared.' : elsewhere ? 'This is another screen now.' : was && was.after !== s.after ? 'A new picture came.' : s.status === 'approved' ? 'This screen was answered Looks good since.' : 'That line is not shown now.'
+  const elsewhere = was && (!s || was.appSlug !== s.appSlug || was.id !== s.id)
+  const why = cleared ? 'This review was cleared.' : elsewhere ? 'This is another screen now.' : was && was.after !== s.after ? 'A new picture came.' : s?.status === 'approved' ? 'This screen was answered Looks good since.' : 'That line is not shown now.'
   // Said once they are saved: where the words went, since it is not what is on show.
   el._sent = was ? `Sent, about ${elsewhere || cleared ? label(was) : 'the earlier picture'} (round ${was.round}).` : 'Sent.'
   el.classList.add('kept')
@@ -2059,6 +2110,7 @@ async function sayBack(s, key, said, card = null) {
   }
   if (!card) return
   if (reading) reading.reply = { text: said.text }
+  forgetBoxWords()
   if (card.classList.contains('kept')) {
     dropKept(card)
     return void toast(card._sent ?? 'Sent.')
@@ -2075,7 +2127,8 @@ function dropKept(el) {
   placeReadings()
 }
 /** The box that is open now, the usual one or one kept from before, if it can be seen. */
-const openCard = () => [...$('readings').children].find(c => (c.classList.contains('kept') || (correcting && c.dataset.reading === correcting)) && c.getClientRects().length) ?? null
+const boxCards = () => [...$('readings').children, ...$('keptAlone').children].filter(c => c.classList.contains('kept') || (correcting && c.dataset.reading === correcting))
+const openCard = () => boxCards().find(c => c.getClientRects().length) ?? null
 /** A box open, or the notice for one closed under the person: the page's own keys are off while it is. */
 const correctionOpen = () => !!openCard() || !$('keptTrap').hidden
 function sendFrom(card) {
@@ -2086,12 +2139,50 @@ function sendFrom(card) {
   const s = screen()
   if (s) void sayBack(s, card.dataset.reading, { text: words }, card)
 }
+/** Words dropped by Cancel or Esc, for the Undo that brings them back: the box they were in, and where it stood. */
+let dropped = null
 function cancelBox(card) {
-  if (card.classList.contains('kept')) return dropKept(card)
-  correcting = ''
-  if (screen()) renderReadings(screen())
+  const words = card.querySelector('[data-correct]')?.value.trim() ?? ''
+  dropped = words ? { words, key: card.dataset.reading ?? card.dataset.kept, kept: card.classList.contains('kept'), screen: card._screen, sent: card._sent, why: card.querySelector('.rt b')?.textContent ?? '', left: card.style.left, top: card.style.top } : null
+  forgetBoxWords()
+  if (card.classList.contains('kept')) dropKept(card)
+  else {
+    correcting = ''
+    if (screen()) renderReadings(screen())
+  }
+  // An empty box goes quietly. Words never go by one press with no way back.
+  if (dropped) toast('Words dropped', '', { undoWords: true })
 }
-$('readings').addEventListener('click', event => {
+/** Undo: the words come back in an open box, the line's own when it is still on show, a kept one when it is not. */
+function undoDropped() {
+  const was = dropped
+  dropped = null
+  hideToast()
+  if (!was || openCard()) return
+  const s = screen()
+  const onShow = !was.kept && s && was.screen && s.appSlug === was.screen.appSlug && s.id === was.screen.id && $('readings').querySelector(`[data-reading="${CSS.escape(was.key)}"]`)
+  if (onShow) {
+    correcting = was.key
+    restoring = { key: was.key, words: was.words }
+    return renderReadings(s)
+  }
+  const el = document.createElement('div')
+  el.className = 'reading'
+  el.dataset.reading = was.key
+  el.innerHTML = '<input data-correct maxlength="300" aria-label="Your words">'
+  Object.assign(el, { _screen: was.screen })
+  Object.assign(el.style, { left: was.left, top: was.top })
+  $('readings').append(el)
+  el.querySelector('[data-correct]').value = was.words
+  keepWords(el, s ?? was.screen)
+  if (was.why) el.querySelector('.rt b').textContent = was.why
+  if (was.sent) el._sent = was.sent
+  if ($('pair').hidden) keepAlone()
+  el.querySelector('[data-correct]').focus()
+  shutOthers()
+  placeReadings()
+}
+const onBoxClick = event => {
   const card = event.target.closest('.reading')
   if (!card) return
   if (event.target.closest('[data-send]')) return sendFrom(card)
@@ -2108,8 +2199,10 @@ $('readings').addEventListener('click', event => {
     correcting = card.dataset.reading
     renderReadings(s)
   }
-})
-$('readings').addEventListener('keydown', event => {
+}
+$('readings').addEventListener('click', onBoxClick)
+$('keptAlone').addEventListener('click', onBoxClick)
+const onBoxKey = event => {
   const card = event.target.closest('.reading')
   if (!card || card !== openCard()) return
   // The keys are for the box: G, N or cmd-Enter here must not answer the screen.
@@ -2140,7 +2233,15 @@ $('readings').addEventListener('keydown', event => {
     event.preventDefault()
     sendFrom(card)
   }
-})
+}
+$('readings').addEventListener('keydown', onBoxKey)
+$('keptAlone').addEventListener('keydown', onBoxKey)
+// What is typed in a box is kept in this browser as it is typed, so a reload brings the box back open with it.
+const onBoxInput = event => {
+  if (event.target.matches('[data-correct]')) keepBoxWords(event.target)
+}
+$('readings').addEventListener('input', onBoxInput)
+$('keptAlone').addEventListener('input', onBoxInput)
 
 /*
  * The keyboard was in a words box, and the box was taken away by something the page could not help (the picture covered, say).
@@ -2168,7 +2269,15 @@ document.addEventListener('pointerdown', event => {
 function boxHoldsKeys(event) {
   const card = openCard()
   if (!card || card.contains(event.target)) return false
-  if (event.key === 'Escape') return false
+  // Esc in another window closes that window. Anywhere else it brings the keyboard back to the box: a second Esc cancels there.
+  if (event.key === 'Escape' && otherWindowUp()) return false
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeMenu()
+    closeDrawer()
+    card.querySelector('[data-correct]')?.focus()
+    return true
+  }
   if (event.key === 'Tab') {
     event.preventDefault()
     card.querySelector('[data-correct]')?.focus()
@@ -2882,8 +2991,8 @@ function hideToast() {
   $('toast').hidden = true
   $('toast').classList.remove('fading')
 }
-function toast(text, sub = '', { undo = false, problem = false, look = '', go = '' } = {}) {
-  setHtml($('toast'), `<span>${esc(text)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${undo ? '<button class="link" data-undo>Undo</button>' : ''}${look ? `<button class="link" data-look-at="${esc(look)}">Look</button>` : ''}${go ? `<button class="link" data-toast-go="${esc(go)}">Go there</button>` : ''}`)
+function toast(text, sub = '', { undo = false, problem = false, look = '', go = '', undoWords = false } = {}) {
+  setHtml($('toast'), `<span>${esc(text)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${undo ? '<button class="link" data-undo>Undo</button>' : ''}${undoWords ? '<button class="link" data-undo-words>Undo</button>' : ''}${look ? `<button class="link" data-look-at="${esc(look)}">Look</button>` : ''}${go ? `<button class="link" data-toast-go="${esc(go)}">Go there</button>` : ''}`)
   $('toast').classList.remove('fading')
   $('toast').classList.toggle('problem', problem)
   $('toast').hidden = false
@@ -2892,12 +3001,13 @@ function toast(text, sub = '', { undo = false, problem = false, look = '', go = 
   toastTimer = setTimeout(() => {
     $('toast').classList.add('fading')
     toastTimer = setTimeout(hideToast, 200)
-  }, undo ? UNDO_MS - 200 : look || go ? 8000 : 3000)
+  }, undo ? UNDO_MS - 200 : look || go || undoWords ? 8000 : 3000)
 }
 $('toast').onclick = event => {
   const look = event.target.closest('[data-look-at]')?.dataset.lookAt
   const there = event.target.closest('[data-toast-go]')?.dataset.toastGo
   if (event.target.closest('[data-undo]')) undoAnswer()
+  else if (event.target.closest('[data-undo-words]')) undoDropped()
   else if (look || there) {
     // A window up holds the page: it must not change under it. The notice stays until its time is up.
     if (windowUp()) return
@@ -3232,13 +3342,23 @@ for (const holder of [$('stateCard'), $('newModal')]) {
 /* New project, from the menu: the first screen's two ways in, over the page, with the projects there left as they are. */
 const newProjectOpen = () => !$('newModal').hidden
 /** A window over the page: while one is up, nothing behind it may change. */
-const windowUp = () => correctionOpen() || newProjectOpen() || sheetOpen() || filmOpen() || ['helpModal', 'confirmModal', 'submitModal', 'viewer'].some(id => !$(id).hidden)
+const otherWindowUp = () => newProjectOpen() || sheetOpen() || filmOpen() || ['helpModal', 'confirmModal', 'submitModal', 'viewer'].some(id => !$(id).hidden)
+const windowUp = () => correctionOpen() || otherWindowUp()
+/** A box is open: what would open over it waits until its words are sent or cancelled, and says so. */
+function wordsFirst() {
+  if (!correctionOpen()) return false
+  closeMenu()
+  toast('Send or cancel your words first', 'They are in the open box')
+  openCard()?.querySelector('[data-correct]')?.focus()
+  return true
+}
 // One for each time the window is open: an answer that comes after it closed knows it is late.
 let newWindow = { open: false }
 // The address of a picture the window started that is still being taken. One at a time: a second press would make two rounds.
 let newCapture = ''
 const capturingWords = () => `Taking a picture of ${newCapture}… Closing this does not stop it: the new project is said when it is ready.`
 function openNewProject() {
+  if (wordsFirst()) return
   closeMenu()
   // With no project yet, the first screen is already this form.
   if (!state.apps.length) return $('firstAddress')?.focus()

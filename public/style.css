@@ -267,6 +267,10 @@ body.covered .marking, body.covered #views, body.covered #zoomValue, body.covere
 .more-lines.aside { top: 38px; }
 .kept-trap { position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%); z-index: 50; display: flex; flex-direction: column; gap: 4px; max-width: min(520px, calc(100vw - 32px)); padding: 12px 14px; background: var(--ground); color: var(--ink); border: 2px solid var(--amber); border-radius: var(--r); box-shadow: var(--shadow); font-size: 13px; outline: none; }
 .kept-trap[hidden] { display: none; }
+/* A kept box with no picture left to stand on: on the empty page, where it can be seen. */
+.kept-alone { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 45; width: min(520px, calc(100vw - 32px)); }
+.kept-alone:empty { display: none; }
+.kept-alone .reading { position: static; transform: none; width: auto; max-width: none; }
 .kept-trap .link { align-self: flex-start; font: inherit; font-weight: 600; color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
 .tool.unlit { opacity: 0.45; }
 .text-entry { position: absolute; z-index: 3; min-width: 180px; padding: 3px 5px; border: 1px solid var(--accent); border-radius: 2px; background: #fff; font: 600 16px -apple-system, system-ui, sans-serif; outline: none; }
