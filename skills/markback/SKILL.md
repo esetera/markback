@@ -6,7 +6,9 @@ argument-hint: "[what you want, if there is no app yet]"
 
 The goal is the person drawing on their own app's screens within a minute. Never ask them for an address. Open the review for them, and give them its address only when you cannot open it yourself.
 
-They said: $ARGUMENTS
+Start from what the person said.
+
+If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
 
 ## In their project
 
@@ -40,5 +42,3 @@ Once the first review is open, set up wake as described in the `ideas-and-queue`
 For sessions without a Desktop heartbeat, keep listening after each round: start `review work wait --by "your name"` as the `ideas-and-queue` skill says, and when it ends, do what it prints. An approved proposal is an instruction to build, not a question.
 
 If a command fails or nothing shows, run `review check` and tell the person what it says.
-
-If `review` is not found, use `node <markback folder>/review.mjs` in its place (in Claude Code, `node "${CLAUDE_PLUGIN_ROOT}/review.mjs"`).

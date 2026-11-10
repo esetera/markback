@@ -31,7 +31,7 @@ Once the app confirms the heartbeat is active, run `review wake desktop --app <s
 
 ### Claude Code and other command-based agents
 
-The person must never have to start you by hand. Say once, in the project's folder, how the review page's server can start you:
+The person must never have to start you by hand. Say once, in the project's folder, how the review page's server can start you. Each project has its own command, so setting one never changes another project's:
 
 ```bash
 review wake set --run "claude -p '{prompt}' --continue" --by "Claude"
@@ -39,7 +39,11 @@ review wake set --run "claude -p '{prompt}' --continue" --by "Claude"
 
 That line is for Claude Code: a run with no window that continues the last conversation in that folder. For another tool, give its own command for a run with no window that continues its last session, with `{prompt}` where the words for you go. Read the tool's own help for the real flags, and do not guess them. If you cannot confirm a form, set nothing and tell the person.
 
-When work waits and no agent has listened for a minute, the server runs that command with a fixed prompt, which says to run `review work` and do what it says. It runs one at a time, and not again for the same work within ten minutes. You run with the permissions the person already gave your tool: Markback adds none. Do not put a flag that skips permission prompts in the command. `review wake` shows what is set, and `review wake off` stops it. The person can also turn it off in the page's menu, where the command is shown.
+When work on this project's reviews waits and no agent has listened for a minute, the server runs that command in this folder, with a fixed prompt that names this project and its reviews and says to run `review work` and do what it says. In the project's folder, `review work` lists only that project's work. Take only that: another project's work is not yours. Work on a review no project has pushed starts nobody. If the project has pushed no review yet, add `--app "<review name>"` to `wake set`. It runs one at a time, rests 30 seconds after each run, and does not run again for the same work within ten minutes. You run with the permissions the person already gave your tool: Markback adds none. Do not put a flag that skips permission prompts in the command. `review wake show` says what is set for this project (`--all` for every project), `review wake off` stops it, and `review wake clear` removes it. A run that goes on for 30 minutes no longer stops a new one. The person can also turn it off in the page's menu, where the command is shown. Nothing on the page can set or change the command.
+
+In Claude Code with the Markback plugin, two hooks also keep you listening: when you are about to stop and work waits, you are told to take it. Without the plugin, put them in the project once with `review install-skills --hooks`, and take them out with `review install-skills --remove-hooks`. They only hold you for work on this project's own reviews.
+
+If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
 
 ## Ideas
 

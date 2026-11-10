@@ -4,9 +4,9 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -19,18 +19,21 @@ process.env.REVIEW_HOME = home
 const children = []
 after(() => {
   for (const child of children) child.kill()
+  rmSync(noPath, { recursive: true, force: true })
   rmSync(home, { recursive: true, force: true })
 })
 const { answered, askForIdeas, closeRequest, decide, listWork, openRequests, postIdea, pushedFor, setStage, take } = await import('../lib/work.mjs')
 const { clearApp, listApps, push, receive } = await import('../lib/store.mjs')
-const { GONE_MS, TOLD_MS, hears, listeners, madeBy, noteProject, projectOf, standing, unread, waitingWork } = await import('../lib/listen.mjs')
-const { PROMPT, argvOf, clearWake, createWaker, readWake, setWake, switchDesktopWake, switchWake } = await import('../lib/wake.mjs')
+const { GONE_MS, TOLD_MS, hears, listeners, madeBy, noteProject, projectOf, rootOf, standing, unread, waitingWork } = await import('../lib/listen.mjs')
+const { LONGEST_MS, argvOf, processStart, clearWake, cmdQuote, createWaker, launchOf, listWakes, promptFor, readWake, setWake, switchDesktopWake, switchWake, wakeSummary } = await import('../lib/wake.mjs')
 const { QUEUE_LINE, MARKS_LINE, agentsWords, howWords, signOf, signShows, unheardWords, waited } = await import('../public/listen.js')
 
 const picture = join(home, 'p.png')
 writePicture(picture, 40, 30)
 const env = { ...process.env, REVIEW_HOME: home }
 const cli = (...args) => execFileSync('node', [CLI, ...args], { env, encoding: 'utf8' })
+/** The command, run in a folder: a project's own commands see only that project. */
+const cliIn = (cwd, ...args) => execFileSync('node', [CLI, ...args], { env, encoding: 'utf8', cwd })
 /** The command with its exit code and both of what it printed. */
 const run = (args, options = {}) => spawnSync('node', [CLI, ...args], { env, encoding: 'utf8', ...options })
 const until = async (get, words = 'It did not come.') => {
@@ -46,7 +49,7 @@ const LISTENING = join(home, 'work', 'listening')
 const fakeListener = (name, fields, ageMs = 0) => {
   mkdirSync(LISTENING, { recursive: true })
   const at = new Date(Date.now() - ageMs).toISOString()
-  writeFileSync(join(LISTENING, `${name}.json`), JSON.stringify({ by: 'Claude', what: 'work', app: '', in: home, pid: 1, started: at, beat: at, ...fields }))
+  writeFileSync(join(LISTENING, `${name}.json`), JSON.stringify({ by: 'Claude', what: 'work', app: '', in: '', pid: 1, started: at, beat: at, ...fields }))
   return () => rmSync(join(LISTENING, `${name}.json`), { force: true })
 }
 const queuedIdea = (target, what) => {
@@ -228,8 +231,8 @@ test('the words on the page: the sign, the notice, and how long it has waited', 
 /** A stand-in for an agent: it writes what it was told to a file, counts its runs, and says one line. */
 const standIn = (name, body = '') => {
   const script = join(home, `${name}.mjs`)
-  writeFileSync(script, `import { appendFileSync, writeFileSync } from 'node:fs'\nimport { execFileSync } from 'node:child_process'\nwriteFileSync(${JSON.stringify(join(home, `${name}.told`))}, process.argv[2] ?? '')\nappendFileSync(${JSON.stringify(join(home, `${name}.runs`))}, 'x')\nconsole.log('stand-in ${name} ran')\n${body}\n`)
-  return { run: `node ${script} '{prompt}'`, told: () => readFileSync(join(home, `${name}.told`), 'utf8'), runs: () => (existsSync(join(home, `${name}.runs`)) ? readFileSync(join(home, `${name}.runs`), 'utf8').length : 0) }
+  writeFileSync(script, `import { appendFileSync, writeFileSync } from 'node:fs'\nimport { execFileSync } from 'node:child_process'\nwriteFileSync(${JSON.stringify(join(home, `${name}.told`))}, process.argv[2] ?? '')\nwriteFileSync(${JSON.stringify(join(home, `${name}.cwd`))}, process.cwd())\nappendFileSync(${JSON.stringify(join(home, `${name}.runs`))}, 'x')\nconsole.log('stand-in ${name} ran')\n${body}\n`)
+  return { run: `node ${script} '{prompt}'`, told: () => readFileSync(join(home, `${name}.told`), 'utf8'), cwd: () => readFileSync(join(home, `${name}.cwd`), 'utf8'), runs: () => (existsSync(join(home, `${name}.runs`)) ? readFileSync(join(home, `${name}.runs`), 'utf8').length : 0) }
 }
 
 test('a Desktop heartbeat sees only its own current marks and can be switched off', () => {
@@ -262,104 +265,111 @@ test('a Desktop heartbeat sees only its own current marks and can be switched of
 test('the wake command is set from the command line only, kept with its folder and who, and read without a shell', () => {
   const folder = join(home, 'agent-folder')
   mkdirSync(folder)
-  assert.equal(readWake(), null)
-  assert.equal(switchWake(true), null, 'nothing set: nothing to turn on')
-  assert.throws(() => setWake({ run: 'claude -p hello' }), /\{prompt\}/)
-  assert.match(cli('wake'), /No wake command is set/)
-  assert.match(cli('wake', 'set', '--run', "claude -p '{prompt}' --continue", '--by', 'Claude', '--in', folder), /Wake is on for Claude[\s\S]*claude -p '\{prompt\}' --continue/)
-  assert.deepEqual([readWake().run, readWake().in, readWake().by, readWake().on], ["claude -p '{prompt}' --continue", folder, 'Claude', true])
-  assert.deepEqual(argvOf(readWake().run), ['claude', '-p', PROMPT, '--continue'], 'the prompt is one argument, whatever is in it')
-  assert.match(PROMPT, /`review work`/)
-  assert.doesNotMatch(readWake().run, /skip-permissions|bypass|--yolo/, 'no flag that skips a permission prompt')
-  assert.match(cli('wake', 'off'), /Wake is off/)
-  assert.equal(readWake().on, false)
-  assert.match(cli('wake', 'on'), /Wake is on/)
-  assert.match(cli('wake', 'clear'), /Cleared/)
-  assert.equal(readWake(), null)
+  assert.equal(readWake(folder), null)
+  assert.equal(switchWake(true, { dir: folder }), null, 'nothing set: nothing to turn on')
+  assert.throws(() => setWake({ run: 'claude -p hello', folder }), /\{prompt\}/)
+  assert.match(cliIn(folder, 'wake'), /No wake command is set for this project/)
+  assert.match(cliIn(folder, 'wake', 'set', '--run', "claude -p '{prompt}' --continue", '--by', 'Claude', '--app', 'Agent app'), /Wake is on for Claude[\s\S]*claude -p '\{prompt\}' --continue[\s\S]*For: work on agent-app/)
+  const wake = readWake(folder)
+  assert.deepEqual([wake.run, wake.in, wake.by, wake.on], ["claude -p '{prompt}' --continue", folder, 'Claude', true])
+  const prompt = promptFor(wake)
+  assert.deepEqual(argvOf(wake.run, prompt), ['claude', '-p', prompt, '--continue'], 'the prompt is one argument, whatever is in it')
+  assert.match(prompt, /project agent-folder, on the reviews agent-app\. Run `review work` in this folder[\s\S]*Leave other projects' work alone/)
+  assert.equal(promptFor({ in: '/x/a"b;$(rm)' }, ['ok', 'b`c&d']), promptFor({ in: '/x/abrm' }, ['ok', 'bcd']), 'names go in cleaned: nothing a shell could read')
+  assert.doesNotMatch(wake.run, /skip-permissions|bypass|--yolo/, 'no flag that skips a permission prompt')
+  assert.match(cliIn(folder, 'wake', 'off'), /Wake is off/)
+  assert.equal(readWake(folder).on, false)
+  assert.match(cliIn(folder, 'wake', 'on'), /Wake is on/)
+  assert.match(cliIn(folder, 'wake', 'clear'), /Cleared/)
+  assert.equal(readWake(folder), null)
   assert.equal(projectOf(folder).folder, folder, 'the folder it was set in uses Markback')
+  assert.throws(() => setWake({ run: "x '{prompt}'", folder: homedir() }), /project's folder/, 'never for the home folder, which holds every project')
 })
 
 test('the server wakes the agent once for waiting work: not at once, not twice for the same work, one run at a time, and a run that changes nothing has failed', async () => {
   settle()
   const agent = standIn('agent')
-  setWake({ run: agent.run, folder: home, by: 'Stand-in' })
+  setWake({ run: agent.run, folder: home, by: 'Stand-in', app: 'Wake' })
   let clock = Date.now()
   const waker = createWaker({ quiet: 60_000, backoff: 600_000, now: () => clock })
-  assert.equal(waker.check(), 'nothing', 'nothing waits: nothing is started')
-  assert.equal(waker.view().status, 'ready')
+  const check = () => waker.check()[readWake(home).key]
+  assert.equal(check(), 'nothing', 'nothing waits: nothing is started')
+  assert.equal(waker.view(readWake(home)).status, 'ready')
   queuedIdea('Wake', 'Build me')
-  assert.equal(waker.check(), 'soon', 'an agent may be about to listen: it waits a minute first')
-  assert.equal(waker.view().status, 'waking')
+  assert.equal(check(), 'soon', 'an agent may be about to listen: it waits a minute first')
+  assert.equal(waker.view(readWake(home)).status, 'waking')
   clock += 61_000
-  assert.equal(waker.check(), 'started')
-  assert.equal(waker.check(), 'running', 'one run at a time')
+  assert.equal(check(), 'started')
+  assert.equal(check(), 'running', 'one run at a time')
   await until(() => waker.last().running === false)
-  assert.equal(agent.told(), PROMPT, 'it was given the fixed prompt, whole')
+  assert.equal(agent.told(), promptFor(readWake(home), ['wake']), 'it was given the fixed prompt, whole, naming its own reviews')
   assert.equal(agent.runs(), 1)
   assert.deepEqual([waker.last().code, waker.last().failed], [0, true], 'it ended, no agent listens and the work still waits: failed')
   assert.ok(waker.last().endedAt, 'when it ended is recorded')
-  const view = waker.view()
+  const view = waker.view(readWake(home))
   assert.deepEqual([view.status, view.lastLine, view.run], ['failed', 'stand-in agent ran', agent.run], 'the page gets the last line of the log, and the command')
-  assert.match(readFileSync(join(home, 'work', 'wake.log'), 'utf8'), /waking Stand-in[\s\S]*stand-in agent ran/)
+  assert.match(readFileSync(join(home, 'work', 'wake', `${readWake(home).key}.log`), 'utf8'), /waking Stand-in[\s\S]*stand-in agent ran/)
   clock += 5 * 60_000
-  assert.equal(waker.check(), 'woken', 'the same work, within ten minutes: not again')
+  assert.equal(check(), 'woken', 'the same work, within ten minutes: not again')
   assert.equal(agent.runs(), 1)
   clock += 6 * 60_000
-  assert.equal(waker.check(), 'started', 'after the back-off it tries again')
+  assert.equal(check(), 'started', 'after the back-off it tries again')
   await until(() => waker.last().running === false)
   assert.equal(agent.runs(), 2)
   // New work is not the same work: it is woken for, back-off or not, after a short rest from the last run.
   queuedIdea('Wake', 'And me')
-  assert.equal(waker.check(), 'resting', 'the last run has only just ended')
+  assert.equal(check(), 'resting', 'the last run has only just ended')
   assert.equal(agent.runs(), 2)
   clock += 31_000
-  assert.equal(waker.check(), 'started')
+  assert.equal(check(), 'started')
   await until(() => waker.last().running === false)
   assert.equal(agent.runs(), 3)
 })
 
 /** A waker that knows of no earlier run: the last test's clock ran ahead of the real one. */
 const freshWaker = options => {
-  rmSync(join(home, 'work', 'wake-last.json'), { force: true })
+  rmSync(join(home, 'work', 'wake'), { recursive: true, force: true })
   return createWaker(options)
 }
+/** What a waker's check did for the one project in this store. */
+const only = waker => Object.values(waker.check())[0]
 
 test('no wake when an agent is listening, and none when wake is off', async () => {
   const agent = standIn('quiet')
-  setWake({ run: agent.run, folder: home, by: 'Stand-in' })
   const waker = freshWaker({ quiet: 0, backoff: 0 })
+  setWake({ run: agent.run, folder: home, by: 'Stand-in', app: 'Wake' })
   const gone = fakeListener('listening', {})
-  assert.equal(waker.check(), 'nothing', 'an agent hears the work: nothing to wake')
+  assert.equal(only(waker), 'nothing', 'an agent hears the work: nothing to wake')
   gone()
-  switchWake(false)
-  assert.equal(waker.check(), 'off')
-  assert.equal(waker.view().status, 'off')
+  switchWake(false, { dir: home })
+  assert.equal(only(waker), 'off')
+  assert.equal(waker.view(readWake(home)).status, 'off')
   await new Promise(r => setTimeout(r, 200))
   assert.equal(agent.runs(), 0)
-  switchWake(true)
-  assert.equal(waker.check(), 'started')
+  switchWake(true, { dir: home })
+  assert.equal(only(waker), 'started')
   await until(() => waker.last().running === false)
   assert.equal(agent.runs(), 1)
 })
 
 test('a woken agent that starts to listen has not failed; a command that cannot start has, and says why', async () => {
   const agent = standIn('listener', `execFileSync('node', [${JSON.stringify(CLI)}, 'work', 'wait', '--by', 'Stand-in', '--timeout', '5'], { stdio: 'ignore' })`)
-  setWake({ run: agent.run, folder: home, by: 'Stand-in' })
   const waker = freshWaker({ quiet: 0, backoff: 0 })
-  assert.equal(waker.check(), 'started')
+  setWake({ run: agent.run, folder: home, by: 'Stand-in', app: 'Wake' })
+  assert.equal(only(waker), 'started')
   await until(() => waker.last().running === false)
   assert.equal(waker.last().failed, false)
   assert.deepEqual(listeners().map(a => a.by), ['Stand-in'], 'its heartbeat is there')
-  assert.equal(waker.check(), 'nothing', 'heard now')
+  assert.equal(only(waker), 'nothing', 'heard now')
   settle()
   queuedIdea('Wake', 'Nobody home')
-  setWake({ run: "no-such-program-here '{prompt}'", folder: home, by: 'Nobody' })
   const broken = freshWaker({ quiet: 0, backoff: 0 })
-  assert.equal(broken.check(), 'started')
+  setWake({ run: "no-such-program-here '{prompt}'", folder: home, by: 'Nobody', app: 'Wake' })
+  assert.equal(only(broken), 'started')
   await until(() => broken.last().running === false)
   assert.equal(broken.last().failed, true)
-  assert.match(broken.view().lastLine, /It did not start/)
-  clearWake()
+  assert.match(broken.view(readWake(home)).lastLine, /It did not start/)
+  clearWake(home)
   settle()
 })
 
@@ -388,23 +398,34 @@ test('the running server is the heartbeat, and the HTTP API can turn wake on and
     // Not set up: nothing to show, nothing to turn on, and the API makes none.
     assert.equal((await (await fetch(`${at}/api/queue`)).json()).listening.wake, null)
     assert.equal((await post('/api/wake', { on: true, run: 'touch made-by-a-page' })).status, 404)
-    assert.equal(existsSync(join(store, 'work', 'wake.json')), false, 'a page cannot make a wake command')
-    execFileSync('node', [CLI, 'wake', 'set', '--run', `node ${script} '{prompt}'`, '--by', 'Stand-in', '--in', store], { env: its })
+    const wakeFile = () => join(store, 'work', 'wake', readdirSync(join(store, 'work', 'wake')).find(f => f.endsWith('.json') && !f.endsWith('.last.json')))
+    assert.equal(existsSync(join(store, 'work', 'wake')), false, 'a page cannot make a wake command')
+    execFileSync('node', [CLI, 'wake', 'set', '--run', `node ${script} '{prompt}'`, '--by', 'Stand-in', '--in', store, '--app', 'App'], { env: its })
     execFileSync('node', ['-e', `import(${JSON.stringify(join(ROOT, 'lib/work.mjs'))}).then(w => { const a = w.askForIdeas({ target: 'App', count: 1 }); const i = w.postIdea({ request: a.id, what: 'Build me', why: 'Why', size: 'S' }); w.decide(i.id, 'yes') })`], { env: its })
     await until(() => existsSync(told), 'the server did not wake the stand-in')
     await new Promise(r => setTimeout(r, 1200))
-    assert.deepEqual(readFileSync(told, 'utf8').trim().split('\n'), [PROMPT], 'woken once, with the fixed prompt, and not again within the back-off')
+    assert.deepEqual(readFileSync(told, 'utf8').trim().split('\n'), [promptFor({ in: store }, ['app'])], 'woken once, with the fixed prompt, and not again within the back-off')
     const { listening } = await (await fetch(`${at}/api/work`)).json()
     assert.deepEqual([listening.unheard.queue, listening.wake.on, listening.wake.run, listening.wake.status, listening.wake.lastLine], [1, true, `node ${script} '{prompt}'`, 'failed', 'the stand-in ran'])
     // On and off, and nothing else: a command sent with it is not read.
     const off = await post('/api/wake', { on: false, run: 'touch made-by-a-page', in: '/', by: 'Page' })
     assert.equal(off.status, 200)
-    const kept = JSON.parse(readFileSync(join(store, 'work', 'wake.json'), 'utf8'))
+    const kept = JSON.parse(readFileSync(wakeFile(), 'utf8'))
     assert.deepEqual([kept.run, kept.in, kept.by, kept.on], [`node ${script} '{prompt}'`, store, 'Stand-in', false])
     assert.equal((await off.json()).listening.wake.status, 'off')
     assert.equal((await post('/api/wake', { run: 'touch made-by-a-page' })).status, 400, 'only on or off is taken')
-    assert.equal(JSON.parse(readFileSync(join(store, 'work', 'wake.json'), 'utf8')).run, `node ${script} '{prompt}'`)
+    assert.equal(JSON.parse(readFileSync(wakeFile(), 'utf8')).run, `node ${script} '{prompt}'`)
     assert.doesNotMatch(readFileSync(join(ROOT, 'server.mjs'), 'utf8'), /setWake/, 'the server does not even load what sets the command')
+    // Marks a Codex Desktop heartbeat takes are nobody else's: the page does not say nobody listens for them.
+    execFileSync('node', [CLI, 'push', '--app', 'Desk app', '--screen', 'One', '--after', picture], { env: its })
+    execFileSync('node', ['-e', `import(${JSON.stringify(join(ROOT, 'lib/store.mjs'))}).then(s => { const a = s.listApps().find(x => x.slug === 'desk-app'); s.receive({ appSlug: a.slug, id: a.screens[0].id, png: null, shapes: [], notes: 'x', verdict: 'changes', imageSize: null }) })`], { env: its })
+    const page = async () => (await (await fetch(`${at}/api/queue`)).json()).listening
+    assert.equal((await page()).unheard.marks, 1, 'without the heartbeat, they wait unheard')
+    mkdirSync(join(store, 'work', 'desktop-wake'), { recursive: true })
+    writeFileSync(join(store, 'work', 'desktop-wake', 'desk-app.json'), JSON.stringify({ thread: 'a-thread', on: true }))
+    const withDesktop = await page()
+    assert.deepEqual([withDesktop.unheard.marks, withDesktop.desktop['desk-app']], [0, { on: true, pending: true }])
+    assert.deepEqual(withDesktop.wakes.map(w => [w.by, w.apps]), [['Stand-in', ['app']]], 'each project\'s wake, with its reviews, for the menu')
     // It says that it runs, for the hooks, and says so no more once it is stopped.
     const said = JSON.parse(readFileSync(join(store, 'work', 'server.json'), 'utf8'))
     assert.deepEqual([said.pid, said.port], [server.pid, Number(port)])
@@ -425,13 +446,24 @@ const project = join(home, 'project')
 mkdirSync(project)
 const SERVER_FILE = join(home, 'work', 'server.json')
 /** The review page's server runs, as far as the hooks can tell: this test's own process says so, now. */
+let keepUp = true
 const serverUp = (fields = {}) => {
   mkdirSync(join(home, 'work'), { recursive: true })
   writeFileSync(SERVER_FILE, JSON.stringify({ pid: process.pid, port: 1, beat: new Date().toISOString(), ...fields }))
+  // A server written as it was asked stays as it is. A plain one keeps beating, as a real one does.
+  keepUp = !Object.keys(fields).length
 }
-const serverDown = () => rmSync(SERVER_FILE, { force: true })
+const serverDown = () => {
+  rmSync(SERVER_FILE, { force: true })
+  keepUp = false
+}
 serverUp()
-const hook = (input, extra = {}) => run(['work', '--hook'], { input: JSON.stringify({ session_id: 's1', cwd: project, hook_event_name: 'Stop', stop_hook_active: false, ...input }), env: { ...env, ...extra } })
+let calls = 0
+/** One hook call. Each has its own `n`, as two real stops differ: the same input twice at once is one hook run twice. */
+const hook = (input, extra = {}) => {
+  if (keepUp) serverUp()
+  return run(['work', '--hook'], { input: JSON.stringify({ session_id: 's1', cwd: project, hook_event_name: 'Stop', stop_hook_active: false, n: calls++, ...input }), env: { ...env, ...extra } })
+}
 
 test('the hooks do nothing, silently, in a project that does not use Markback', () => {
   queuedIdea('Hooks', 'Waiting work')
@@ -447,15 +479,17 @@ test('the hooks do nothing, silently, in a project that does not use Markback', 
   // A folder with the skills that review project puts there uses Markback, and so does one inside a noted folder.
   mkdirSync(join(other, '.agents', 'skills', 'markback'), { recursive: true })
   assert.equal(projectOf(other).folder, other)
-  noteProject(project, 'Hooked')
+  mkdirSync(join(project, '.git'))
+  noteProject(join(project, 'src-not-made-yet'), 'Hooks')
   mkdirSync(join(project, 'src'))
-  assert.deepEqual(projectOf(join(project, 'src')), { folder: project, apps: ['hooked'] })
+  assert.deepEqual(projectOf(join(project, 'src')), { folder: project, apps: ['hooks'] }, 'noted by its repository root, from a subfolder')
+  assert.equal(rootOf(join(project, 'src')), project)
 })
 
-test('Stop with work waiting: the stop is blocked with what to do, never twice in a row for the same reason, and never when a stop hook is already active', () => {
+test('Stop with work waiting: the stop is blocked with what to do, never twice in a row for the same reason, and once only when another stop hook already holds it', () => {
   const blocked = JSON.parse(hook({}).stdout)
   assert.equal(blocked.decision, 'block')
-  assert.match(blocked.reason, /work waits for an agent[\s\S]*"Waiting work"[\s\S]*review take --by "Claude"[\s\S]*review work wait --by "Claude"/)
+  assert.match(blocked.reason, /work waits for an agent[\s\S]*"Waiting work"[\s\S]*review take --item item-\S+ --by "Claude"[\s\S]*review work wait --by "Claude"/)
   assert.equal(hook({}).stdout, '', 'the same reason again: let through')
   assert.equal(JSON.parse(hook({ session_id: 's2' }).stdout).decision, 'block', 'another session has not been told')
   assert.equal(JSON.parse(hook({ session_id: 's3', stop_hook_active: true }).stdout).decision, 'block', 'continuing from another stop hook: held once for this')
@@ -516,7 +550,7 @@ test('Stop is never held while the review page does not run, and the hook answer
 })
 
 test('a Stop hook that keeps the agent going takes the queue item by item, and lets it stop when the queue is empty', () => {
-  const items = [queuedIdea('Chain', 'First'), queuedIdea('Chain', 'Second')]
+  const items = [queuedIdea('Hooks', 'First'), queuedIdea('Hooks', 'Second')]
   const stop = (active = true) => hook({ session_id: 'c1', stop_hook_active: active }).stdout
   assert.match(JSON.parse(stop(false)).reason, /"First"/)
   assert.equal(stop(), '', 'nothing was taken: the same reason is let through, so it cannot loop')
@@ -528,32 +562,66 @@ test('a Stop hook that keeps the agent going takes the queue item by item, and l
   // However much new work comes, a chain of holds ends.
   let held = 0
   for (let i = 0; i < 15; i++) {
-    queuedIdea('Chain', `More ${i}`)
+    queuedIdea('Hooks', `More ${i}`)
     if (stop()) held++
   }
   assert.ok(held < 10, `held ${held} times in a row`)
   settle()
 })
 
+/** The command with a search path of our choosing: whether `review` is on it decides what the hooks run. */
+const noPath = realpathSync(mkdtempSync(join(tmpdir(), 'review-nopath-')))
+const runWithPath = (args, path = noPath, cwd = undefined) => spawnSync(process.execPath, [CLI, ...args], { env: { ...env, PATH: path }, encoding: 'utf8', cwd })
+
 test('review install-skills --hooks puts both hooks in a Claude Code settings file, keeps what is there, and replaces its own', () => {
   const folder = join(home, 'hooked-project')
   const settings = join(folder, '.claude', 'settings.json')
   mkdirSync(join(folder, '.claude'), { recursive: true })
   writeFileSync(settings, JSON.stringify({ model: 'x', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] } }))
-  const out = cli('install-skills', '--to', join(home, 'skills-out'), '--hooks', folder)
-  assert.match(out, /Wrote the Stop and SessionStart hooks/)
-  cli('install-skills', '--to', join(home, 'skills-out'), '--hooks', folder)
+  const out = runWithPath(['install-skills', '--to', join(home, 'skills-out'), '--hooks', folder])
+  assert.match(out.stdout, /Wrote the Stop and SessionStart hooks[\s\S]*If you move Markback, run this again/)
+  runWithPath(['install-skills', '--to', join(home, 'skills-out'), '--hooks', folder])
   const got = JSON.parse(readFileSync(settings, 'utf8'))
   assert.equal(got.model, 'x', 'the rest of the file is kept')
-  const commands = event => got.hooks[event].flatMap(g => g.hooks.map(h => h.command))
+  const commands = (event, from = got) => (from.hooks?.[event] ?? []).flatMap(g => g.hooks.map(h => h.command))
   assert.deepEqual(commands('Stop'), ['echo mine', `node "${join(ROOT, 'review.mjs')}" work --hook`], 'the person\'s own hook stays, and ours is there once')
   assert.deepEqual(commands('SessionStart'), [`node "${join(ROOT, 'review.mjs')}" work --hook`])
   assert.equal(got.hooks.Stop.at(-1).hooks[0].timeout, 10)
+  // With review on the search path, the hooks name it and not a folder, so moving Markback breaks nothing.
+  const bin = join(home, 'bin-with-review')
+  mkdirSync(bin)
+  writeFileSync(join(bin, 'review'), '#!/bin/sh\n', { mode: 0o755 })
+  runWithPath(['install-skills', '--to', join(home, 'skills-out'), '--hooks', folder], bin)
+  const named = JSON.parse(readFileSync(settings, 'utf8'))
+  assert.deepEqual(commands('Stop', named), ['echo mine', 'review work --hook'], 'the old copy of ours is replaced')
+  // Taken out again: only ours go.
+  assert.match(runWithPath(['install-skills', '--remove-hooks', folder]).stdout, /Took Markback's hooks out/)
+  const left = JSON.parse(readFileSync(settings, 'utf8'))
+  assert.deepEqual([left.model, commands('Stop', left), left.hooks.SessionStart], ['x', ['echo mine'], undefined])
+  assert.match(runWithPath(['install-skills', '--remove-hooks', folder]).stdout, /Markback has no hooks/)
   writeFileSync(settings, '{ not json')
-  const refused = run(['install-skills', '--to', join(home, 'skills-out'), '--hooks', folder])
+  const refused = runWithPath(['install-skills', '--to', join(home, 'skills-out'), '--hooks', folder])
   assert.equal(refused.status, 1)
   assert.match(refused.stderr, /not JSON, so it was left alone/)
   assert.equal(readFileSync(settings, 'utf8'), '{ not json', 'never written over')
+})
+
+test('the hooks are written through a symlinked settings file, and its mode is kept', () => {
+  const folder = join(home, 'linked-project')
+  const real = join(home, 'dotfiles', 'claude-settings.json')
+  mkdirSync(dirname(real), { recursive: true })
+  mkdirSync(join(folder, '.claude'), { recursive: true })
+  writeFileSync(real, JSON.stringify({ theme: 'dark' }), { mode: 0o600 })
+  chmodSync(real, 0o600)
+  symlinkSync(real, join(folder, '.claude', 'settings.json'))
+  assert.equal(runWithPath(['install-skills', '--to', join(home, 'skills-out'), '--hooks', folder]).status, 0)
+  assert.ok(lstatSync(join(folder, '.claude', 'settings.json')).isSymbolicLink(), 'the link is still a link')
+  assert.equal(statSync(real).mode & 0o777, 0o600, 'still private')
+  assert.equal(JSON.parse(readFileSync(real, 'utf8')).theme, 'dark')
+  assert.equal(JSON.parse(readFileSync(real, 'utf8')).hooks.Stop.length, 1, 'written to the real file')
+  runWithPath(['install-skills', '--remove-hooks', folder])
+  assert.deepEqual(JSON.parse(readFileSync(real, 'utf8')), { theme: 'dark' })
+  assert.equal(statSync(real).mode & 0o777, 0o600)
 })
 
 test('the server knows when an agent last said it listens, also after the agent has gone', () => {
@@ -583,4 +651,196 @@ test('the page shows the sign only when work waits unheard, and says how to star
   assert.equal(howWords({ ...waits, wake: { on: false, by: 'Claude', run: 'x', in: '/p', status: 'off' } }), 'To start one, turn on Wake in the menu.')
   assert.match(signOf(waits).tip, /To start one/)
   assert.equal(shows({ ...waits, wake: { on: true, by: 'Claude', run: 'x', in: '/p', status: 'waking' } }), true)
+})
+
+/* ---------- one wake for each project ---------- */
+
+test('wake is one command for each project: marks on one project start only its agent, in its folder, told its own reviews', async () => {
+  settle()
+  rmSync(join(home, 'work', 'wake'), { recursive: true, force: true })
+  const a = join(home, 'proj-a')
+  const b = join(home, 'proj-b')
+  for (const folder of [a, b]) mkdirSync(join(folder, '.git'), { recursive: true })
+  const agentA = standIn('agent-a')
+  const agentB = standIn('agent-b')
+  cliIn(a, 'wake', 'set', '--run', agentA.run, '--by', 'A', '--app', 'App A')
+  cliIn(join(b, '.git'), 'wake', 'set', '--run', agentB.run, '--by', 'B', '--app', 'App B')
+  assert.deepEqual(listWakes().map(w => [w.in, w.by]), [[a, 'A'], [b, 'B']], 'setting B kept A; B is known by its root, set from inside it')
+  assert.match(cliIn(a, 'wake'), /agent-a/)
+  assert.doesNotMatch(cliIn(a, 'wake'), /agent-b/)
+  assert.match(cliIn(a, 'wake', '--all'), /proj-a[\s\S]*agent-a[\s\S]*proj-b[\s\S]*agent-b/)
+  const shot = push({ app: 'App A', screen: 'One', after: picture })
+  receive({ appSlug: shot.appSlug, id: shot.id, png: null, shapes: [], notes: 'x', verdict: 'changes', imageSize: null })
+  const waker = createWaker({ quiet: 0, backoff: 0, gap: 0 })
+  const did = waker.check()
+  assert.deepEqual([did[readWake(a).key], did[readWake(b).key]], ['started', 'nothing'])
+  await until(() => waker.last(readWake(a).key).running === false)
+  assert.deepEqual([agentA.runs(), agentB.runs()], [1, 0], 'B was not woken for A\'s marks')
+  assert.equal(agentA.cwd(), a, 'in its own folder')
+  assert.match(agentA.told(), /project proj-a, on the reviews app-a\./)
+  // The woken agent's review work lists only its own project's work.
+  assert.match(cliIn(a, 'work'), /in this project \(reviews: app-a\)[\s\S]*App A/)
+  assert.match(cliIn(b, 'work'), /Nothing is waiting for an agent in this project\./)
+  assert.match(cliIn(b, 'work', '--all'), /App A/, '--all for every project\'s')
+  // Work that belongs to no project with a wake command starts nothing.
+  settle()
+  const stray = push({ app: 'Nobody app', screen: 'One', after: picture })
+  receive({ appSlug: stray.appSlug, id: stray.id, png: null, shapes: [], notes: 'x', verdict: 'changes', imageSize: null })
+  queuedIdea('Somewhere else', 'Not for A or B')
+  assert.deepEqual(Object.values(createWaker({ quiet: 0, backoff: 0, gap: 0 }).check()), ['nothing', 'nothing'])
+  clearWake(a)
+  clearWake(b)
+  settle()
+})
+
+test('a run left by an earlier server is running while its process lives, rests from when it ends, and stops blocking after the longest time', async () => {
+  settle()
+  rmSync(join(home, 'work', 'wake'), { recursive: true, force: true })
+  const folder = join(home, 'proj-restart')
+  mkdirSync(folder)
+  const agent = standIn('restart')
+  setWake({ run: agent.run, folder, by: 'R', app: 'Restart' })
+  const wake = readWake(folder)
+  const lastFile = join(home, 'work', 'wake', `${wake.key}.last.json`)
+  queuedIdea('Restart', 'Build after a restart')
+  const sleeper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+  children.push(sleeper)
+  let clock = Date.now()
+  await until(() => processStart(sleeper.pid))
+  writeFileSync(lastFile, JSON.stringify({ at: clock - 1000, startedAt: new Date(clock - 1000).toISOString(), for: 'older work', running: true, pid: sleeper.pid, started: processStart(sleeper.pid) }))
+  const waker = createWaker({ quiet: 0, backoff: 0, gap: 30_000, now: () => clock })
+  const check = () => waker.check()[wake.key]
+  assert.equal(check(), 'running', 'its process lives, and it is the same one: no second run')
+  const ended = new Promise(resolve => sleeper.once('exit', resolve))
+  sleeper.kill()
+  await ended
+  assert.equal(check(), 'resting', 'it ended: the rest counts from then')
+  assert.ok(waker.last(wake.key).endedAt)
+  assert.equal(agent.runs(), 0)
+  clock += 31_000
+  assert.equal(check(), 'started')
+  await until(() => waker.last(wake.key).running === false)
+  assert.equal(agent.runs(), 1)
+  // A run that never ends: past the longest time, it no longer blocks, and the page says so.
+  const forever = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+  children.push(forever)
+  const sig = standing(listApps(), { only: ['restart'] }).sig
+  writeFileSync(lastFile, JSON.stringify({ at: clock - LONGEST_MS - 1000, startedAt: 'long ago', for: sig, running: true, pid: forever.pid }))
+  const later = createWaker({ quiet: 0, backoff: 0, gap: 0, now: () => clock })
+  assert.equal(later.view(wake).status, 'stuck')
+  assert.match(unheardWords({ agents: [], unheard: { queue: 1, ideas: 0, marks: 0 }, wake: later.view(wake) }).head, /run for over 30 minutes/)
+  assert.equal(later.check()[wake.key], 'started', 'past the longest time it no longer blocks a new run')
+  await until(() => later.last(wake.key).running === false)
+  assert.equal(agent.runs(), 2)
+  forever.kill()
+  clearWake(folder)
+  settle()
+})
+
+test('the page speaks of the wake that matters: the worst for work that will wake an agent, or one that is off, or none', () => {
+  const v = (status, on = true) => ({ status, on, by: status })
+  assert.equal(wakeSummary(0, [{ view: v('ready'), waits: 0 }]), null, 'nothing waits')
+  assert.equal(wakeSummary(2, [{ view: v('waking'), waits: 1 }, { view: v('failed'), waits: 1 }]).status, 'failed')
+  assert.equal(wakeSummary(2, [{ view: v('waking'), waits: 1 }, { view: v('stuck'), waits: 1 }]).status, 'stuck')
+  assert.equal(wakeSummary(3, [{ view: v('waking'), waits: 1 }]), null, 'some work wakes nobody: the page says how to set one up')
+  assert.equal(wakeSummary(3, [{ view: v('waking'), waits: 1 }, { view: v('off', false), waits: 2 }]).status, 'off')
+})
+
+/* ---------- listening files that lie ---------- */
+
+test('a listening file with a beat from the future, or whose process has ended, is not a listener', () => {
+  settle()
+  rmSync(join(home, 'work', 'last-heard.json'), { force: true })
+  fakeListener('future', { by: 'Future' }, -60_000)
+  const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' })
+  fakeListener('dead', { by: 'Dead', pid: Number(dead.stdout) })
+  fakeListener('alive', { by: 'Alive', pid: process.pid })
+  fakeListener('skew', { by: 'Skew' }, -2000)
+  assert.deepEqual(listeners().map(a => a.by).sort(), ['Alive', 'Skew'], 'a little clock skew is allowed')
+  assert.ok(Date.parse(standing().heard) <= Date.now() + 5000, 'a future beat does not set when an agent was last heard')
+  settle()
+})
+
+/* ---------- hooks: only this project's work ---------- */
+
+test('the hooks hold an agent only for its own project: not under a noted parent, not with no reviews, not for work naming no review of it', () => {
+  settle()
+  serverUp()
+  const parent = join(home, 'parent')
+  mkdirSync(join(parent, 'child'), { recursive: true })
+  noteProject(parent, 'Parent app')
+  queuedIdea('Parent app', 'Parent work')
+  assert.equal(projectOf(join(parent, 'child')), null, 'a folder above that merely contains it does not make it a project')
+  assert.equal(hook({ cwd: join(parent, 'child'), session_id: 'p1' }).stdout, '')
+  assert.equal(hook({ cwd: join(parent, 'child'), session_id: 'p1', hook_event_name: 'SessionStart' }).stdout, '')
+  assert.match(JSON.parse(hook({ cwd: parent, session_id: 'p2' }).stdout).reason, /Parent work/, 'in the project itself it does')
+  const bare = join(home, 'bare')
+  mkdirSync(bare)
+  noteProject(bare)
+  assert.deepEqual(projectOf(bare).apps, [])
+  for (const event of ['Stop', 'SessionStart']) assert.equal(hook({ cwd: bare, session_id: 'p3', hook_event_name: event }).stdout, '', 'no reviews: nothing is its work')
+  assert.equal(waitingWork({ only: [] }).count, 0, 'an empty list is no work, not all of it')
+  settle()
+  askForIdeas({ target: 'Something else', count: 2 })
+  queuedIdea('Another thing', 'Not ours')
+  const out = hook({ session_id: 'p4' }).stdout
+  assert.doesNotMatch(out, /Not ours|ideas/)
+  assert.match(out, /nothing waits now/, 'only the one hold, to start a wait')
+  askForIdeas({ target: 'Hooks', count: 1 })
+  assert.match(JSON.parse(hook({ session_id: 'p5' }).stdout).reason, /1 request for ideas/, 'a request for this project\'s review is its own')
+  settle()
+})
+
+test('with the plugin hook and a settings hook both in place, the same input is answered once', async () => {
+  const input = JSON.stringify({ session_id: 'dup', cwd: project, hook_event_name: 'SessionStart', source: 'startup' })
+  const once = () => new Promise(resolve => {
+    const child = spawn('node', [CLI, 'work', '--hook'], { env })
+    let out = ''
+    child.stdout.on('data', d => { out += d })
+    child.on('close', () => resolve(out))
+    child.stdin.end(input)
+  })
+  const both = await Promise.all([once(), once()])
+  assert.equal(both.filter(Boolean).length, 1, `answered ${both.filter(Boolean).length} times`)
+  assert.match(both.find(Boolean), /Markback is in use in this project/)
+})
+
+/* ---------- Windows ---------- */
+
+test('on Windows a .cmd or .bat starts through cmd.exe with every argument quoted, and anything else without it', () => {
+  const env = { PATH: 'C:\\npm;C:\\bin', PATHEXT: '.COM;.EXE;.BAT;.CMD', ComSpec: 'C:\\Windows\\system32\\cmd.exe' }
+  // Windows does not mind the case of a name.
+  const exists = path => ['c:\\npm\\claude.cmd', 'c:\\bin\\tool.exe'].includes(path.toLowerCase())
+  const prompt = promptFor({ in: 'C:\\code\\my app' }, ['my-app'])
+  const viaCmd = launchOf(['claude', '-p', prompt, '--continue'], { platform: 'win32', env, exists })
+  assert.equal(viaCmd.file, env.ComSpec)
+  assert.deepEqual(viaCmd.args, ['/d', '/s', '/c', `"C:\\npm\\claude.CMD ${cmdQuote('-p')} ${cmdQuote(prompt)} ${cmdQuote('--continue')}"`])
+  assert.deepEqual(viaCmd.options, { windowsHide: true, windowsVerbatimArguments: true })
+  assert.equal(cmdQuote('a & b "c" %PATH%'), '^"a^ ^&^ b^ \\^"c\\^"^ ^%PATH^%^"', 'nothing in an argument reaches cmd.exe as a command')
+  assert.deepEqual(launchOf(['tool', 'x'], { platform: 'win32', env, exists }), { file: 'C:\\bin\\tool.EXE', args: ['x'], options: { windowsHide: true } })
+  assert.deepEqual(launchOf(['claude', 'x'], { platform: 'darwin', env, exists }), { file: 'claude', args: ['x'], options: { windowsHide: true } })
+})
+
+test('a run whose pid now belongs to another process is not running: the pid was given again', async () => {
+  settle()
+  rmSync(join(home, 'work', 'wake'), { recursive: true, force: true })
+  const folder = join(home, 'proj-reused')
+  mkdirSync(folder)
+  const agent = standIn('reused')
+  setWake({ run: agent.run, folder, by: 'R', app: 'Reused' })
+  const wake = readWake(folder)
+  queuedIdea('Reused', 'Build it')
+  const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+  children.push(other)
+  await until(() => processStart(other.pid))
+  // The record names a live pid, but a process that started at another time: not the run it was.
+  writeFileSync(join(home, 'work', 'wake', `${wake.key}.last.json`), JSON.stringify({ at: Date.now() - 1000, startedAt: 'earlier', for: 'older work', running: true, pid: other.pid, started: 'Mon Jan  1 00:00:00 2001' }))
+  const waker = createWaker({ quiet: 0, backoff: 0, gap: 0 })
+  assert.equal(waker.check()[wake.key], 'started', 'not held back by someone else\'s process')
+  await until(() => waker.last(wake.key).running === false)
+  assert.equal(agent.runs(), 1)
+  assert.ok(waker.last(wake.key).started, 'a run started here keeps its own start time')
+  other.kill()
+  clearWake(folder)
+  settle()
 })

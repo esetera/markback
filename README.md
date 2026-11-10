@@ -67,7 +67,15 @@ Run it in your project's folder. Then ask Codex: review my app.
 git clone https://github.com/esetera/markback ~/markback
 ```
 
-Then, in your project: `kimi --skills-dir ~/markback/skills`. For that run, Markback's skills stand in for your others. To go back into a session: `kimi --skills-dir ~/markback/skills -S` (it lets you pick one).
+Then, in your project's folder:
+
+```bash
+kimi --skills-dir ~/markback/skills
+```
+
+Then ask Kimi: review my app. For that run, Markback's skills stand in for your others. To go back into a session, add `-S` to pick one, or `-c` for the latest in this folder: `kimi --skills-dir ~/markback/skills -S`.
+
+To keep your other skills, put Markback's where Kimi Code already looks, and start it with plain `kimi`. `node ~/markback/review.mjs install-skills` writes them to `~/.agents/skills`; run it again after you update Markback. Or add `extra_skill_dirs = ["~/markback/skills"]` to Kimi Code's `config.toml`.
 
 Other agents that can run commands should work too: CodeWhale is next to be tried.
 
@@ -149,7 +157,7 @@ It writes `.markback`, a small JSON file such as `{ "home": ".markback-store", "
 - Plugins never come from a store that `.markback` named, because a project could bring its own. In Codex's sandbox the small browser is kept in that store, the one place the sandbox can write.
 - When Markback is installed in a `.markback` folder with npm, the file is `.markback/config.json`.
 
-**Kimi Code** takes the skills with `--skills-dir`, in place of your others for that run: `kimi --skills-dir ~/markback/skills`, with `-S` to go back into a session.
+**Kimi Code** reads the skills straight from the cloned folder with `--skills-dir`, in place of your others for that run: `kimi --skills-dir ~/markback/skills`, with `-S` or `-c` to go back into a session. It also reads `~/.agents/skills` and `extra_skill_dirs`, which keep your others. See [Manual installation](#manual-installation).
 
 **Any other agent** that reads `AGENTS.md` (Codex and Cursor do, and others): add Markback's part to your project's `AGENTS.md`. It goes between two markers, so your own words stay and a rerun replaces only that part. It names where your Markback folder is; add `--no-path` to say it in words instead, for a file you commit.
 
@@ -157,7 +165,7 @@ It writes `.markback`, a small JSON file such as `{ "home": ".markback-store", "
 node review.mjs install-skills --agents-md /path/to/your/project
 ```
 
-`npm install -g .` from the cloned folder puts `review` on your PATH. Without that, agents use `node /path/to/markback/review.mjs`, and the installed skills already say so.
+`npm install -g .` from the cloned folder puts `review` on your PATH. Without that, agents use `node /path/to/markback/review.mjs`, and the skills say so, both in the folder and when installed.
 
 **Full review workflow tried with Claude Code, Codex and Kimi Code.** What was run: Claude Code, with the plugin, including `/markback` in a project from a cold start. Codex, with the skills in `.agents/skills`, and Kimi Code, with `--skills-dir`: each pushed a screen, read the marks and acted on them, pushed round 2, and drew a sketch. A second Claude Code run with no plugin and no skills, which knew Markback only from `AGENTS.md`: it pushed a screen, and after a box and a note came back it read them and said where they were. A plain script that runs only the commands `AGENTS.md` shows, which is part of `npm test`. Cursor compatibility is based on its documentation.
 
@@ -332,9 +340,9 @@ A Yes becomes a proposal: an agent develops the UX and pushes it, shown loudly a
 
 ### When nobody is listening
 
-Approved work must not wait unseen. An agent says that it listens while it waits (`review work wait`, `review wait`), and the page shows it: a small sign in the bar, with the agent's name when you point at it.
+Approved work must not wait unseen. An agent says that it listens while it waits (`review work wait`, `review wait`): it checks in every few seconds, and the server knows when it last did. While an agent listens, or nothing waits, the page shows nothing about it: there is nothing for you to do.
 
-When you approve a proposal, or send marks, and no agent listens, the page says so at once: "Approved. No agent is listening, so nothing will be built yet." The notice stays until you close it or an agent listens. The sign in the bar turns to a warning, and the tab's title starts with `!`. The queue shows how long each item has waited. When an agent does listen, you see one quiet line: "Claude is listening and will take this."
+When you approve a proposal, or send marks, and no agent listens, the page says so at once: "Approved. No agent is listening, so nothing will be built yet." The notice stays until you close it or an agent listens. While work waits and no agent has checked in for 15 seconds, the bar of the review page and of the queue says **No agent is listening** (or **Not heard yet**, when an agent listens for something else), and the review page's tab title starts with `!`. Point at it to see how to start one. While Markback starts your agent for you, it says **Waking your agent…**. The queue shows how long each item has waited. When an agent does listen, you see one quiet line: "Claude is listening and will take this."
 
 The notice gives one line to copy for your agent:
 
@@ -356,16 +364,20 @@ You should not have to give that line. Your agent says once how to start it, and
 review wake set --run "claude -p '{prompt}' --continue" --by "Claude"
 ```
 
-The skills tell the agent to run this itself during setup, in your project's folder. About every 20 seconds the server looks at the same list as `review work`. When work waits and no agent has listened for a minute, it runs the command in that folder, with `{prompt}` replaced by a fixed prompt that says to run `review work` and do what it says. It runs one at a time, and not again for the same work within ten minutes. What the run prints goes to `~/.review-wizard/work/wake.log`. The page says "Waking your agent…", then that it listens. If the run fails, the page says so, with the last line of the log and the line to copy.
+The skills tell the agent to run this itself during setup, in your project's folder. There is one command for each project: setting it in one project never changes another's. About every 20 seconds the server looks at each project's work: the queue items, requests for ideas and marks on the reviews that project pushed. When such work waits and no agent has listened for a minute, it runs that project's command in its folder, with `{prompt}` replaced by a fixed prompt that names the project and its reviews and says to run `review work`, which in that folder lists only that project's work. Work on a review that no project with a command has pushed wakes nobody. It runs one at a time, rests 30 seconds after each run, and does not run again for the same work within ten minutes. What the run prints goes to a log for that project under `~/.review-wizard/work/wake/`. A run is known by its process, also after the server restarts. A run that goes on for 30 minutes no longer stops a new one, and the page says so. The page says "Waking your agent…", then that it listens. If the run fails, the page says so, with the last line of the log and the line to copy.
 
 - The command is set only from the command line. The page can turn wake on and off (menu: **Wake my agent when work waits**) and shows the exact command. It cannot set or change the command, and neither can anything else that reaches the server.
 - The woken agent runs with the permissions you already gave that tool. Markback adds none, and passes no flag that skips permission prompts.
-- `review wake` shows what is set. `review wake off`, `review wake on` and `review wake clear` change it.
+- `review wake` shows this project's command, and `review wake --all` every project's. `review wake off`, `review wake on` and `review wake clear` change this project's. The page's menu turns the wake of the review's own project on and off.
 - The line above is for Claude Code (a run with no window that continues the last conversation in the folder). For another command-based tool, use its own command of that kind.
 
 ### Claude Code hooks
 
-The Claude Code plugin has two hooks. When Claude is about to stop in a project that uses Markback, the Stop hook looks at what waits: if there is work for an agent, Claude is told to take it and does not stop; if nothing waits and no `review work wait` runs, Claude is told once to start one. When a session starts, Claude is told what waits. In a project that does not use Markback (no `review project`, `review push` or `review wake set` was run in its folder), the hooks do nothing. To turn them off, set `MARKBACK_HOOKS=off` in the environment, for example under `env` in your Claude Code settings.
+The Claude Code plugin has two hooks. When Claude is about to stop in a project that uses Markback, the Stop hook looks at what waits: if there is work for an agent, Claude is told to take it and does not stop; if nothing waits and no `review work wait` runs, Claude is told once to start one. When a session starts, Claude is told what waits. They only hold Claude for work on that project's own reviews. A project is its folder or its repository's root, where `review project`, `review push` or `review wake set` was run; a folder that merely sits under one is not. In any other folder the hooks do nothing. To turn them off, set `MARKBACK_HOOKS=off` in the environment, for example under `env` in your Claude Code settings.
+
+The hooks are quick: they read a few small files and ask no server. They never hold Claude back while the review page is not running. They cannot loop: they never hold Claude twice for the same reason, hold it again only when the next item waits, stop after ten holds in a row, and let it stop once the queue is empty.
+
+Using Claude Code without the plugin? Put the same hooks in a project's `.claude/settings.json` with `review install-skills --hooks <project folder>`, or in your own settings, for every project, with `--hooks ~`. Your other settings and hooks are kept, a symlinked settings file stays a link, and its mode stays as it was. `review install-skills --remove-hooks <folder>` takes out only Markback's. With `review` on your search path the hooks run `review`; otherwise they name the Markback folder, so run it again if you move that. With both the plugin and these hooks, each check answers once.
 
 ## Keeping it working
 

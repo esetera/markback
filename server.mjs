@@ -12,10 +12,10 @@ import { HOME, IMAGES, INBOX, PORT, STORE_ID, WHERE, listApps, readInbox, receiv
 import { pushSample, showApp } from './lib/first.mjs'
 import { linkIn, LINK_OUT } from './lib/home.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
-import { madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
+import { appsOf, madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
 // Only what reads the wake command and turns it on and off. What sets the command is not imported here, on purpose:
 // nothing a web page can reach may decide what this computer runs.
-import { createWaker, readDesktopWake, switchDesktopWake, switchWake } from './lib/wake.mjs'
+import { createWaker, listWakes, readDesktopWake, switchDesktopWake, switchWake, wakeSummary } from './lib/wake.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' }
@@ -80,16 +80,25 @@ function body(req) {
  * test with REVIEW_WAKE_MS="every,quiet,backoff,late,gap" in milliseconds.
  */
 const [wakeEvery = 20_000, quiet, backoff, late, gap] = (process.env.REVIEW_WAKE_MS ?? '').split(',').filter(Boolean).map(Number)
-const commandWork = apps => standing(apps, { excludeMarksFor: slug => readDesktopWake(slug)?.on === true })
-const waker = createWaker({ look: commandWork, ...(quiet >= 0 ? { quiet } : {}), ...(backoff >= 0 ? { backoff } : {}), ...(late >= 0 ? { late } : {}), ...(gap >= 0 ? { gap } : {}) })
+/** What waits unheard, leaving out marks a Codex Desktop heartbeat takes: nobody needs to be told of those, or woken. */
+const commandWork = (apps, only = null) => standing(apps, { excludeMarksFor: slug => readDesktopWake(slug)?.on === true, only })
+const waker = createWaker({ look: wake => commandWork(listApps(), appsOf(wake.in)), ...(quiet >= 0 ? { quiet } : {}), ...(backoff >= 0 ? { backoff } : {}), ...(late >= 0 ? { late } : {}), ...(gap >= 0 ? { gap } : {}) })
+const total = unheard => unheard.queue + unheard.ideas + unheard.marks
 /** Who listens, what waits unheard, and whether an agent will be woken for it: with every answer the pages poll. */
 const listening = (apps = listApps()) => {
-  const now = standing(apps)
-  const desktop = Object.fromEntries(apps.flatMap(({ slug }) => {
-    const held = readDesktopWake(slug)
-    return held ? [[slug, { on: held.on, pending: now.markApps.includes(slug) }]] : []
-  }))
-  return { agents: now.agents, unheard: now.unheard, wake: waker.view(now.markApps.some(slug => desktop[slug]?.on) ? commandWork(apps) : now), desktop }
+  const now = commandWork(apps)
+  const held = apps.flatMap(({ slug }) => {
+    const desktop = readDesktopWake(slug)
+    return desktop ? [[slug, desktop]] : []
+  })
+  // Marks waiting for a Desktop heartbeat are counted only for its own sign.
+  const pendingMarks = held.length ? standing(apps).markApps : []
+  const desktop = Object.fromEntries(held.map(([slug, d]) => [slug, { on: d.on, pending: pendingMarks.includes(slug) }]))
+  const wakes = listWakes().map(wake => {
+    const there = commandWork(apps, appsOf(wake.in))
+    return { view: { ...waker.view(wake, there), apps: appsOf(wake.in) }, waits: total(there.unheard) }
+  })
+  return { agents: now.agents, heard: now.heard, unheard: now.unheard, wake: wakeSummary(total(now.unheard), wakes), wakes: wakes.map(w => w.view), desktop }
 }
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
@@ -164,7 +173,10 @@ const server = createServer(async (req, res) => {
       // On or off, and nothing else: whatever else is sent is not read. The command comes only from `review wake set`.
       const input = JSON.parse(await body(req))
       if (typeof input.on !== 'boolean') return json(res, 400, { error: 'Say on or off.' })
-      const changed = typeof input.app === 'string' ? switchDesktopWake(input.app, input.on) : switchWake(input.on)
+      // Which project's, by the key the page was given. With one project only, that one. Never this server's own folder.
+      const wakes = listWakes()
+      const key = typeof input.key === 'string' ? input.key : wakes.length === 1 ? wakes[0].key : ''
+      const changed = typeof input.app === 'string' ? switchDesktopWake(input.app, input.on) : key && switchWake(input.on, { key })
       if (!changed) return json(res, 404, { error: 'Wake is not set up for this review.' })
       return json(res, 200, { ok: true, listening: listening() })
     }

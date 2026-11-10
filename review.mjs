@@ -28,11 +28,13 @@
  *   review note --item <id> --text "..." [--by "who"]
  *   review stage --item <id> --to queued|progress|ready|done
  *
- *   review work [--by "who"] [--json]           all that waits for an agent: queued items, idea requests, unread answers
- *   review work wait [--by "who"] [--timeout 3600]   blocks until something does, then says what and the next command
+ *   review work [--by "who"] [--json] [--all]   all that waits for an agent: queued items, idea requests, unread answers.
+ *                                               In a project's folder, only that project's work; --all for every project's
+ *   review work wait [--by "who"] [--timeout 3600] [--all]   blocks until something does, then says what and the next command
  *   review work --hook                          for Claude Code's hooks: reads the hook's input, and keeps the agent listening
- *   review wake set --run "<command with {prompt}>" [--in <folder>] [--by "who"]   how the server starts this project's agent
- *   review wake | wake on | wake off | wake clear
+ *   review wake set --run "<command with {prompt}>" [--in <folder>] [--by "who"] [--app <review>]
+ *                                               how the server starts this project's agent: one command for each project
+ *   review wake [show] [--all] | wake on | wake off | wake clear   this project's command (--all: every project's)
  *   review wake desktop --app <app>              register this Codex Desktop chat after scheduling its heartbeat
  *   review wake poll --app <app>                 check this chat's review for current, unread marks
  *
@@ -51,6 +53,7 @@
  *   review install-skills [--to ~/.agents/skills | --codex] [--agents-md <project folder> [--no-path]] [--hooks [<folder> | ~]]
  *                                               the skills for Codex, Cursor and others; AGENTS.md for the rest;
  *                                               --hooks: Claude Code's hooks in <folder>/.claude/settings.json (the plugin has them)
+ *   review install-skills --remove-hooks [<folder> | ~]   takes only Markback's hooks out again
  *
  *   --home <folder>, with any command: the store to use. Else REVIEW_HOME, else a .markback file at or above this folder,
  *   else ~/.review-wizard.
@@ -73,9 +76,9 @@ import { addPlugins, addsWords, fetchSource, listPlugins, pluginsIn, removePlugi
 import { findApp, openPage, shootScreens, startApp } from './lib/project.mjs'
 import { runChecks, sayResult, sayVerdict, up } from './lib/check.mjs'
 import { addNote, closeRequest, listWork, openRequests, postIdea, pushedFor, setStage, take } from './lib/work.mjs'
-import { listen, markDelivered, noteProject, queuedSince, unread, waitingWork } from './lib/listen.mjs'
-import { clearDesktopWake, clearWake, lastRun, readDesktopWake, readWake, setDesktopWake, setWake, switchWake } from './lib/wake.mjs'
-import { installHooks, sayHook } from './lib/hook.mjs'
+import { listen, markDelivered, noteProject, projectOf, queuedSince, unread, waitingWork } from './lib/listen.mjs'
+import { clearDesktopWake, clearWake, lastRun, listWakes, projectFolder, readDesktopWake, readWake, setDesktopWake, setWake, switchWake } from './lib/wake.mjs'
+import { installHooks, removeHooks, sayHook } from './lib/hook.mjs'
 
 const args = process.argv.slice(2)
 // The store reads --home itself (lib/home.mjs), so it can come before the command or after it. It is taken out here.
@@ -245,14 +248,17 @@ const ago = iso => {
   return min < 1 ? 'less than 1 min' : min < 60 ? `${min} min` : min < 2880 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} days`
 }
 
-/** All that waits for an agent, with the exact next command for each part. Blank when nothing does. */
-function workWords(found, by) {
+/**
+ * All that waits for an agent, with the exact next command for each part. Blank when nothing does. In a project, the item
+ * to take is named, since the top of the whole queue may be another project's.
+ */
+function workWords(found, by, project = null) {
   const me = by === 'an agent' ? '<your name>' : by
   const parts = []
   if (found.queue.length) {
     parts.push([`Queue: ${found.queue.length} item${found.queue.length === 1 ? '' : 's'} nobody has taken. Take the top one and do it. An approved proposal is an instruction to build: do not ask first.`,
       ...found.queue.map((i, n) => `  ${n + 1}. ${i.title}  [${i.marksBack ? `marks came back, round ${i.round}` : i.phase === 'build' ? 'approved: build it' : 'develop the proposal'}]  waiting ${ago(queuedSince(i))}  (${i.id})`),
-      `  Next: review take --by "${me}"`].join('\n'))
+      `  Next: review take ${project ? `--item ${found.queue[0].id} ` : ''}--by "${me}"`].join('\n'))
   }
   if (found.ideas.length) {
     parts.push([`Ideas: ${found.ideas.length} request${found.ideas.length === 1 ? '' : 's'} nobody has answered.`,
@@ -262,19 +268,23 @@ function workWords(found, by) {
     parts.push(['Answers nobody has read. Act on every mark.',
       ...found.answers.flatMap(a => [`  ${a.app}: ${a.screens} screen${a.screens === 1 ? '' : 's'}${a.changes ? `, ${a.changes} ask${a.changes === 1 ? 's' : ''} for changes` : ', all look good'}`, `  Next: review read --app "${a.app}" --latest`])].join('\n'))
   }
-  return parts.length ? `Work is waiting for an agent.\n\n${parts.join('\n\n')}\n\nThen keep listening: review work wait --by "${me}"` : ''
+  const where = project ? ` in this project (reviews: ${project.apps.join(', ') || 'none yet'}). Work on other projects' reviews is not yours` : ''
+  return parts.length ? `Work is waiting for an agent${where}.\n\n${parts.join('\n\n')}\n\nThen keep listening: review work wait --by "${me}"` : ''
 }
 
 async function work(what) {
   if (flags.hook) return sayHook()
   if (!['list', 'wait'].includes(what)) fail('review work | work wait [--by "who"] [--timeout 3600] [--json]')
   const by = who()
-  const say = found => console.log(flags.json ? JSON.stringify({ queue: found.queue, ideas: found.ideas, answers: found.answers }, null, 2) : workWords(found, by) || 'Nothing is waiting for an agent.')
-  if (what === 'list') return say(waitingWork())
+  // In a project's folder, only its own work: an agent here must never build another project's. --all for every project's.
+  const project = flags.all ? null : projectOf(process.cwd())
+  const only = project ? project.apps : null
+  const say = found => console.log(flags.json ? JSON.stringify({ queue: found.queue, ideas: found.ideas, answers: found.answers }, null, 2) : workWords(found, by, project) || `Nothing is waiting for an agent${project ? ' in this project' : ''}.`)
+  if (what === 'list') return say(waitingWork({ only }))
   const deadline = Date.now() + Number(flags.timeout || 3600) * 1000
   const ear = listen({ by, what: 'work' })
   for (;;) {
-    const found = waitingWork()
+    const found = waitingWork({ only })
     if (found.count) {
       ear.told()
       return say(found)
@@ -286,9 +296,10 @@ async function work(what) {
 
 function wake(what) {
   const show = (w, head = '') => {
-    if (!w) return console.log(`${head}No wake command is set. Set one in the project's folder: review wake set --run "<command with {prompt} in it>" --by "<your name>"`)
-    const last = lastRun()
-    console.log(`${head}Wake is ${w.on ? 'on' : 'off'} for ${w.by}.\n  Runs: ${w.run}\n  In: ${w.in}\n  When: work waits and no agent has listened for a minute. The review page must be running (review start).${last ? `\n  Last run: ${last.startedAt}${last.running ? ', still running' : `, ended with ${last.code}${last.failed ? ', and the work still waited: it failed' : ''}`}` : ''}`)
+    if (!w) return console.log(`${head}No wake command is set for this project (${projectFolder(process.cwd())}). Set one in the project's folder: review wake set --run "<command with {prompt} in it>" --by "<your name>"`)
+    const last = lastRun(w.in)
+    const apps = projectOf(w.in)?.apps ?? []
+    console.log(`${head}Wake is ${w.on ? 'on' : 'off'} for ${w.by}.\n  Runs: ${w.run}\n  In: ${w.in}\n  For: ${apps.length ? `work on ${apps.join(', ')}` : 'nothing yet: push a review from this folder, or set it again with --app <review>'}\n  When: work waits and no agent has listened for a minute. The review page must be running (review start).${last ? `\n  Last run: ${last.startedAt}${last.running ? ', still running' : `, ended with ${last.code}${last.failed ? ', and the work still waited: it failed' : ''}`}` : ''}`)
   }
   try {
     if (what === 'desktop') {
@@ -322,14 +333,18 @@ function wake(what) {
       return console.log(JSON.stringify({ owned, enabled, complete, marks: latestPerScreen(records) }, null, 2))
     }
     if (what === 'set') {
-      const set = setWake({ run: need('run'), folder: typeof flags.in === 'string' ? flags.in : process.cwd(), by: typeof flags.by === 'string' ? flags.by : 'your agent' })
-      noteProject(set.in)
+      const set = setWake({ run: need('run'), folder: typeof flags.in === 'string' ? flags.in : process.cwd(), by: typeof flags.by === 'string' ? flags.by : 'your agent', app: typeof flags.app === 'string' ? flags.app : '' })
       return show(set, 'Set. ')
     }
-    if (what === 'on' || what === 'off') return show(switchWake(what === 'on'))
+    if (what === 'on' || what === 'off') return show(switchWake(what === 'on', { dir: process.cwd() }))
     if (what === 'clear') {
-      clearWake()
-      return console.log('Cleared. The server wakes no agent now.')
+      clearWake(process.cwd())
+      return console.log('Cleared. The server wakes no agent for this project now.')
+    }
+    if (what === 'show' && flags.all) {
+      const all = listWakes()
+      if (!all.length) return console.log('No project has a wake command.')
+      return all.forEach((w, n) => show(w, `${n ? '\n' : ''}${w.in}: `))
     }
     if (what !== 'show') fail('review wake | wake set --run "<command>" | wake desktop --app <app> | wake poll --app <app> | wake on | wake off | wake clear')
     return show(readWake())
@@ -549,6 +564,17 @@ if (command === 'push') {
   if (running === 'none') fail('The review page is not running. Start it with: review start')
   if (running === 'other') fail(`The review page on port ${PORT} shows another store. Start this store's page with: review start`)
   console.log((await openPage(page)) ? `I've opened it in your browser. (${page})` : `Open ${page}`)
+} else if (command === 'install-skills' && flags['remove-hooks']) {
+  // Only Markback's own entries go. The person's other hooks and settings stay as they are.
+  const folder = flags['remove-hooks'] === true ? process.cwd() : String(flags['remove-hooks']).replace(/^~(?=\/|$)/, homedir())
+  const settings = join(folder, '.claude', 'settings.json')
+  let removed = false
+  try {
+    removed = removeHooks(settings)
+  } catch (error) {
+    fail(error.message)
+  }
+  console.log(removed ? `Took Markback's hooks out of ${settings}.` : `Markback has no hooks in ${settings}.`)
 } else if (command === 'install-skills') {
   // --codex: into this project, where Codex finds them, and without this computer's paths, since the folder may be committed.
   const to = flags.codex ? join(process.cwd(), '.agents', 'skills') : typeof flags.to === 'string' ? flags.to.replace(/^~(?=\/|$)/, homedir()) : join(homedir(), '.agents', 'skills')
@@ -558,12 +584,15 @@ if (command === 'push') {
     // For Claude Code without the plugin: the plugin has these hooks already. ~ is the person's own settings, for every project.
     const folder = flags.hooks === true ? process.cwd() : String(flags.hooks).replace(/^~(?=\/|$)/, homedir())
     const settings = join(folder, '.claude', 'settings.json')
+    let run = ''
     try {
-      installHooks(settings, ROOT)
+      run = installHooks(settings, ROOT)
     } catch (error) {
       fail(error.message)
     }
     console.log(`Wrote the Stop and SessionStart hooks to ${settings}. Claude Code now takes approved work by itself in projects that use Markback.`)
+    // review is not on the search path: the hooks name this folder, and must be put in again if it moves.
+    if (run.startsWith('node ')) console.log('They run review.mjs from this folder. If you move Markback, run this again. To take them out: review install-skills --remove-hooks')
   }
   console.log(flags.codex ? 'Codex finds them in this project. Now ask Codex: review my app.' : 'Codex and Cursor read skills from ~/.agents/skills. Run this again after updating Markback.')
 } else if (command === 'clear') {

@@ -5,6 +5,8 @@ description: Draw a workflow as a simple architect's sketch for the person to ch
 
 A workflow can only be checked when it says who may do each step and what makes it happen. A plain flowchart hides what goes wrong. Keep it simple.
 
+If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
+
 ## Rules for a sheet
 
 - One question a sheet. One row of boxes, eight at most. Two branches at most, as notes.
