@@ -84,12 +84,15 @@ for (let i = 0; i < rest.length; i++) {
   if (key === 'check') {
     if (next !== undefined && !next.startsWith('--')) (flags.check ??= []).push(next)
     if (next !== undefined && !next.startsWith('--')) i++
-  } else if (next === undefined || next.startsWith('--')) flags[key] = true
+  } else if (key === 'fetch-browser' || next === undefined || next.startsWith('--')) flags[key] = true // --fetch-browser is a yes, never a name: what follows it is not its value
   else {
     flags[key] = next
     i++
   }
 }
+
+// The person said yes to fetching the small browser that pictures need inside a sandbox. Without the flag, nothing is fetched.
+if (flags['fetch-browser']) process.env.MARKBACK_FETCH_BROWSER = 'yes'
 
 const fail = message => {
   console.error(message)
@@ -526,7 +529,9 @@ if (command === 'push') {
   console.log(`A sample is waiting. Open http://localhost:${PORT}/#sample`)
 } else if (command === 'see') {
   try {
-    const shown = await showApp(rest[0] && !rest[0].startsWith('--') ? rest[0] : flags.url, { app: typeof flags.app === 'string' ? flags.app : '', screen: typeof flags.screen === 'string' ? flags.screen : 'First look', files: true, kind: flags.kind || 'qa' })
+    // The address is the first word that is not a flag: --fetch-browser may come before it.
+    const address = rest.find((word, i) => !word.startsWith('--') && (i === 0 || rest[i - 1] === '--fetch-browser' || !rest[i - 1].startsWith('--')))
+    const shown = await showApp(address ?? flags.url, { app: typeof flags.app === 'string' ? flags.app : '', screen: typeof flags.screen === 'string' ? flags.screen : 'First look', files: true, kind: flags.kind || 'qa' })
     console.log(`It is ready to mark. Open http://localhost:${PORT}/#${shown.appSlug}`)
   } catch (error) {
     fail(error.message)

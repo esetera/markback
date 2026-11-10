@@ -23,7 +23,7 @@ The first two are your own agent's work, such as Claude Code or Codex: it builds
 
 ## Start with your project
 
-You need [Node](https://nodejs.org) 22.6 or later. Markback uses Chrome or Edge for screenshots, or downloads a local screenshot browser on first use inside Codex's macOS sandbox.
+You need [Node](https://nodejs.org) 22.6 or later. Markback uses Chrome or Edge for screenshots. Inside Codex's macOS sandbox it needs a small browser of its own, fetched once: your agent asks you before it fetches it.
 
 ### Start from chat
 
@@ -31,7 +31,15 @@ Open your project in a local Claude Code or Codex session and ask in the chat.
 
 > Set up Markback from https://github.com/esetera/markback for this project. Open the first review and keep sending screenshots to Markback as you work.
 
-Your agent runs the setup and opens the review. As it reaches a visible change, it pushes the updated screenshots and waits for your feedback. You can draw and press **Send**, or press **Looks good**. Keep the agent session running while you review.
+Your agent runs the setup and opens the review. As it reaches a visible change, it pushes the updated screenshots and waits for your feedback. You can draw and press **Send**, or press **Looks good**.
+
+### Codex Desktop without a terminal
+
+Open your project in Codex Desktop and paste this into the project chat:
+
+> Set up Markback from https://github.com/esetera/markback in this project. Open the first review and turn on automatic pickup of my marks in this chat.
+
+Codex installs Markback locally, starts the review, and sets up a scheduled check in the same chat. Draw on a screenshot and press **Send**. Keep Codex Desktop open. On the next check, usually within a minute, the chat picks up the mark even if its first turn has finished. Codex applies the change and pushes a new screenshot for review.
 
 In a fresh Codex project, the agent can use `npm install --prefix .markback github:esetera/markback` to install locally and read `.markback/node_modules/markback/AGENTS.md` in the current session. The agent keeps `REVIEW_HOME` in a writable project folder and uses that same folder for each review command. `review project` can start the review even when Codex protects `.agents/skills` from edits.
 
@@ -72,7 +80,7 @@ In a local desktop session your agent opens the review for you. If it cannot, op
 - **Claude Code Desktop.** Open the Browser pane from the session toolbar and enter the review URL. [Claude Code browser docs](https://code.claude.com/docs/en/desktop#preview-your-app)
 - **Codex desktop.** Open the built-in browser from the toolbar and enter the review URL. You can also ask `@Browser` to open it. [Codex browser docs](https://learn.chatgpt.com/docs/browser#preview-a-page)
 
-Draw with Markback's tools and press **Send**. The local server saves the marked screenshot, notes and mark coordinates. The agent waits for the round with `review wait`, applies the feedback, then pushes new screenshots and waits again. If the agent session ended, ask it to resume the Markback review.
+Draw with Markback's tools and press **Send**. The local server saves the marked screenshot, notes and mark coordinates. [Codex Desktop's scheduled check](#codex-desktop-without-a-terminal) picks up the feedback in the same chat. Other agent sessions can wait for a round with `review wait`, apply the feedback, and push new screenshots.
 
 The same URL works in a regular browser on that computer. For voice notes, use Google Chrome if the built-in browser can't transcribe. See [Speaking](#speaking-early) for browser support and where the audio goes.
 
@@ -119,7 +127,7 @@ Run it again after you update Markback. To put it in one project only, add `--to
 codex exec -s workspace-write "Here is a screen I want reviewed: shot.png. Put it in front of me for review."
 ```
 
-For local projects inside Codex's macOS sandbox, Markback downloads and caches Chrome Headless Shell on the first capture. The download needs network access. This capture path is for local pages and assets. An agent with a built-in browser can also capture a page there and push the screenshot to Markback.
+For local projects inside Codex's macOS sandbox, Markback takes pictures with Chrome Headless Shell, about 100 MB from Google, fetched once and kept on this computer. Nothing is fetched until you say yes: the first capture stops and tells the agent to ask you, and after your yes the agent runs it again with `--fetch-browser`. The download needs network access. This capture path is for local pages and assets. An agent with a built-in browser can also capture a page there and push the screenshot to Markback.
 
 **Kimi Code** takes the skills with `--skills-dir`, in place of your others for that run: `kimi --skills-dir ~/markback/skills`, with `-S` to go back into a session.
 
@@ -161,7 +169,7 @@ For voice notes, start with Google Chrome and allow the microphone for the revie
 
 **Speak at a spot** (the speak tool in the bar, or **D**): click on the picture and say it. A pin with a microphone lands where you clicked, a ring round it shows that it listens, and your words are written in a box beside it. Click somewhere else for the next pin; **Esc** or a pause ends one. Each pin goes to your agent as what you said and where. The microphone at the foot (**⇧D**) only fills the notes box.
 
-A phrase that is only "looks good", "next", "back", "send" or "stop listening" acts. Any other words are notes, and you can correct them as you go.
+A phrase that is only "looks good", "next", "back", "send" or "stop listening" acts. Any other words go to the pin that listens, or to the notes when none does, and you can correct notes as you go.
 
 ## The review page
 
@@ -304,9 +312,9 @@ A Yes becomes a proposal: an agent develops the UX and pushes it, shown loudly a
 
 ### When nobody is listening
 
-Approved work must not wait unseen. An agent says that it listens while it waits (`review work wait`, `review wait`): it checks in every few seconds, and the server knows when it last did. While an agent listens, the page shows nothing about it: there is nothing for you to do.
+Approved work must not wait unseen. An agent says that it listens while it waits (`review work wait`, `review wait`), and the page shows it: a small sign in the bar, with the agent's name when you point at it.
 
-When you approve a proposal, or send marks, and no agent listens, the page says so at once: "Approved. No agent is listening, so nothing will be built yet." The notice stays until you close it or an agent listens. While work waits and no agent has checked in for 15 seconds, the bar of the review page and of the queue says **No agent is listening**, and the tab's title starts with `!`. Point at it to see how to start one. The queue shows how long each item has waited. When an agent does listen, you see one quiet line: "Claude is listening and will take this."
+When you approve a proposal, or send marks, and no agent listens, the page says so at once: "Approved. No agent is listening, so nothing will be built yet." The notice stays until you close it or an agent listens. The sign in the bar turns to a warning, and the tab's title starts with `!`. The queue shows how long each item has waited. When an agent does listen, you see one quiet line: "Claude is listening and will take this."
 
 The notice gives one line to copy for your agent:
 
