@@ -40,6 +40,10 @@ Tell them they can draw and press **Send**. From here you keep the review going 
 
 For a single-screen project, `review project --no-open` can also capture and push the next round. It uses the same review name and screen. Wait for that round in the same session.
 
+Once the first review is open, set up wake as described in the `ideas-and-queue` skill. In Codex Desktop, use the chat's native heartbeat and let the turn end after the first push. Do not register a subprocess or start a blocking wait when the Desktop heartbeat is active.
+
+For sessions without a Desktop heartbeat, keep listening after each round: start `review work wait --by "your name"` as the `ideas-and-queue` skill says, and when it ends, do what it prints. An approved proposal is an instruction to build, not a question.
+
 If a command fails or nothing shows, run `review check` and tell the person what it says.
 
 If `review` is not found, use `node review.mjs` in the Markback folder in its place.
@@ -109,10 +113,12 @@ Every mark is a request. Do not ask whether to act on it: do it, unless it is a 
 
 ### Wait
 
+In Codex Desktop, when the chat's native Markback heartbeat is active, end the turn after a push. The next check reads this review's marks with `review wake poll --app <slug>`. Use the wait below for sessions without the Desktop heartbeat.
+
 After pushing a round, tell the person they can press **Send** or **Looks good**. Then wait for them yourself: they do not have to tell you they have finished, and they never run a command.
 
 ```bash
-review wait --app "My app" --all --timeout 7200
+review wait --app "My app" --all --timeout 7200 --by "your name"
 ```
 
 It ends when they have answered, and prints the answers. How you run it depends on your tool:
@@ -121,6 +127,8 @@ It ends when they have answered, and prints the answers. How you run it depends 
 - **It cannot** (Codex): run it in the foreground and wait for it. If your tool stops the command before they have answered, run it again.
 
 `--all` waits until every queued screen has an answer for its current round. Without `--all`, the first new answer ends the wait. If the command ends with "before the timeout", they have not finished: run it again, unless they asked to stop. Nothing is lost: it gives every answer when the last one comes. If it says the review is set aside, tell the person and stop waiting until they bring it back. Act on each answer once. The review is over when every screen is approved, or when they ask to stop. In a new session, start by reading what is pending.
+
+`--by` names you on the page, which shows the person whether an agent is listening. Do not go idle when this wait is over. After any round, and whenever you would otherwise stop, start `review work wait --by "your name"` in the same way (see the `ideas-and-queue` skill). When it ends, do what it prints: take an approved item and build it without asking, read new marks, answer a request for ideas.
 
 ### Read
 
@@ -188,13 +196,49 @@ review push --app "Order workflow" --screen "1 An order reaches the warehouse" -
 
 ## ideas-and-queue
 
-_Answer the person's requests for improvement ideas and work through their queue in order. Use when asked to watch for idea requests, or to pick up queued work from the review page._
+_Keep listening for work from the review page, take approved items from the queue and build them, and answer requests for ideas. Use after any review round, whenever you would otherwise stop, or when told to take the next item from the Markback queue._
 
-The review page has two pages at /work.html: Ideas and Queue. They read the same files you do. The page cannot think, so requests wait for you.
+The review page has two pages at /work.html: Ideas and Queue. They read the same files you do. The page cannot think, so work waits for you. If you do not listen, approved work is not built and nobody knows.
+
+### Keep listening
+
+If a Codex Desktop heartbeat is active for this review, it handles the marks. For sessions without that heartbeat, start this after any round and whenever you would otherwise stop:
+
+```bash
+review work wait --by "your name"
+```
+
+It ends when there is something for an agent to do. It prints what, and the exact next command: an item in the queue that nobody has taken, a request for ideas, or answers that nobody has read. Run it the way the `read-marks` skill says for `review wait`: in the background where your tool wakes you when a command ends (Claude Code does), in the foreground where it does not (Codex). When it ends, do what it prints, without asking: take the top item and build it, read the marks and act on them, answer the request. Then start it again. If it ends with "before the timeout", run it again.
+
+**An approved proposal is an instruction to build, not a question.** The person approved it on the page. Do not ask them again.
+
+While it runs, the page shows the person that you are listening. When no agent listens and work waits, the page says so, and the person may give you a line such as "Take the next item from the Markback queue and build it" or "Read my marks in Markback and act on them". Then run `review work`, which prints the same list at once, and do what it says.
+
+### Wake
+
+#### Codex Desktop
+
+When automatic pickup is requested, set up a native heartbeat in this chat after the first screenshot is pushed. Use the app's scheduled-task tool to create one active heartbeat in the current chat, with a one-minute interval or the shortest interval the app supports. Reuse an existing Markback heartbeat for this review. Put the actual project folder, app slug, absolute path to the installed review CLI, and any project-specific `REVIEW_HOME` in its prompt. The heartbeat's instructions should say:
+
+> In this project, run the installed Markback CLI's `review wake poll --app <slug>`. If the review is complete, stop this heartbeat and unregister it with `review wake desktop --app <slug> --off`. If wake is off or there are no marks, end quietly. Otherwise open each marked picture, apply its notes and shapes, verify the changes, and push an updated screenshot under the same screen name. Keep the heartbeat in this chat for further rounds.
+
+Once the app confirms the heartbeat is active, run `review wake desktop --app <slug>` from this chat. The person only draws and presses **Send**. End the turn so the heartbeat can run. Do not start `review wait`, `review work wait`, or `codex exec resume` for this review. If the native scheduler is unavailable, report that and use the ordinary foreground review workflow.
+
+#### Claude Code and other command-based agents
+
+The person must never have to start you by hand. Say once, in the project's folder, how the review page's server can start you:
+
+```bash
+review wake set --run "claude -p '{prompt}' --continue" --by "Claude"
+```
+
+That line is for Claude Code: a run with no window that continues the last conversation in that folder. For another tool, give its own command for a run with no window that continues its last session, with `{prompt}` where the words for you go. Read the tool's own help for the real flags, and do not guess them. If you cannot confirm a form, set nothing and tell the person.
+
+When work waits and no agent has listened for a minute, the server runs that command with a fixed prompt, which says to run `review work` and do what it says. It runs one at a time, and not again for the same work within ten minutes. You run with the permissions the person already gave your tool: Markback adds none. Do not put a flag that skips permission prompts in the command. `review wake` shows what is set, and `review wake off` stops it. The person can also turn it off in the page's menu, where the command is shown.
 
 ### Ideas
 
-Wait for a request, in the background:
+`review work wait` ends when a request for ideas comes. To wait only for requests:
 
 ```bash
 review ideas wait --timeout 3600
@@ -210,7 +254,7 @@ One short line for what. One for why. Size is S, M or L. The request closes when
 
 ### Queue
 
-The person sets the order by dragging. Always take the top:
+The person sets the order by dragging. `review work wait` ends when an item is in the queue. Always take the top:
 
 ```bash
 review take --by "your name"
@@ -221,7 +265,7 @@ It prints the item, why it matters, what to do next, and every note. Then:
 - **A proposal:** develop the UX, take screenshots, and push them with `--kind proposal --item <id>`.
 - **Build it:** the person approved the proposal. Build it, and push the real screens with `--kind qa --item <id>`.
 
-Pushing with `--item` moves it to Ready for you. Their answers move it on by themselves: marks send it back to the queue for another round (read them with the `read-marks` skill), and approval takes it onward.
+Pushing with `--item` moves it to Ready for you. Their answers move it on by themselves: marks send it back to the queue for another round (read them with the `read-marks` skill), and approval takes it onward. When they approve a proposal it is back in the queue as Build it: take it and build it at once.
 
 **Read the notes again while you work.** The person may add some at any time:
 

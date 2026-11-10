@@ -147,6 +147,30 @@ button { font-family: inherit; }
 .menu button:hover, .menu button:focus-visible { background: var(--chosen); outline: 0; }
 .menu button:disabled { color: var(--off-ink); cursor: default; background: none; }
 .menu hr { border: 0; border-top: 1px solid var(--rule); margin: 4px 0; }
+.menu-note { padding: 2px 8px 6px; font-size: 12px; color: var(--soft); overflow-wrap: anywhere; }
+.menu-note code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+/* Whether an agent listens: a small steady sign. It says so in words only when work waits and none hears it. */
+.heard-wrap { position: relative; flex: none; margin-right: 4px; }
+.heard-sign { width: auto; min-width: 26px; gap: 5px; padding: 0 5px; font: 600 12px/1 inherit; font-family: inherit; white-space: nowrap; }
+.heard-sign.is-on { color: var(--good); }
+.heard-sign.is-off { color: var(--faint); }
+.heard-sign.is-waking { color: var(--ink); border-color: var(--edge); }
+.heard-sign.is-warn { color: var(--ink); border-color: var(--danger); }
+.heard-sign.is-warn svg { color: var(--danger); }
+/* The notice: under the sign, over the picture, and it stays until it is closed or an agent listens. */
+.heard { position: absolute; right: 0; top: 32px; z-index: 35; width: 400px; max-width: calc(100vw - 16px); padding: 10px 12px 12px; background: var(--ground); border: 1px solid var(--rule-firm); border-radius: 4px; box-shadow: var(--shadow); font-size: 13px; }
+.heard.warn { outline: 1px solid var(--danger); }
+.heard p { margin: 0; font-weight: 600; line-height: 1.4; }
+.heard p.sub { margin-top: 6px; font-weight: 400; color: var(--soft); }
+.heard p.quiet { font-weight: 600; }
+.heard-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.heard-head .tool { margin: -4px -6px 0 0; }
+.heard pre { margin: 4px 0 0; padding: 5px 8px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--side); border: 1px solid var(--rule); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+.copy-line { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.copy-line code { flex: 1 1 0; min-width: 0; padding: 5px 8px; user-select: all; overflow-wrap: anywhere; background: var(--side); border: 1px solid var(--rule); border-radius: var(--r); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+.copy-line .btn { flex: none; height: 26px; padding: 0 9px; font-size: 12px; }
+/* Narrow, the words go, except the warning: that one must be read. */
+@media (max-width: 1240px) { .heard-sign:not(.is-warn) span { display: none; } }
 body.no-screen .marking, body.no-screen .pager { display: none; }
 /* Until a picture is up, nothing to draw with and nothing to view. */
 body.covered .marking, body.covered #views, body.covered #zoomValue, body.covered .pager, body.covered #overall, body.covered #stopHere { display: none !important; }

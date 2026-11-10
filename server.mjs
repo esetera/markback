@@ -11,6 +11,10 @@ import { fileURLToPath } from 'node:url'
 import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
+import { madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
+// Only what reads the wake command and turns it on and off. What sets the command is not imported here, on purpose:
+// nothing a web page can reach may decide what this computer runs.
+import { createWaker, readDesktopWake, switchDesktopWake, switchWake } from './lib/wake.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' }
@@ -70,6 +74,23 @@ function body(req) {
   })
 }
 
+/**
+ * The heartbeat that wakes an agent: about every 20 seconds, the same list `review work` reads. The times can be set for a
+ * test with REVIEW_WAKE_MS="every,quiet,backoff,late,gap" in milliseconds.
+ */
+const [wakeEvery = 20_000, quiet, backoff, late, gap] = (process.env.REVIEW_WAKE_MS ?? '').split(',').filter(Boolean).map(Number)
+const commandWork = apps => standing(apps, { excludeMarksFor: slug => readDesktopWake(slug)?.on === true })
+const waker = createWaker({ look: commandWork, ...(quiet >= 0 ? { quiet } : {}), ...(backoff >= 0 ? { backoff } : {}), ...(late >= 0 ? { late } : {}), ...(gap >= 0 ? { gap } : {}) })
+/** Who listens, what waits unheard, and whether an agent will be woken for it: with every answer the pages poll. */
+const listening = (apps = listApps()) => {
+  const now = standing(apps)
+  const desktop = Object.fromEntries(apps.flatMap(({ slug }) => {
+    const held = readDesktopWake(slug)
+    return held ? [[slug, { on: held.on, pending: now.markApps.includes(slug) }]] : []
+  }))
+  return { agents: now.agents, unheard: now.unheard, wake: waker.view(now.markApps.some(slug => desktop[slug]?.on) ? commandWork(apps) : now), desktop }
+}
+
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
 const hostOf = text => {
   try {
@@ -96,7 +117,10 @@ const server = createServer(async (req, res) => {
   // Only this computer's own pages: another site open in the browser must not write here, or read by renaming itself.
   if (!isLocal(req)) return json(res, 403, { error: 'Only this computer can use this.' })
   try {
-    if (req.method === 'GET' && url.pathname === '/api/queue') return json(res, 200, { apps: listApps() })
+    if (req.method === 'GET' && url.pathname === '/api/queue') {
+      const apps = listApps()
+      return json(res, 200, { apps, listening: listening(apps) })
+    }
     if (req.method === 'GET' && url.pathname.startsWith('/images/')) {
       const path = inside(IMAGES, decodeURIComponent(url.pathname.slice('/images/'.length)))
       // Pushed pictures are never changed in place (a new push makes a new name), so they can be kept.
@@ -122,7 +146,7 @@ const server = createServer(async (req, res) => {
       }
     }
     if (req.method === 'POST' && url.pathname === '/api/sample') return json(res, 200, { appSlug: pushSample().appSlug })
-    if (req.method === 'GET' && url.pathname === '/api/work') return json(res, 200, { items: listWork(), requests: listRequests() })
+    if (req.method === 'GET' && url.pathname === '/api/work') return json(res, 200, { items: listWork(), requests: listRequests(), listening: listening() })
     if (req.method === 'POST' && url.pathname.startsWith('/api/work/')) {
       const input = JSON.parse(await body(req))
       const action = url.pathname.slice('/api/work/'.length)
@@ -134,6 +158,14 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { ok: true })
       }
       return json(res, 404, { error: 'Not found' })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/wake') {
+      // On or off, and nothing else: whatever else is sent is not read. The command comes only from `review wake set`.
+      const input = JSON.parse(await body(req))
+      if (typeof input.on !== 'boolean') return json(res, 400, { error: 'Say on or off.' })
+      const changed = typeof input.app === 'string' ? switchDesktopWake(input.app, input.on) : switchWake(input.on)
+      if (!changed) return json(res, 404, { error: 'Wake is not set up for this review.' })
+      return json(res, 200, { ok: true, listening: listening() })
     }
     if (req.method === 'POST' && url.pathname === '/api/set-aside') {
       const input = JSON.parse(await body(req))
@@ -157,9 +189,10 @@ const server = createServer(async (req, res) => {
         round: Number(input.round) || null,
       })
       if (!record) return json(res, 200, { ok: true, olderPicture: true })
-      answered(record)
+      const stageBefore = record.item ? listWork().find(i => i.id === record.item)?.stage : null
+      const made = madeBy(record, stageBefore, answered(record))
       console.log(`received ${record.app} / ${record.screen}${record.mode ? ` (${record.mode})` : ''}: ${record.verdict}, ${record.shapes.length} marks`)
-      return json(res, 200, { ok: true, record })
+      return json(res, 200, { ok: true, record, ...(made ? { made } : {}), listening: listening() })
     }
     if (req.method === 'GET') {
       const path = inside(PUBLIC, url.pathname === '/' ? 'index.html' : url.pathname)
@@ -177,4 +210,26 @@ server.on('error', error => {
   process.exit(1)
 })
 // This computer only: nothing here is reachable from another machine.
-server.listen(PORT, '127.0.0.1', () => console.log(`Markback on http://localhost:${PORT}`))
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`Markback on http://localhost:${PORT}`)
+  const beat = () => {
+    try {
+      // Said first, so a hook knows the page runs even when a look below fails.
+      serverBeat(PORT)
+      waker.check()
+    } catch (error) {
+      console.error(`wake: ${error.message}`)
+    }
+  }
+  // The first look also notes which answers were already here, so only later ones count as unread.
+  beat()
+  try {
+    standing()
+  } catch {
+    // The pages ask again.
+  }
+  setInterval(beat, wakeEvery)
+})
+// Stopped, it must not look as if it runs: the hooks ask before they hold an agent back.
+process.on('exit', serverGone)
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => process.exit(0))
