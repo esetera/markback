@@ -257,6 +257,7 @@ review wait --app MyApp --all     # blocks until every screen is answered, then 
 review wait --app MyApp           # returns as soon as one screen is answered
 review read --app MyApp --latest  # what was said, newest per screen; --json for raw
 review list                        # what is queued and its status
+review work wait --by "Claude"     # blocks until anything waits for an agent, on any app or in the queue
 review clear --app MyApp          # take the app off the page (feedback stays)
 ```
 
@@ -300,6 +301,47 @@ Press **W** for a second page. **Ideas:** say what for and how many, and press G
 **Queue:** Queued, In progress, Ready for you, Done. Each item says who has it. Drag to set the order, or use ⇧↑ and ⇧↓; agents take the top one first. Press N to add a note, typed or spoken; agents read notes while they work.
 
 A Yes becomes a proposal: an agent develops the UX and pushes it, shown loudly as **Proposal**. Marks start another round. Your approval moves it to **Build it**, and what gets built comes back for checking as **QA**. For the commands, run `review` or see the skills.
+
+### When nobody is listening
+
+Approved work must not wait unseen. An agent says that it listens while it waits (`review work wait`, `review wait`): it checks in every few seconds, and the server knows when it last did. While an agent listens, the page shows nothing about it: there is nothing for you to do.
+
+When you approve a proposal, or send marks, and no agent listens, the page says so at once: "Approved. No agent is listening, so nothing will be built yet." The notice stays until you close it or an agent listens. While work waits and no agent has checked in for 15 seconds, the bar of the review page and of the queue says **No agent is listening**, and the tab's title starts with `!`. Point at it to see how to start one. The queue shows how long each item has waited. When an agent does listen, you see one quiet line: "Claude is listening and will take this."
+
+The notice gives one line to copy for your agent:
+
+```
+Take the next item from the Markback queue and build it.
+```
+
+For an agent: `review work` prints all that waits (queued items, requests for ideas, answers nobody has read) with the next command for each. `review work wait --by "Claude"` blocks until there is something.
+
+### Markback wakes your agent
+
+In **Codex Desktop**, ask Codex to set up automatic Markback pickup in the chat. Codex starts Markback as part of opening the review and sets up a scheduled check in that chat. After you press **Send**, the next check reads the marks and Codex pushes the revised screen. Keep the desktop app open while reviewing. The review menu can turn pickup off for this review.
+
+#### Claude Code and other command-based agents
+
+You should not have to give that line. Your agent says once how to start it, and the review page's server does the rest:
+
+```bash
+review wake set --run "claude -p '{prompt}' --continue" --by "Claude"
+```
+
+The skills tell the agent to run this itself during setup, in your project's folder. About every 20 seconds the server looks at the same list as `review work`. When work waits and no agent has listened for a minute, it runs the command in that folder, with `{prompt}` replaced by a fixed prompt that says to run `review work` and do what it says. It runs one at a time, rests 30 seconds after each run, and does not run again for the same work within ten minutes. What the run prints goes to `~/.review-wizard/work/wake.log`. The page says "Waking your agent…", then that it listens. If the run fails, the page says so, with the last line of the log and the line to copy.
+
+- The command is set only from the command line. The page can turn wake on and off (menu: **Wake my agent when work waits**) and shows the exact command. It cannot set or change the command, and neither can anything else that reaches the server.
+- The woken agent runs with the permissions you already gave that tool. Markback adds none, and passes no flag that skips permission prompts.
+- `review wake` shows what is set. `review wake off`, `review wake on` and `review wake clear` change it.
+- The line above is for Claude Code (a run with no window that continues the last conversation in the folder). For another command-based tool, use its own command of that kind.
+
+### Claude Code hooks
+
+The Claude Code plugin has two hooks. When Claude is about to stop in a project that uses Markback, the Stop hook looks at what waits: if there is work for an agent, Claude is told to take it and does not stop; if nothing waits and no `review work wait` runs, Claude is told once to start one. When a session starts, Claude is told what waits. In a project that does not use Markback (no `review project`, `review push` or `review wake set` was run in its folder), the hooks do nothing. To turn them off, set `MARKBACK_HOOKS=off` in the environment, for example under `env` in your Claude Code settings.
+
+The hooks are quick: they read a few small files and ask no server. They never hold Claude back while the review page is not running. They cannot loop: they never hold Claude twice for the same reason, hold it again only when the next item waits, stop after ten holds in a row, and let it stop once the queue is empty.
+
+Using Claude Code without the plugin? Put the same hooks in a project's `.claude/settings.json` with `review install-skills --hooks <project folder>`, or in your own settings, for every project, with `--hooks ~`. Your other settings and hooks are kept.
 
 ## Keeping it working
 
