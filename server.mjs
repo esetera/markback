@@ -100,9 +100,10 @@ const server = createServer(async (req, res) => {
     // `reader`: whether this computer can read words off a picture, so the page shows the words tool only where it can work.
     if (req.method === 'GET' && url.pathname === '/api/queue') return json(res, 200, { apps: listApps(), reader: hasReader() })
     if (req.method === 'POST' && url.pathname === '/api/read-words') {
-      // A picture pushed with no word list: its words are read here, once, and the list is kept beside it.
+      // A picture pushed with no word list: its words are read here, once, and the list is kept beside it. The answer comes at
+      // once, reading or not, so a read never holds one of the few connections a browser opens to a server.
       const input = JSON.parse(await body(req))
-      return json(res, 200, await wordsForPicture(String(input.after ?? '')))
+      return json(res, 200, wordsForPicture(String(input.after ?? '')))
     }
     if (req.method === 'GET' && url.pathname.startsWith('/images/')) {
       const path = inside(IMAGES, decodeURIComponent(url.pathname.slice('/images/'.length)))

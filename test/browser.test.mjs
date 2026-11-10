@@ -2037,6 +2037,27 @@ test('a bare picture gets its words read on this computer: the tool says it is r
   assert.deepEqual(errors, [])
 })
 
+test('a slow reader never slows the review: through ten bare screens, the picture on show comes and marks go at once', { skip }, async () => {
+  // Each read takes four seconds: ten of them would hold every connection the browser has, if asking waited on them.
+  const r = await rig({ reader: [{ w: 1600, h: 900 }, [{ t: 'Hello', x: 100, y: 100, w: 100, h: 30 }], { wait: 4000 }] })
+  const shots = Array.from({ length: 10 }, (_, n) => `S${n}`)
+  r.push('Slow', shots, null)
+  const { page, errors } = await r.open('slow')
+  for (let n = 1; n < shots.length; n++) {
+    await page.keyboard.press('ArrowRight')
+    // Each picture shows as soon as it is the one on show.
+    await page.waitForFunction(id => document.getElementById('afterImg').src.includes(`/${id}-after-`), `s${n}`, { timeout: 1500 })
+  }
+  const started = Date.now()
+  await page.keyboard.press('b')
+  await draw(page, 0.2, 0.2, 0.4, 0.4)
+  await page.keyboard.press('Meta+Enter')
+  const sent = await waitFor(() => r.read('Slow').find(x => x.screenId === 's9'))
+  assert.ok(Date.now() - started < 2500, `sent after ${Date.now() - started} ms`)
+  assert.equal(sent.shapes[0].type, 'box')
+  assert.deepEqual(errors, [])
+})
+
 test('a phrase half heard when its pin ends stays with that pin, and its end lands nowhere else', { skip }, async () => {
   const r = await rig()
   r.push('Half', ['A', 'B'], null)

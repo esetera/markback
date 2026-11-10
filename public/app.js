@@ -1331,22 +1331,32 @@ function loadWords(name) {
     if (listOf(screen()) === name) render()
   })
 }
-/** A picture pushed with no list: the server reads its words, here on this computer, and the list lands when it is ready. */
+/**
+ * A picture pushed with no list: the server reads its words, here on this computer. It answers at once, so asking never holds a
+ * connection the pictures and answers need. While it is reading, the page asks again a moment later, for as long as that
+ * picture is on show. A picture moved past is not asked about again, and the server lets it go.
+ */
+let readTimer = null
 function readWordsOf(s) {
-  if (s.words || !state.reader || readLists.has(s.after)) return
-  readLists.set(s.after, { state: 'reading' })
+  clearTimeout(readTimer)
+  const known = readLists.get(s.after)
+  if (s.words || !state.reader || (known && known.state !== 'reading')) return
+  if (!known) readLists.set(s.after, { state: 'reading' })
+  const again = () => {
+    readTimer = setTimeout(() => {
+      if (screen()?.after === s.after) readWordsOf(screen())
+    }, 900)
+  }
   fetch('/api/read-words', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ after: s.after }) })
     .then(res => res.json())
     .then(out => {
+      if (out.reading) return again()
       readLists.set(s.after, out.words ? { state: 'done', words: out.words } : { state: out.why || 'failed' })
       loadWords(out.words)
       if (screen()?.after === s.after) render()
     })
-    .catch(() => {
-      // The server away: asked again when the picture is next on show.
-      readLists.delete(s.after)
-      if (screen()?.after === s.after) render()
-    })
+    // The server away for now: asked again while the picture is on show.
+    .catch(again)
 }
 /** The word a point is on, or the nearest one. Words are in reading order, so two of them name everything between. */
 function wordAt(words, [x, y], { near = false } = {}) {
