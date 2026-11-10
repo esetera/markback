@@ -264,6 +264,9 @@ async function loadQueue() {
   // What has come in since the last look: a new screen, or a new picture of one. Not on the first load, and not what is set aside.
   const had = new Map(state.apps.flatMap(a => a.screens.map(s => [`${a.slug}/${s.id}`, s.after])))
   const fresh = wasLoaded ? apps.filter(a => !a.setAside).flatMap(a => a.screens.filter(s => s.status === 'waiting' && had.get(`${a.slug}/${s.id}`) !== s.after).map(s => ({ app: a.name, screen: s.screen }))) : []
+  // Readings of marks that came since the last look: what the agent understood, said back before it builds.
+  const readBefore = new Map(state.apps.flatMap(a => a.screens.map(s => [`${a.slug}/${s.id}`, s.inferred?.posted ?? ''])))
+  const readNow = wasLoaded ? apps.flatMap(a => a.screens.filter(s => s.inferred?.posted && s.inferred.posted !== readBefore.get(`${a.slug}/${s.id}`))) : []
   state.apps = apps
   const first = !app()
   if (first) {
@@ -302,6 +305,9 @@ async function loadQueue() {
   render()
   if (notice) toast(notice)
   if (fresh.length) announce(fresh, !notice)
+  // On show, the lines are there to see. Anywhere else, a line says so, with a press to go and look.
+  const elsewhere = readNow.filter(s => !(screen()?.appSlug === s.appSlug && screen()?.id === s.id))
+  if (elsewhere.length && !notice && !fresh.length && !state.arriving) toast(`${elsewhere[0].inferred.from || 'Claude'} said what it read on ${label(elsewhere[0])}`, elsewhere.length > 1 ? `And on ${elsewhere.length - 1} more` : 'A line beside each mark: yes, or say what you meant', { look: `${elsewhere[0].appSlug}/${elsewhere[0].id}` })
 }
 
 /* ---------- something new to review: said in the tab's title always, and by a sound and a notice unless turned off ---------- */
@@ -549,6 +555,8 @@ function renderAnswers(a, s) {
   const records = histories.get(historyKey(s))
   const standing = standingAnswer(records, s.round)
   if (!records) void loadHistory(s)
+  // A reading came, or was answered: what was said is the same, so only that is asked for again.
+  else if ((readingsAt.get(historyKey(s)) ?? '') !== (s.inferred?.changed ?? '')) void loadHistory(s, true)
   // Sent with the set with nothing said: its words are the wizard's, not the reviewer's.
   const said = r => (r.notes && !r.noComment ? `<div class="prose">${esc(r.notes)}</div>` : '')
   setHtml($('yourAnswer'), standing ? `<h3>Your answer</h3><div class="round"><div class="rh"><i class="mk ${standing.verdict === 'approved' ? 'approved' : 'sent'}"></i>${esc(answerWords(standing))}<time>${esc(when(standing.sentAt))}</time></div>${said(standing)}${standing.annotatedUrl ? '<div class="prose small">Drawn on the picture.</div>' : ''}</div>` : '')
@@ -876,10 +884,13 @@ function renderAbout(a, s) {
 }
 
 const historyKey = s => `${s.appSlug}/${s.id}/${s.feedback?.length ?? 0}`
-async function loadHistory(s) {
+/** When the readings on each history were last asked for. Asked for again, the old one stays in view until the new one comes. */
+const readingsAt = new Map()
+async function loadHistory(s, again = false) {
   const key = historyKey(s)
-  if (histories.has(key)) return
-  histories.set(key, null)
+  if (histories.has(key) && !again) return
+  if (!again) histories.set(key, null)
+  readingsAt.set(key, s.inferred?.changed ?? '')
   try {
     const res = await fetch(`/api/history?app=${encodeURIComponent(s.appSlug)}&id=${encodeURIComponent(s.id)}`, { cache: 'no-store' })
     const { records } = await res.json()
@@ -1176,6 +1187,7 @@ function render() {
     growNotes()
   }
   showSentMarks(s)
+  renderReadings(s)
   updateButtons()
   paint()
   preloadAround(a)
@@ -1256,6 +1268,7 @@ function showPicture(s) {
     // A tall picture scrolls: a new one starts at its top, not where the last was left.
     $('scroller').scrollTop = 0
     paint()
+    renderReadings(s)
   }
   loadWords(s)
   const url = `/images/${s.after}`
@@ -1405,6 +1418,101 @@ function showSentMarks(s) {
   img.src = url
 }
 
+/* ---------- what the agent read each mark to mean: one line beside each sent mark, and a yes or a few words back ---------- */
+
+/** The reading whose words box is open, as `answer|n`. Only one at a time. */
+let correcting = ''
+function renderReadings(s) {
+  const standing = standingAnswer(histories.get(historyKey(s)), s.round)
+  const size = state.size
+  // Only on the answer standing for this picture, and only once the picture is there to place them on.
+  const readings = standing?.verdict === 'changes' && size && state.shownKey === keyOf(s) + s.after ? [...(standing.readings ?? [])].sort((x, y) => x.box.y - y.box.y) : []
+  if (!readings.some(r => `${standing.answer}|${r.n}` === correcting)) correcting = ''
+  const from = r => esc(r.from || 'Claude')
+  const html = readings.map(r => {
+    const key = `${standing.answer}|${r.n}`
+    // Beside the mark on its right, or on its left when the right has no room.
+    const left = (r.box.x + r.box.w) / size.w > 0.7
+    const x = ((left ? r.box.x : r.box.x + r.box.w) / size.w) * 100
+    const y = (Math.max(0, r.box.y) / size.h) * 100
+    const yes = !!r.reply?.yes
+    const corrected = !yes && !!r.reply?.text
+    const body = correcting === key
+      ? `<span class="rt">${esc(r.text)}</span><input data-correct value="${esc(r.reply?.text ?? '')}" placeholder="What you meant, then Enter" maxlength="300" aria-label="What you meant by mark ${r.n}">`
+      : yes ? `<span class="rt">${esc(r.text)}</span><span class="rs">${ICONS.check}Yes</span><button class="link" data-no>Change</button>`
+        : corrected ? `<span class="rt">${esc(r.text)}</span><span class="rc">${esc(r.reply.text)}</span><button class="link" data-no>Change</button>`
+          : `<span class="rt"><span class="rf">${from(r)} read:</span>${esc(r.text)}</span><button data-yes>Yes, that</button><button data-no>No</button>`
+    return `<div class="reading${left ? ' left' : ''}${yes || corrected ? ' answered' : ''}${corrected ? ' corrected' : ''}" data-reading="${esc(key)}" style="left:${x.toFixed(3)}%;top:${y.toFixed(3)}%" title="What ${from(r)} read mark ${r.n} to mean"><span class="rn">${r.n}</span>${body}</div>`
+  }).join('')
+  // Come to look: the line that said they had come has done its work.
+  if (readings.length && $('toast').querySelector(`[data-look-at="${CSS.escape(`${s.appSlug}/${s.id}`)}"]`)) hideToast()
+  if ($('readings')._html === html) return
+  const typing = $('readings').querySelector('[data-correct]')
+  setHtml($('readings'), html)
+  placeReadings()
+  // Opened just now: the words go straight in.
+  if (!typing) $('readings').querySelector('[data-correct]')?.focus()
+}
+/** Lines that would sit on each other are moved down until they do not, or up when down would take one off the picture. */
+function placeReadings() {
+  const bottom = $('stage').getBoundingClientRect().bottom
+  const placed = []
+  const hits = r => placed.find(p => r.left < p.right && r.right > p.left && r.top < p.bottom && r.bottom > p.top)
+  const shift = (card, by) => {
+    card.style.marginTop = `${(parseFloat(card.style.marginTop) || 0) + by}px`
+    return card.getBoundingClientRect()
+  }
+  for (const card of $('readings').children) {
+    card.style.marginTop = ''
+    let r = card.getBoundingClientRect()
+    for (let p = hits(r); p; p = hits(r)) r = shift(card, p.bottom - r.top + 4)
+    if (r.bottom > bottom) {
+      card.style.marginTop = ''
+      r = card.getBoundingClientRect()
+      for (let p = hits(r); p; p = hits(r)) r = shift(card, p.top - r.bottom - 4)
+    }
+    placed.push(r)
+  }
+}
+/** Yes, or a few words back. It shows at once; if the server does not take it, it goes back and says so. */
+async function sayBack(s, key, said) {
+  const [answer, n] = [key.slice(0, key.lastIndexOf('|')), Number(key.slice(key.lastIndexOf('|') + 1))]
+  const reading = histories.get(historyKey(s))?.find(r => r.answer === answer)?.readings?.find(r => r.n === n)
+  const before = reading?.reply ?? null
+  if (reading) reading.reply = said.yes ? { yes: true } : { text: said.text }
+  correcting = ''
+  renderReadings(s)
+  try {
+    const res = await fetch('/api/reading', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: s.appSlug, id: s.id, answer, n, ...said }) })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'The server did not take it.')
+  } catch (error) {
+    if (reading) reading.reply = before
+    if (screen() === s) renderReadings(s)
+    toast('What you said back did not go', error.message === 'Failed to fetch' ? 'The server is not answering. Say it again when it is back.' : error.message, { problem: true })
+  }
+}
+$('readings').addEventListener('click', event => {
+  const card = event.target.closest('[data-reading]')
+  const s = screen()
+  if (!card || !s) return
+  if (event.target.closest('[data-yes]')) void sayBack(s, card.dataset.reading, { yes: true })
+  else if (event.target.closest('[data-no]')) {
+    correcting = card.dataset.reading
+    renderReadings(s)
+  }
+})
+$('readings').addEventListener('keydown', event => {
+  const input = event.target.closest('[data-correct]')
+  if (!input) return
+  // The keys are for the words: G, N or cmd-Enter here must not answer the screen.
+  event.stopPropagation()
+  const s = screen()
+  if (event.key === 'Escape' || (event.key === 'Enter' && !input.value.trim())) {
+    correcting = ''
+    if (s) renderReadings(s)
+  } else if (event.key === 'Enter' && s) void sayBack(s, input.closest('[data-reading]').dataset.reading, { text: input.value.trim() })
+})
+
 function updateButtons() {
   const a = app()
   const s = screen()
@@ -1449,6 +1557,7 @@ function applyZoom() {
   }
   $('zoomValue').hidden = state.fitted
   $('zoomValue').textContent = `${Math.round(state.zoom * 100)}%`
+  placeReadings()
 }
 /**
  * What to check goes beside the picture when a fitted picture leaves room there. It never makes the picture smaller: the room
@@ -2077,8 +2186,8 @@ function hideToast() {
   $('toast').hidden = true
   $('toast').classList.remove('fading')
 }
-function toast(text, sub = '', { undo = false, problem = false } = {}) {
-  setHtml($('toast'), `<span>${esc(text)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${undo ? '<button class="link" data-undo>Undo</button>' : ''}`)
+function toast(text, sub = '', { undo = false, problem = false, look = '' } = {}) {
+  setHtml($('toast'), `<span>${esc(text)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${undo ? '<button class="link" data-undo>Undo</button>' : ''}${look ? `<button class="link" data-look-at="${esc(look)}">Look</button>` : ''}`)
   $('toast').classList.remove('fading')
   $('toast').classList.toggle('problem', problem)
   $('toast').hidden = false
@@ -2087,10 +2196,17 @@ function toast(text, sub = '', { undo = false, problem = false } = {}) {
   toastTimer = setTimeout(() => {
     $('toast').classList.add('fading')
     toastTimer = setTimeout(hideToast, 200)
-  }, undo ? UNDO_MS - 200 : 3000)
+  }, undo ? UNDO_MS - 200 : look ? 8000 : 3000)
 }
 $('toast').onclick = event => {
-  if (event.target.closest('[data-undo]')) undoAnswer()
+  const look = event.target.closest('[data-look-at]')?.dataset.lookAt
+  if (look) {
+    const [slug, id] = look.split('/')
+    hideToast()
+    if (slug !== state.appSlug) pickApp(slug)
+    const at = app()?.screens.findIndex(s => s.id === id) ?? -1
+    if (at >= 0) go(at)
+  } else if (event.target.closest('[data-undo]')) undoAnswer()
   else if ($('toast').classList.contains('problem')) hideToast()
 }
 

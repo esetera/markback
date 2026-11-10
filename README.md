@@ -258,6 +258,7 @@ review wait --app MyApp           # returns as soon as one screen is answered
 review read --app MyApp --latest  # what was said, newest per screen; --json for raw
 review list                        # what is queued and its status
 review clear --app MyApp          # take the app off the page (feedback stays)
+review inferred --app MyApp --screen Home --mode light --mark 1 --text "Make Book the main button"
 ```
 
 Inbox: `~/.review-wizard/inbox/<app>/<screen>-<mode>-<time>.{png,json}`. The JSON:
@@ -289,6 +290,18 @@ When the picture came with its words, a mark has `"words"`, as one line, 200 wor
 Every `box` is in the after picture's own pixels. `verdict` is `changes` or `approved` (approved has no shapes and no
 annotated image). A screen sent with the set with nothing on it is `approved` with `"notes": "No comment."` and an extra
 `"noComment": true`: it counts as Looks good, and the flag keeps it apart from a Looks good pressed on that screen.
+
+### Show what it inferred
+
+A mark can be read more than one way. Before it builds, the agent says back what it took each mark to mean, one short line a mark, so a wrong reading is caught early:
+
+```
+review inferred --app MyApp --screen Home --mode light --mark 2 --text "Ask for the plot size beside Postcode"
+```
+
+`--mark` is the mark's number as `review read` gives it. Said again, it replaces the first. On the review page, each line stands beside its mark on the picture, with **Yes, that** and **No**. No opens a box for a few words of your own; Enter sends them. Nothing waits on you: the agent goes on working, and a screen with no readings looks as it always did. When the agent said what it read on a screen you are not on, a line at the foot says so, with **Look**.
+
+`review read` gives each line under its mark, with what you said back: `Read as: "…". They corrected it: "…"`, or `They said: yes, that.`, or `Not answered yet.` In the JSON, the answer has `inferred`: `[{ "n": 2, "text": "…", "from": "Claude", "reply": { "yes": true } }]`, where a correction is `"reply": { "text": "…" }`. `review wait` without `--all` also ends when you answer a reading. The readings are kept in `~/.review-wizard/inferred/<app>/<screen>.json`, apart from the inbox.
 
 The page also reads `GET /api/history?app=<app>&id=<screen id>` (earlier answers for one screen) and
 `GET /inbox/<app>/<file>.png` (the marked pictures). Both only read.

@@ -200,6 +200,21 @@ body.covered .marking, body.covered #views, body.covered #zoomValue, body.covere
 .pin-glow::after { animation: pin-glow 1.4s ease-out infinite; }
 @keyframes pin-glow { from { transform: scale(0.8); opacity: 0.6; } to { transform: scale(1.9); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .pin-glow::after { animation: none; transform: scale(1.4); opacity: 0.3; } }
+/* What the agent read each mark to mean: one line beside the mark, over the picture and never in what is sent. */
+.readings { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.reading { position: absolute; display: flex; align-items: center; gap: 6px; width: max-content; max-width: 340px; padding: 4px 6px 4px 4px; transform: translateX(8px); pointer-events: auto; background: var(--ground); color: var(--ink); border: 1px solid var(--edge); border-radius: var(--r); box-shadow: var(--sheet-lift); font-size: 12.5px; line-height: 17px; }
+.reading.left { transform: translateX(calc(-100% - 8px)); }
+.reading .rn { flex: none; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 2px; background: var(--ink); color: var(--ground); font-weight: 700; font-size: 11px; line-height: 18px; text-align: center; }
+.reading .rt { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.reading .rf { color: var(--faint); margin-right: 4px; }
+.reading.answered { color: var(--soft); }
+.reading.answered.corrected .rt { text-decoration: line-through; color: var(--faint); }
+.reading .rc { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.reading .rs { flex: none; display: inline-flex; align-items: center; gap: 2px; color: var(--good); font-weight: 600; }
+.reading .rs svg { width: 13px; height: 13px; }
+.reading button { flex: none; height: 22px; padding: 0 7px; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink); background: linear-gradient(var(--btn-top), var(--btn-bottom)); border: 1px solid var(--edge); border-radius: 2px; cursor: pointer; }
+.reading button.link { height: auto; padding: 0; border: 0; background: none; font-weight: 400; color: var(--soft); text-decoration: underline; text-underline-offset: 2px; }
+.reading input { flex: 1 1 auto; min-width: 220px; height: 24px; padding: 2px 6px; font: inherit; border: 1px solid var(--accent); border-radius: 2px; background: var(--ground); color: var(--ink); outline: none; }
 .tool.unlit { opacity: 0.45; }
 .text-entry { position: absolute; z-index: 3; min-width: 180px; padding: 3px 5px; border: 1px solid var(--accent); border-radius: 2px; background: #fff; font: 600 16px -apple-system, system-ui, sans-serif; outline: none; }
 
