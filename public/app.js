@@ -206,14 +206,26 @@ const saveDraft = s => {
 /** What this screen's draft would send: 'changes', 'approved', or null when nothing is on it yet. */
 function verdictOf(s) {
   const d = draftOf(s)
-  // Any word on an earlier mark is an answer: the ones not ticked are still to do.
-  if (d.marks.some(isReal) || d.notes.trim() || Object.keys(d.said).length) return 'changes'
+  if (marksOrNotes(d)) return 'changes'
+  // Ticks alone: every earlier mark fixed is a Looks good; one left or said to stand is a change asked for.
+  if (Object.keys(d.said).length) return allFixed(s) ? 'approved' : 'changes'
   return d.good ? 'approved' : null
+}
+const marksOrNotes = d => d.marks.some(isReal) || !!d.notes.trim()
+/** Only ticks on it: no marks, no notes. */
+const ticksOnly = d => !marksOrNotes(d) && Object.keys(d.said).length > 0
+/** Every earlier mark still asked for is ticked fixed, and none is said to stand or to have come back. */
+function allFixed(s) {
+  const said = saidOf(s)
+  return askedOf(s).open.every(a => said[a.n] === 'fixed') && !Object.values(said).includes('stands')
 }
 /** An earlier mark said to still stand is something to send, as a mark is, and so is a word said before and taken back (null). */
 const stands = d => Object.values(d.said).some(word => word === 'stands' || word === null)
-/** Something is on it to go by itself. Marks that cannot be trusted to this picture wait to be looked at. */
-const saysAnswer = s => !!verdictOf(s) && !draftOf(s).unsure
+/**
+ * Something is on it to go by itself. Marks that cannot be trusted to this picture wait to be looked at. Ticks alone that
+ * leave some earlier mark unticked or standing wait for Send: moving on keeps them, and the screen still waits.
+ */
+const saysAnswer = s => !!verdictOf(s) && !draftOf(s).unsure && !(ticksOnly(draftOf(s)) && verdictOf(s) !== 'approved')
 const waitingOf = a => (a ? a.screens.filter(s => s.status === 'waiting') : [])
 /** What the page will offer next by itself: something to answer, and not set aside. */
 const offered = a => openOf(a).length > 0 && !a.setAside
@@ -903,7 +915,7 @@ function renderFoot(a, s) {
   const v = s ? verdictOf(s) : null
   const good = s && draftOf(s).good && v === 'approved'
   const off = !s ? ' disabled' : ''
-  setHtml($('footActions'), `<button class="btn${good ? ' good-on' : ''}" data-act="good"${off} ${tip(good ? 'Looking good; press to take it back' : 'Looks good, and on to the next', 'G')}>${good ? ICONS.check : ''}Looks good</button><button class="btn primary" data-act="send"${v !== 'changes' ? ' disabled' : ''} ${tip('Send your marks and notes, and on to the next', '⌘↩')}>Send</button>`)
+  setHtml($('footActions'), `<button class="btn${good ? ' good-on' : ''}" data-act="good"${off} ${tip(good ? 'Looking good; press to take it back' : 'Looks good, and on to the next', 'G')}>${good ? ICONS.check : ''}Looks good</button><button class="btn primary" data-act="send"${v !== 'changes' && !(v === 'approved' && s && ticksOnly(draftOf(s))) ? ' disabled' : ''} ${tip('Send your marks and notes, and on to the next', '⌘↩')}>Send</button>`)
 }
 
 /* ---------- a change of review: unmissable, and it waits for a press ---------- */
@@ -1446,7 +1458,8 @@ function standingSaid(s) {
 function saidOf(s) {
   const d = draftOf(s)
   const standing = standingAnswer(histories.get(historyKey(s)), s.round)
-  const passed = standing?.verdict === 'approved' && !standing.noComment && !verdictOf(s)
+  // Passed with Looks good, here or already sent, and nothing new on it: every one is fixed.
+  const passed = (d.good || (standing?.verdict === 'approved' && !standing.noComment)) && !marksOrNotes(d) && !Object.keys(d.said).length
   const all = passed ? Object.fromEntries(askedOf(s).open.map(a => [a.n, 'fixed'])) : standingSaid(s)
   // A word taken back here is null: it hides the one said before.
   return Object.fromEntries(Object.entries({ ...all, ...d.said }).filter(([, word]) => word))
@@ -1614,6 +1627,8 @@ function updateButtons() {
   $('undo').disabled = !d.undo.length
   $('redo').disabled = !d.redo.length
   $('clear').disabled = !d.marks.length
+  // What Send will say of the earlier marks can change with any mark or note: the list always shows it.
+  renderAsked(s)
   renderFoot(a, s)
 }
 
@@ -1894,8 +1909,8 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
     shapes: marks.map(m => (isWords(m) ? wordsShape(m) : isPin(m) ? pinShape(m, wide) : shapeOf(m, ctx))),
     imageSize: size,
     png,
-    // A Looks good ticks every earlier mark fixed: the server says so for it.
-    said: verdict === 'approved' ? {} : said,
+    // A Looks good ticks every earlier mark fixed, which the server says for it; a held one ticked still fixed is told too.
+    said,
   }
   if (noComment) body.noComment = true
   const res = await fetch('/api/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {
@@ -2678,6 +2693,7 @@ $('notes').addEventListener('input', () => {
   if (d.notes.trim()) d.good = false
   saveDraft(s)
   updateButtons()
+  paint()
   if (before !== verdictOf(s)) refreshLists()
 })
 $('scroller').addEventListener('wheel', event => {

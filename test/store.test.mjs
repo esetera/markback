@@ -350,3 +350,24 @@ test('an arrow keeps its from and to, a pin its spot, and read gives no empty co
   const third = push({ app: 'Shapes', screen: 'One', after: picture })
   assert.ok(third.lastAfter, 'the last round\'s picture, to compare a held one with when there is no before')
 })
+
+test('ticks alone: all fixed is a Looks good, some left is changes with each word, and a held one ticked still fixed is told', () => {
+  const env = { ...process.env, REVIEW_HOME: home }
+  push({ app: 'Only ticks', screen: 'One', after: picture })
+  receive({ appSlug: 'only-ticks', id: 'one', png: null, shapes: [box(1), box(2)], notes: '', verdict: 'changes', imageSize: null })
+  push({ app: 'Only ticks', screen: 'One', after: picture })
+  const some = receive({ appSlug: 'only-ticks', id: 'one', png: null, shapes: [], notes: '', verdict: 'changes', imageSize: null, said: { 1: 'fixed' } })
+  assert.equal(some.verdict, 'changes')
+  assert.deepEqual(some.asked.map(a => [a.n, a.said]), [[1, 'fixed'], [2, null]])
+  later()
+  const all = receive({ appSlug: 'only-ticks', id: 'one', png: null, shapes: [], notes: '', verdict: 'changes', imageSize: null, said: { 2: 'fixed' } })
+  assert.equal(all.verdict, 'approved', 'every one fixed and nothing else: a Looks good')
+  assert.equal(listScreens('only-ticks')[0].status, 'approved')
+  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Only ticks', '--latest'], { env, encoding: 'utf8' }), /round 2: LOOKS GOOD\n\s+Earlier marks: 2 of 2 ticked fixed/)
+  // Round 3: both held. "Still fixed" on one is told, and alone it is a Looks good.
+  push({ app: 'Only ticks', screen: 'One', after: picture })
+  const still = receive({ appSlug: 'only-ticks', id: 'one', png: null, shapes: [], notes: '', verdict: 'changes', imageSize: null, said: { 1: 'fixed' } })
+  assert.equal(still.verdict, 'approved')
+  assert.deepEqual(still.asked.map(a => [a.n, a.said, a.fixedIn]), [[1, 'fixed', 2]])
+  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Only ticks', '--latest'], { env, encoding: 'utf8' }), /1\. still fixed \(fixed in round 2\)/)
+})
