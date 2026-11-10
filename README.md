@@ -23,7 +23,7 @@ The first two are your own agent's work, such as Claude Code or Codex: it builds
 
 ## Start with your project
 
-You need [Node](https://nodejs.org) 22.6 or later. Markback uses Chrome or Edge for screenshots, or downloads a local screenshot browser on first use inside Codex's macOS sandbox.
+You need [Node](https://nodejs.org) 22.6 or later. Markback uses Chrome or Edge for screenshots. Inside Codex's macOS sandbox it needs a small browser of its own, fetched once: your agent asks you before it fetches it.
 
 ### Start from chat
 
@@ -119,7 +119,7 @@ Run it again after you update Markback. To put it in one project only, add `--to
 codex exec -s workspace-write "Here is a screen I want reviewed: shot.png. Put it in front of me for review."
 ```
 
-For local projects inside Codex's macOS sandbox, Markback downloads and caches Chrome Headless Shell on the first capture. The download needs network access. This capture path is for local pages and assets. An agent with a built-in browser can also capture a page there and push the screenshot to Markback.
+For local projects inside Codex's macOS sandbox, Markback takes pictures with Chrome Headless Shell, about 100 MB from Google, fetched once and kept on this computer. Nothing is fetched until you say yes: the first capture stops and tells the agent to ask you, and after your yes the agent runs it again with `--fetch-browser`. The download needs network access. This capture path is for local pages and assets. An agent with a built-in browser can also capture a page there and push the screenshot to Markback.
 
 **Kimi Code** takes the skills with `--skills-dir`, in place of your others for that run: `kimi --skills-dir ~/markback/skills`, with `-S` to go back into a session.
 
@@ -161,7 +161,7 @@ For voice notes, start with Google Chrome and allow the microphone for the revie
 
 **Speak at a spot** (the speak tool in the bar, or **D**): click on the picture and say it. A pin with a microphone lands where you clicked, a ring round it shows that it listens, and your words are written in a box beside it. Click somewhere else for the next pin; **Esc** or a pause ends one. Each pin goes to your agent as what you said and where. The microphone at the foot (**⇧D**) only fills the notes box.
 
-A phrase that is only "looks good", "next", "back", "send" or "stop listening" acts. Any other words are notes, and you can correct them as you go.
+A phrase that is only "looks good", "next", "back", "send" or "stop listening" acts. Any other words go to the pin that listens, or to the notes when none does, and you can correct notes as you go.
 
 ## The review page
 

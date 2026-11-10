@@ -19,6 +19,7 @@ review project
 It finds how the app runs, takes pictures of its main screens, and names the review after the folder. If your desktop session can open the review in its built-in browser, use `review project --no-open` and open the printed URL there yourself. If that fails, run `review open --app "<review name>"` to open their regular browser.
 
 - **"Your app runs with npm run dev, and it is not running":** starting it runs their code. Ask them first, in one line. On a yes, run `review project --yes`.
+- **"needs a small Chrome from Google":** that is a download. Ask them first, in one line, saying what it is and how big. On a yes, run the same command again with `--fetch-browser`.
 - **"There is no app in this folder yet":** make the first screen from what they said (below).
 
 ## No app yet

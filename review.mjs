@@ -74,6 +74,9 @@ for (let i = 0; i < rest.length; i++) {
   }
 }
 
+// The person said yes to fetching the small browser that pictures need inside a sandbox. Without the flag, nothing is fetched.
+if (flags['fetch-browser']) process.env.MARKBACK_FETCH_BROWSER = 'yes'
+
 const fail = message => {
   console.error(message)
   process.exit(1)

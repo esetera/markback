@@ -623,9 +623,12 @@ function endPin({ keepMic = false } = {}) {
   pin.active = null
   pinBox.value = ''
   showGlow()
+  // A phrase still being heard stays with this pin as far as it got. The rest of it must not land in the next box.
+  mic.listener?.skip()
   if (p.startedMic && !keepMic && mic.listener?.on) mic.listener.stop()
   // A mark with a place and its words. The far corner only says it is a real mark to the shared drawing code.
-  if (p.text) commit({ tool: 'pin', a: p.at, b: [p.at[0] + 24, p.at[1] + 24], color: p.color, text: p.text, n: p.n })
+  // The size it was seen at goes with it, so the marked picture shows it as the screen did.
+  if (p.text) commit({ tool: 'pin', a: p.at, b: [p.at[0] + 24, p.at[1] + 24], color: p.color, text: p.text, n: p.n, size: state.size ? textFor(markWidth()) : undefined })
   else paint()
 }
 /** Lets the listening pin go without a mark: the screen it was on has gone. */
@@ -636,6 +639,7 @@ function dropPin() {
   pin.active = null
   pinBox.value = ''
   showGlow()
+  mic.listener?.skip()
   if (p.startedMic && mic.listener?.on) mic.listener.stop()
 }
 /** A press with the speak tool: the pin that listened ends there, and a new one listens here. */
@@ -646,8 +650,13 @@ async function startPin(at) {
   if (!s || !state.size) return
   const wasOn = !!mic.listener?.on
   if (!wasOn && !(await startMic())) return
-  if (screen() !== s) return
-  pin.active = { at, n: draftOf(s).marks.filter(isPin).length + 1, color: state.colour, text: '', timer: null, startedMic: kept || !wasOn }
+  // A question may have been asked first. If the screen has gone meanwhile, nothing is left listening for a pin that is not there.
+  if (!screen() || keyOf(screen()) !== keyOf(s) || !state.size) {
+    if (!wasOn && mic.listener?.on) mic.listener.stop()
+    return
+  }
+  const used = draftOf(screen()).marks.filter(isPin).map(m => m.n)
+  pin.active = { at, n: Math.max(0, ...used) + 1, color: state.colour, text: '', timer: null, startedMic: kept || !wasOn }
   pinBox.value = ''
   restPin()
   showGlow()
@@ -656,7 +665,14 @@ async function startPin(at) {
 /** The words of a pin in lines that fit a width. */
 function linesOf(ctx, text, room) {
   const lines = []
-  for (const word of text.split(/\s+/).filter(Boolean)) {
+  for (let word of text.split(/\s+/).filter(Boolean)) {
+    // A word longer than the room is broken, so nothing runs off the picture.
+    while (ctx.measureText(word).width > room && word.length > 1) {
+      let fits = word.length - 1
+      while (fits > 1 && ctx.measureText(word.slice(0, fits)).width > room) fits--
+      lines.push(word.slice(0, fits))
+      word = word.slice(fits)
+    }
     const next = lines.length ? `${lines[lines.length - 1]} ${word}` : word
     if (lines.length && ctx.measureText(next).width <= room) lines[lines.length - 1] = next
     else lines.push(word)
@@ -668,11 +684,11 @@ function linesOf(ctx, text, room) {
  * where there is room and to the left where there is not. The pin that listens shows a line saying how to stop.
  */
 function paintPins(ctx, pins, wide, listening = null) {
-  const size = textFor(wide)
-  const r = size * 0.8
-  const line = Math.max(2, Math.round(size / 9))
   const picture = { w: ctx.canvas.width, h: ctx.canvas.height }
   for (const m of pins) {
+    const size = m.size ?? textFor(wide)
+    const r = size * 0.8
+    const line = Math.max(2, Math.round(size / 9))
     const [x, y] = m.a ?? m.at
     const live = m === listening
     // The box of words.
@@ -682,16 +698,17 @@ function paintPins(ctx, pins, wide, listening = null) {
     const most = Math.min(size * 19, picture.w * 0.5)
     const right = picture.w - (x + gap) - size * 0.5
     const onRight = right >= Math.min(most, size * 9)
-    const room = Math.max(size * 6, Math.min(most, onRight ? right : x - gap - size * 0.5) - pad * 2)
+    // Never wider than the picture, however little room the side it is on has.
+    const room = Math.min(picture.w - line * 2 - pad * 2, Math.max(size * 6, Math.min(most, onRight ? right : x - gap - size * 0.5) - pad * 2))
     const lines = linesOf(ctx, m.text, room)
-    const hint = live ? 'Listening · click, Esc or a pause stops' : ''
     ctx.font = `500 ${size * 0.72}px -apple-system, system-ui, sans-serif`
-    const hintWide = hint ? ctx.measureText(hint).width : 0
+    const hints = live ? linesOf(ctx, 'Listening · click, Esc or a pause stops', room) : []
+    const hintWide = Math.max(0, ...hints.map(l => ctx.measureText(l).width))
     ctx.font = `600 ${size}px -apple-system, system-ui, sans-serif`
-    const wideBox = Math.max(...lines.map(l => ctx.measureText(l).width), hintWide, size * 2) + pad * 2
-    const tall = Math.max(1, lines.length) * size * 1.3 + (hint ? size * 1.05 : 0) + pad * 1.4
+    const wideBox = Math.min(picture.w - line * 2, Math.max(...lines.map(l => ctx.measureText(l).width), hintWide, size * 2) + pad * 2)
+    const tall = Math.max(1, lines.length) * size * 1.3 + hints.length * size * 1.05 + pad * 1.4
     if (lines.length || live) {
-      const left = onRight ? x + gap : x - gap - wideBox
+      const left = Math.max(line, Math.min(picture.w - wideBox - line, onRight ? x + gap : x - gap - wideBox))
       const top = Math.max(line, Math.min(picture.h - tall - line, y - r))
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(left, top, wideBox, tall)
@@ -701,11 +718,9 @@ function paintPins(ctx, pins, wide, listening = null) {
       ctx.textBaseline = 'top'
       ctx.fillStyle = '#1c1c1e'
       lines.forEach((text, n) => ctx.fillText(text, left + pad, top + pad * 0.7 + n * size * 1.3))
-      if (hint) {
-        ctx.font = `500 ${size * 0.72}px -apple-system, system-ui, sans-serif`
-        ctx.fillStyle = '#6b6b70'
-        ctx.fillText(hint, left + pad, top + pad * 0.7 + Math.max(1, lines.length) * size * 1.3)
-      }
+      ctx.font = `500 ${size * 0.72}px -apple-system, system-ui, sans-serif`
+      ctx.fillStyle = '#6b6b70'
+      hints.forEach((text, n) => ctx.fillText(text, left + pad, top + pad * 0.7 + Math.max(1, lines.length) * size * 1.3 + n * size * 1.05))
     }
     // The pin: a disc in the mark's colour with a white microphone.
     ctx.fillStyle = m.color
@@ -717,7 +732,9 @@ function paintPins(ctx, pins, wide, listening = null) {
     ctx.lineWidth = Math.max(1.5, r * 0.13)
     ctx.lineCap = 'round'
     ctx.beginPath()
-    ctx.roundRect(x - r * 0.17, y - r * 0.48, r * 0.34, r * 0.6, r * 0.17)
+    // An older browser has no rounded rectangle: a plain one says microphone well enough.
+    if (ctx.roundRect) ctx.roundRect(x - r * 0.17, y - r * 0.48, r * 0.34, r * 0.6, r * 0.17)
+    else ctx.rect(x - r * 0.17, y - r * 0.48, r * 0.34, r * 0.6)
     ctx.fill()
     ctx.beginPath()
     ctx.arc(x, y + r * 0.02, r * 0.32, 0.15 * Math.PI, 0.85 * Math.PI)
@@ -747,7 +764,7 @@ function paintPins(ctx, pins, wide, listening = null) {
 /** What goes to the agent for a pin: where it is and what was said there. */
 function pinShape(m, wide) {
   const colour = COLOURS.find(c => c.value === m.color)
-  const r = Math.round(textFor(wide) * 0.8)
+  const r = Math.round((m.size ?? textFor(wide)) * 0.8)
   return { type: 'pin', colour: colour ? colour.id : m.color, box: { x: Math.round(m.a[0] - r), y: Math.round(m.a[1] - r), w: r * 2, h: r * 2 }, at: { x: Math.round(m.a[0]), y: Math.round(m.a[1]) }, text: m.text, n: m.n }
 }
 function renderMic() {
@@ -775,7 +792,10 @@ async function pressMic() {
 /** Turns listening on, asking what it must ask first. True when it is on. */
 async function startMic() {
   const route = mic.route
-  if (!route) return false
+  if (!route) {
+    toast('The microphone is not ready yet', 'Try again in a moment')
+    return false
+  }
   if (route.route === 'none') {
     toast(route.why)
     return false
