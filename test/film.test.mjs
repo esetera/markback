@@ -230,6 +230,24 @@ test('a screen queued before the push kept its pictures\' rounds: its kept pictu
   assert.equal(film.missing, 1)
 })
 
+test('a screen queued before the list, with a file gone after a clear: the old review\'s picture is never borrowed, and the round is said to be gone', async () => {
+  await round('Borrow')
+  await round('Borrow')
+  clearApp('Borrow')
+  const fresh = [await round('Borrow'), await round('Borrow'), await round('Borrow')]
+  const path = join(QUEUE, 'borrow', 'home.json')
+  const entry = JSON.parse(readFileSync(path, 'utf8'))
+  delete entry.pictures
+  writeFileSync(path, JSON.stringify(entry))
+  let film = filmOf('Borrow', 'home')
+  assert.deepEqual(film.rounds.map(r => [r.round, basename(r.picture)]), fresh.map((e, i) => [i + 1, basename(e.after)]), 'nothing gone: every round of this review, and only those')
+  rmSync(join(home, 'images', fresh[1].after))
+  film = filmOf('Borrow', 'home')
+  // One file left for rounds 1 and 2 cannot say which it is: it is not guessed at, and no older file stands in.
+  assert.deepEqual(film.rounds.map(r => [r.round, basename(r.picture)]), [[3, basename(fresh[2].after)]])
+  assert.equal(film.missing, 2)
+})
+
 /** The first bytes of a picture of each kind, which are all that is read for its size. */
 const heads = {
   jpeg: (w, h) => {
@@ -402,17 +420,28 @@ test('when ffmpeg fails or takes too long, the line says so in plain words, with
     chmodSync(file, 0o755)
     return file
   }
-  // Fitting works, joining fails, with a path in what ffmpeg says.
-  const failing = tool('ffmpeg-fails', `for a in "$@"; do last="$a"; done; case "$last" in *.mp4) echo "[out#0/mp4 @ 0x1234] Could not open ${home}/x/film.mp4: No such file" >&2; exit 1;; esac; : > "$last"`)
   const deaf = tool('ffmpeg-deaf', "trap '' TERM; while true; do sleep 1; done")
-  const film = filmOf('Story', 'home')
-  process.env.REVIEW_FFMPEG = failing
-  try {
-    const failed = await saveFilm(film, join(home, 'f.mp4')).catch(error => error)
-    assert.equal(failed.message, 'ffmpeg could not make the film: Could not open …: No such file')
-  } finally {
-    delete process.env.REVIEW_FFMPEG
+  // A store in a folder with spaces, a quote and letters beyond ASCII: none of it may show.
+  const store = join(home, "Ann O'Brien Ünïcode folder", '.review-wizard')
+  const env = { REVIEW_HOME: store }
+  assert.equal(review(['push', '--app', 'Odd', '--screen', 'Home', '--after', picture], env).status, 0)
+  const said = line => tool(`ffmpeg-says-${Math.random().toString(36).slice(2)}`, `for a in "$@"; do last="$a"; done; case "$last" in *.mp4) echo "${line.replaceAll('"', '\\"')}" >&2; exit 1;; esac; : > "$last"`)
+  const film = (ffmpeg, out = join(home, 'odd.mp4')) => review(['film', '--app', 'Odd', '--screen', 'Home', '--out', out], { ...env, REVIEW_FFMPEG: ffmpeg })
+  for (const line of [`[concat @ 0x1] Impossible to open '${store}/images/odd/x y.png'`, `Error opening ${store}/images/home.png: No space left`, 'C:\\Users\\ann\\x.png: bad']) {
+    const done = film(said(line))
+    assert.equal(done.status, 1)
+    assert.equal(done.stderr.trim(), 'ffmpeg could not make the film.', 'a line with a path in it is not shown')
   }
+  // A folder Markback knows is put in plain words, and the rest of ffmpeg's line is kept.
+  assert.equal(film(said(`[out#0/mp4 @ 0x1] Conversion failed in ${store}`)).stderr.trim(), 'ffmpeg could not make the film: Conversion failed in the store')
+  // Trouble that is not the picture's, a full disk say, is not blamed on the picture.
+  const full = tool('ffmpeg-full', 'echo "[out#0/image2 @ 0x1] Error writing trailer: No space left on device" >&2; exit 1')
+  assert.equal(film(full).stderr.trim(), 'ffmpeg could not make the film: Error writing trailer: No space left on device')
+  // An ffmpeg that cannot be run says so.
+  const stuck = join(home, 'ffmpeg-not-runnable')
+  writeFileSync(stuck, 'not a program')
+  chmodSync(stuck, 0o644)
+  assert.equal(film(stuck).stderr.trim(), 'ffmpeg is on this computer but cannot be run. The film still plays in the review page.')
   const port = await freePort()
   const server = spawn('node', [join(dirname(CLI), 'server.mjs')], { env: { ...process.env, REVIEW_HOME: home, REVIEW_PORT: String(port), REVIEW_FFMPEG: deaf, REVIEW_FILM_TIMEOUT: '600' }, stdio: 'ignore' })
   try {
