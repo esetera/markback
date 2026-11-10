@@ -181,6 +181,29 @@ body.covered .marking, body.covered #views, body.covered #zoomValue, body.covere
 .checks ul { margin: 0; padding: 0 0 0 18px; }
 .checks li { margin: 0 0 6px; overflow-wrap: anywhere; }
 .checks li:last-child { margin-bottom: 0; }
+/* Beside the picture: what to check, and above it nothing moves; under it, what was asked for last time. */
+.side-col { flex: none; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+/* Marks become checks: each earlier mark, to tick fixed or say it still stands. Its place is drawn on the picture. */
+.asked { flex: none; padding: 10px 12px 12px; background: var(--ground); border: 1px solid var(--rule-firm); box-shadow: var(--sheet-lift); font-size: 14px; line-height: 1.4; color: var(--ink); }
+.asked h2 { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--faint); }
+.asked h2 .tool { width: 22px; height: 22px; }
+.asked ol { margin: 0; padding: 0; list-style: none; }
+.ask { display: flex; gap: 8px; padding: 8px 0; border-top: 1px solid var(--rule); }
+.ask:first-child { border-top: 0; padding-top: 0; }
+.ask-n { flex: none; width: 22px; height: 22px; padding: 0; font: inherit; font-size: 12px; font-weight: 700; color: #1b1d21; background: var(--amber); border: 0; border-radius: var(--r); cursor: pointer; }
+.ask.said-fixed .ask-n { color: #fff; background: var(--good); }
+.ask.said-stands .ask-n { color: #fff; background: var(--danger); }
+.ask-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.ask-words { overflow-wrap: anywhere; }
+.ask-when { font-size: 12px; color: var(--faint); }
+.ask-acts { display: flex; gap: 6px; margin-top: 2px; }
+.ask-say { height: 26px; padding: 0 8px; font-size: 12px; }
+.ask-say svg { display: none; width: 13px; height: 13px; margin-right: 3px; }
+.ask-say.on svg { display: inline; }
+.ask-held { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--rule); font-size: 12px; color: var(--faint); }
+.asked-chip { flex: none; margin-left: 10px; height: 22px; padding: 0 8px; font: inherit; font-size: 12px; font-weight: 700; color: #1b1d21; background: var(--amber); border: 0; border-radius: var(--r); cursor: pointer; white-space: nowrap; }
+.asked-chip.done { font-weight: 600; color: var(--soft); background: none; border: 1px solid var(--rule-firm); }
+.asked-held { flex: none; margin-left: 8px; font-size: 12px; color: var(--faint); white-space: nowrap; }
 .shot { margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .shot figcaption { font-weight: 600; font-size: 12px; color: var(--soft); }
 .pair.view-after figcaption { display: none; }

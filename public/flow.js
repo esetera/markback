@@ -149,3 +149,54 @@ export function leftBehind(round, read, isReal) {
   }
   return out
 }
+
+/* ---------- marks become checks: what was asked for last time, at its place on the new picture ---------- */
+
+const ASK_WORDS = 8
+const cutWords = text => {
+  const words = String(text).trim().split(/\s+/)
+  return words.length > ASK_WORDS ? `${words.slice(0, ASK_WORDS).join(' ')}…` : words.join(' ')
+}
+const ASK_NAMES = { box: ['Box round', 'A box here'], arrow: ['Arrow at', 'An arrow here'], freehand: ['Drawn over', 'A line drawn here'], words: ['', 'Words chosen here'], text: ['', 'Words written here'], pin: ['Said:', 'Said here'], notes: ['Notes:', 'Notes'] }
+
+/** An earlier mark in a few words: what was written or said there, or the words under it, or else only what it was. */
+export function askWords(ask) {
+  const [lead, bare] = ASK_NAMES[ask.type] ?? ['Mark at', 'A mark here']
+  const said = ask.text || ask.words
+  if (!said) return bare
+  // Written or chosen words say it all. A box or an arrow is round the words under it, and a pin or notes say who said it.
+  return lead ? `${lead} “${cutWords(said)}”` : `“${cutWords(said)}”`
+}
+
+/** An earlier mark's place on the picture now. It was drawn on the last one, which can be another size. Null for notes. */
+export function placeOn(ask, size) {
+  const box = ask?.box
+  if (!box || !size) return null
+  const from = ask.size?.w && ask.size?.h ? ask.size : size
+  const sx = size.w / from.w
+  const sy = size.h / from.h
+  return { x: box.x * sx, y: box.y * sy, w: box.w * sx, h: box.h * sy }
+}
+
+const overlaps = (a, b) => !!a && !!b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+/**
+ * A screen's earlier marks, as the page shows them. `open`: asked for and not yet ticked fixed in an answer. `back`: ticked
+ * fixed before, and the picture changed there again, so it may have come back. `held`: the other fixed ones, kept quietly.
+ * `changed` is where the picture differs from its before, in the picture's pixels.
+ */
+export function askedOf(screen, changed = null, size = null) {
+  const all = Array.isArray(screen?.asked) ? screen.asked : []
+  const open = all.filter(a => a.state !== 'fixed')
+  const fixed = all.filter(a => a.state === 'fixed')
+  const back = fixed.filter(a => (changed ?? []).some(box => overlaps(placeOn(a, size), box)))
+  return { open, back, held: fixed.filter(a => !back.includes(a)), rows: [...open, ...back] }
+}
+
+/** The bar's few words for them: what is left to tick, or that all are. Empty with nothing to show. */
+export function askedCount({ open, back }, said) {
+  const left = list => list.filter(a => !said[a.n]).length
+  const parts = [left(open) ? `${left(open)} to check` : '', left(back) ? `${left(back)} came back?` : ''].filter(Boolean)
+  if (parts.length) return { words: parts.join(', '), done: false }
+  return open.length + back.length ? { words: `${open.length + back.length} checked`, done: true } : { words: '', done: true }
+}

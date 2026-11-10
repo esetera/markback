@@ -31,6 +31,8 @@ function history(appSlug, id) {
       marks: Array.isArray(r.shapes) ? r.shapes.length : 0,
       noComment: r.noComment === true,
       olderPicture: r.olderPicture === true,
+      // What was said of the earlier marks, so the page shows it again on coming back.
+      said: Object.fromEntries((Array.isArray(r.asked) ? r.asked : []).filter(a => a.said).map(a => [a.n, a.said])),
       sentAt: r.sentAt,
       annotatedUrl: urlFor(INBOX, '/inbox/', r.annotatedImage),
       afterUrl: urlFor(IMAGES, '/images/', r.afterImage),
@@ -152,6 +154,7 @@ const server = createServer(async (req, res) => {
         noComment: input.noComment === true && input.verdict === 'approved',
         after: typeof input.after === 'string' ? input.after : '',
         round: Number(input.round) || null,
+        said: input.said && typeof input.said === 'object' ? input.said : null,
       })
       if (!record) return json(res, 200, { ok: true, olderPicture: true })
       answered(record)

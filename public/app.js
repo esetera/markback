@@ -1,6 +1,6 @@
 import { burnCanvas, changesBetween, COLOURS, fitZoom, isReal, paintChanged, paintMarks, redone, shapeOf, strokeFor, textFor, undone, withMark, withMarks, ZOOM_STEP, ZOOM_WHEEL_STEP, zoomedBy } from './annotate.js'
 import { createListener, findRoute, installPack } from './mic.js'
-import { afterSend, answerWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from './flow.js'
+import { afterSend, answerWords, askedCount, askedOf, askWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeOn, placeWords, standingAnswer, submitJobs } from './flow.js'
 
 /**
  * The wizard is the review: the picture fills the window, with one thin bar above it, what it is about under that, and a slim
@@ -72,6 +72,7 @@ const KEYS = [
     [['V'], 'After, side by side, before'],
     [['C'], 'Show or hide where it changed'],
     [['I'], 'The rest of the words'],
+    [['K'], 'What you asked for last time: show or hide'],
     [['Q'], 'Panel view'],
     [['F'], 'Full screen'],
     [['Esc'], 'Close or cancel. Words stay'],
@@ -142,6 +143,9 @@ const state = {
   moreOf: '',
   lineCut: false,
   changesOn: true,
+  // Screens whose list of earlier marks was closed, and the one lit on the picture.
+  askedShut: new Set(),
+  askLit: null,
 }
 if (prefs.get('strip') === 'hidden') document.body.classList.add('no-strip')
 if (prefs.get('details') === 'hidden') document.body.classList.add('no-details')
@@ -187,7 +191,9 @@ function draftOf(s) {
   const sure = saved?.after === s.after
   const marks = saved?.marks ?? []
   const notes = saved?.notes ?? ''
-  const d = { after: s.after, marks, notes, good: sure && !!saved?.good, pending: sure && !!saved?.pending, pendingAt: (sure && saved?.pendingAt) || 0, unsure: !sure && (marks.some(isReal) || !!notes.trim()), undo: [], redo: [] }
+  // What was said of the earlier marks counts only on the picture it was said on: their numbers belong to it.
+  const said = (sure && saved?.said) || {}
+  const d = { after: s.after, marks, notes, said, good: sure && !!saved?.good, pending: sure && !!saved?.pending, pendingAt: (sure && saved?.pendingAt) || 0, unsure: !sure && (marks.some(isReal) || !!notes.trim()), undo: [], redo: [] }
   drafts.set(key, d)
   return d
 }
@@ -195,14 +201,16 @@ function draftOf(s) {
 const leftBehindOn = s => leftBehind(s.round, r => store.get(`${s.appSlug}/${s.id}/${r}`), isReal)
 const saveDraft = s => {
   const d = draftOf(s)
-  store.set(keyOf(s), d.marks.length || d.notes.trim() || d.good ? { marks: d.marks, notes: d.notes, good: d.good, pending: d.pending, pendingAt: d.pendingAt, after: d.unsure ? undefined : s.after } : null)
+  store.set(keyOf(s), d.marks.length || d.notes.trim() || d.good || Object.keys(d.said).length ? { marks: d.marks, notes: d.notes, said: d.said, good: d.good, pending: d.pending, pendingAt: d.pendingAt, after: d.unsure ? undefined : s.after } : null)
 }
 /** What this screen's draft would send: 'changes', 'approved', or null when nothing is on it yet. */
 function verdictOf(s) {
   const d = draftOf(s)
-  if (d.marks.some(isReal) || d.notes.trim()) return 'changes'
+  if (d.marks.some(isReal) || d.notes.trim() || stands(d)) return 'changes'
   return d.good ? 'approved' : null
 }
+/** An earlier mark said to still stand is something to send, as a mark is. */
+const stands = d => Object.values(d.said).includes('stands')
 /** Something is on it to go by itself. Marks that cannot be trusted to this picture wait to be looked at. */
 const saysAnswer = s => !!verdictOf(s) && !draftOf(s).unsure
 const waitingOf = a => (a ? a.screens.filter(s => s.status === 'waiting') : [])
@@ -1138,6 +1146,7 @@ function render() {
   document.body.classList.toggle('no-apps', state.loaded && !state.apps.length)
   $('notes').disabled = !s
   if (!a) {
+    renderAsked(null)
     renderKind(null)
     setHtml($('crumbs'), '')
     $('back').disabled = $('next').disabled = true
@@ -1156,6 +1165,7 @@ function render() {
   $('next').disabled = !s || state.index >= total - 1
   if (!s) {
     setHtml($('views'), '')
+    renderAsked(null)
     return
   }
   // Not while the opening page is up: a reload there is still an opening.
@@ -1176,6 +1186,7 @@ function render() {
     growNotes()
   }
   showSentMarks(s)
+  renderAsked(s)
   updateButtons()
   paint()
   preloadAround(a)
@@ -1371,6 +1382,12 @@ function showChanges(s) {
     if (changes.key !== key) return
     changes.boxes = boxes
     renderChangesButton()
+    // A mark fixed before, where the picture changed again, may have come back: the list can grow by it.
+    const s = screen()
+    if (s && askedOf(s).held.length) {
+      renderAsked(s)
+      if (state.fitted) fit()
+    }
     paint()
   })).catch(() => undefined)
 }
@@ -1405,6 +1422,137 @@ function showSentMarks(s) {
   img.src = url
 }
 
+/* ---------- marks become checks: what was asked for last time, at its place, to tick fixed or say it still stands ---------- */
+
+const ASKED_WIDE = 300
+/** What was said of each earlier mark: here first, then in the answer already sent this round. */
+function saidOf(s) {
+  const standing = standingAnswer(histories.get(historyKey(s)), s.round)
+  return { ...(standing?.said ?? {}), ...draftOf(s).said }
+}
+/** A screen's earlier marks. Where it changed counts only once it is worked out for this very picture. */
+const askedNow = s => askedOf(s, changes.key && changes.key === `${s.before}|${s.after}` ? changes.boxes : null, state.size)
+/** The list stands beside the picture, in the After view, until it is closed. */
+const askedShown = s => !!s && state.view === 'after' && !state.askedShut.has(keyOf(s)) && askedNow(s).rows.length > 0
+const askedRoom = () => (askedShown(screen()) ? ASKED_WIDE + 16 : 0)
+
+function renderAsked(s) {
+  const asked = s ? askedNow(s) : null
+  const said = s ? saidOf(s) : {}
+  const count = asked ? askedCount(asked, said) : { words: '', done: true }
+  const chip = $('askedChip')
+  chip.hidden = !count.words
+  chip.textContent = count.words
+  chip.classList.toggle('done', count.done)
+  chip.setAttribute('aria-expanded', String(askedShown(s)))
+  const held = asked?.held.length ?? 0
+  $('askedHeld').hidden = !held
+  $('askedHeld').textContent = held ? `${held} held` : ''
+  const box = $('asked')
+  box.hidden = !askedShown(s)
+  $('sideCol').hidden = box.hidden && $('checks').hidden
+  if (box.hidden) return
+  const row = a => {
+    const back = asked.back.includes(a)
+    const word = said[a.n] ?? ''
+    const when = back ? `You said fixed in round ${a.fixedIn}` : a.cameBack ? `Came back, from round ${a.round}` : `Round ${a.round}`
+    return `<li class="ask${word ? ` said-${word}` : ''}${back ? ' back' : ''}" data-ask="${a.n}">`
+      + `<button class="ask-n" data-ask-go="${a.n}" ${tip(a.box ? 'Show where it is' : 'Notes have no place on the picture')}>${a.n}</button>`
+      + `<div class="ask-body"><span class="ask-words">${back ? '<b>Came back?</b> ' : ''}${esc(askWords(a))}</span><span class="ask-when">${esc(when)}</span>`
+      + `<span class="ask-acts"><button class="btn ask-say${word === 'fixed' ? ' on' : ''}" data-ask-say="fixed" aria-pressed="${word === 'fixed'}">${ICONS.check}${back ? 'Still fixed' : 'Fixed'}</button>`
+      + `<button class="btn ask-say${word === 'stands' ? ' on' : ''}" data-ask-say="stands" aria-pressed="${word === 'stands'}">${back ? 'Came back' : 'Still stands'}</button></span></div></li>`
+  }
+  setHtml(box, `<h2><span>You asked for these last time</span><button class="tool" data-asked-shut ${tip('Hide this list', 'K')}>${ICONS.close}</button></h2><ol>${asked.rows.map(row).join('')}</ol>${held ? `<p class="ask-held">${held} more you ticked fixed before. Each is flagged here if the picture changes there again.</p>` : ''}`)
+}
+
+/** Fixed or still stands. Pressed again, it is taken back. */
+function sayAsked(n, word) {
+  const s = screen()
+  if (!s || onDonePage()) return
+  const d = draftOf(s)
+  touched(s)
+  const said = { ...d.said }
+  if (saidOf(s)[n] === word && d.said[n] === word) delete said[n]
+  else said[n] = word
+  d.said = said
+  d.good = false
+  saveDraft(s)
+  render()
+  refreshLists()
+}
+
+function toggleAsked() {
+  const s = screen()
+  if (!s || !askedNow(s).rows.length) return
+  const key = keyOf(s)
+  if (state.askedShut.has(key)) state.askedShut.delete(key)
+  else state.askedShut.add(key)
+  if (state.view !== 'after') state.view = 'after'
+  render()
+  // A zoom chosen by hand stays: only the column comes or goes.
+  if (state.fitted) fit()
+  else placeChecks()
+}
+
+/** Its place, brought into view and lit for a moment. */
+let litTimer = null
+function goToAsk(n) {
+  const s = screen()
+  const a = s?.asked?.find(x => x.n === n)
+  const place = a && placeOn(a, state.size)
+  if (!place) return
+  const canvas = $('canvas').getBoundingClientRect()
+  const view = $('scroller').getBoundingClientRect()
+  const scale = canvas.width / state.size.w
+  $('scroller').scrollBy({ left: canvas.left + place.x * scale - view.left - view.width / 3, top: canvas.top + place.y * scale - view.top - view.height / 3 })
+  state.askLit = n
+  paint()
+  clearTimeout(litTimer)
+  litTimer = setTimeout(() => {
+    state.askLit = null
+    paint()
+  }, 1600)
+}
+
+/** Each earlier mark at its place, on screen only: a dashed outline and its number, never in what is sent. */
+function paintAsked(ctx, s) {
+  const asked = askedNow(s)
+  if (!asked.rows.length) return
+  const said = saidOf(s)
+  const wide = markWidth()
+  const line = Math.max(2, Math.round(strokeFor(wide) * 0.75))
+  const size = Math.round(textFor(wide) * 0.7)
+  ctx.save()
+  ctx.font = `700 ${size}px -apple-system, system-ui, sans-serif`
+  ctx.textBaseline = 'middle'
+  for (const a of asked.rows) {
+    const p = placeOn(a, state.size)
+    if (!p) continue
+    const back = asked.back.includes(a)
+    const word = said[a.n]
+    const colour = word === 'fixed' ? '#1d7a3a' : word === 'stands' ? '#d42a20' : '#f5b301'
+    const width = state.askLit === a.n ? line * 2 : line
+    ctx.setLineDash(back && !word ? [] : [line * 3, line * 2])
+    for (const [stroke, w] of [['rgba(255, 255, 255, 0.9)', width + 2], [colour, width]]) {
+      ctx.strokeStyle = stroke
+      ctx.lineWidth = w
+      ctx.strokeRect(p.x, p.y, p.w, p.h)
+    }
+    ctx.setLineDash([])
+    const tag = word === 'fixed' ? `✓ ${a.n}` : word === 'stands' ? `${a.n} ${back ? 'came back' : 'stands'}` : back ? `${a.n} Came back?` : String(a.n)
+    const tw = ctx.measureText(tag).width + size * 0.8
+    const th = Math.round(size * 1.5)
+    // Above the outline, or inside its top when there is no room above; never off the picture.
+    const tx = Math.max(0, Math.min(p.x, state.size.w - tw))
+    const ty = p.y - th >= 0 ? p.y - th : Math.max(0, p.y)
+    ctx.fillStyle = colour
+    ctx.fillRect(tx, ty, tw, th)
+    ctx.fillStyle = word ? '#ffffff' : '#1b1d21'
+    ctx.fillText(tag, tx + size * 0.4, ty + th / 2)
+  }
+  ctx.restore()
+}
+
 function updateButtons() {
   const a = app()
   const s = screen()
@@ -1423,6 +1571,7 @@ function paint() {
   ctx.clearRect(0, 0, state.size.w, state.size.h)
   if (sentMarks.img) ctx.drawImage(sentMarks.img, 0, 0, state.size.w, state.size.h)
   if (state.changesOn && changes.boxes?.length) paintChanged(ctx, changes.boxes, state.size.w, state.size.h)
+  paintAsked(ctx, s)
   const all = [...draftOf(s).marks, ...(draft ? [draft] : [])]
   paintWords(ctx, all.filter(isWords))
   paintMarks(ctx, all.filter(m => !isWords(m) && !isPin(m)))
@@ -1460,14 +1609,19 @@ function placeChecks() {
   const items = look.lines
   const box = $('scroller')
   const foot = $('foot').offsetHeight
-  const room = { width: box.clientWidth - 14, height: $('center').clientHeight - foot - 14 }
+  // With the earlier marks beside the picture, what to check stands above them, in the same column.
+  const asking = askedShown(s)
+  const room = { width: box.clientWidth - 14 - askedRoom(), height: $('center').clientHeight - foot - 14 }
   const shown = state.size && state.view === 'after' && state.fitted ? fittedZoom(room) * state.size.w : room.width
   const spare = room.width - shown - 16
-  state.sideChecks = items.length > 0 && spare >= 220
+  state.sideChecks = items.length > 0 && (asking || spare >= 220)
   $('checks').hidden = !state.sideChecks
+  $('asked').style.width = `${ASKED_WIDE}px`
+  $('sideCol').style.maxHeight = `${room.height}px`
+  $('sideCol').hidden = $('checks').hidden && !asking
   if (state.sideChecks) {
-    $('checks').style.width = `${Math.min(400, spare)}px`
-    $('checks').style.maxHeight = `${room.height}px`
+    $('checks').style.width = `${asking ? ASKED_WIDE : Math.min(400, spare)}px`
+    $('checks').style.maxHeight = asking ? '' : `${room.height}px`
     setHtml($('checks'), `<h2><span>What to check</span><span class="from">${esc(fromWords(s))}</span></h2><ul>${items.map(item => `<li>${esc(item)}</li>`).join('')}</ul>${moreButton(look.rest)}${moreWords(look.rest)}`)
   }
   renderAbout(app(), s)
@@ -1480,7 +1634,7 @@ const SHRUNK = 0.75
 /** The room a picture has, and how many share it. */
 const roomNow = () => {
   const box = $('scroller')
-  return { room: { width: box.clientWidth - 14, height: box.clientHeight - 14 - (state.view === 'after' ? 0 : 24) }, across: state.view === 'side' ? 2 : 1 }
+  return { room: { width: box.clientWidth - 14 - askedRoom(), height: box.clientHeight - 14 - (state.view === 'after' ? 0 : 24) }, across: state.view === 'side' ? 2 : 1 }
 }
 /**
  * The zoom a picture is fitted at. Most are shown whole. A tall one that has to be shrunk to a narrow strip, a page of a PDF
@@ -1665,6 +1819,7 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
   const size = img ? { w: img.naturalWidth, h: img.naturalHeight } : null
   const list = d.marks
   const words = d.notes
+  const said = d.said
   const marks = verdict === 'approved' ? [] : list.filter(isReal)
   const out = verdict === 'approved' || !img ? null : burnCanvas(img, marks.filter(m => !isWords(m) && !isPin(m)))
   const ctx = (out ?? document.createElement('canvas')).getContext('2d')
@@ -1683,6 +1838,8 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
     shapes: marks.map(m => (isWords(m) ? wordsShape(m) : isPin(m) ? pinShape(m, wide) : shapeOf(m, ctx))),
     imageSize: size,
     png,
+    // A Looks good ticks every earlier mark fixed: the server says so for it.
+    said: verdict === 'approved' ? {} : said,
   }
   if (noComment) body.noComment = true
   const res = await fetch('/api/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {
@@ -1692,9 +1849,10 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
   if (!res.ok) throw new Error(result.error || 'The server did not take it.')
   // Drawn or written while this was on its way: that has not gone, and stays.
   const now = drafts.get(key) ?? d
-  if (now.marks !== list || now.notes !== words) {
+  if (now.marks !== list || now.notes !== words || now.said !== said) {
     now.marks = now.marks.filter(m => !list.includes(m))
     if (now.notes === words) now.notes = ''
+    if (now.said === said) now.said = {}
     now.pending = false
     now.undo = []
     now.redo = []
@@ -1939,7 +2097,7 @@ async function looksGood(byKey = false) {
     toast(`Looks good taken back: ${label(s)}`)
     return
   }
-  const dropping = d.marks.some(isReal) || !!d.notes.trim()
+  const dropping = d.marks.some(isReal) || !!d.notes.trim() || stands(d)
   // Already said, by a press: there is nothing to add, only somewhere to go.
   if (!dropping && !verdictOf(s) && s.status === 'approved' && !standingAnswer(histories.get(historyKey(s)), s.round)?.noComment) return moveOn(false)
   // Changes sent are the person's real answer. One key must not swap them for an approval as they go past.
@@ -1947,12 +2105,13 @@ async function looksGood(byKey = false) {
   if (dropping || replacing) {
     const yes = replacing
       ? await ask('Replace your changes with Looks good?', `You sent changes on this screen. They go under Earlier answers, and it counts as looking good.${dropping ? ' What you have drawn or written since is dropped.' : ''}`, 'Replace with Looks good')
-      : await ask('Mark as looking good?', 'Your marks and notes on this screen are dropped.', 'Mark as looking good')
+      : await ask('Mark as looking good?', stands(d) ? 'Your marks and notes on this screen are dropped, and every earlier mark counts as fixed.' : 'Your marks and notes on this screen are dropped.', 'Mark as looking good')
     if (!yes) return
   }
   if (dropping) {
     Object.assign(d, withMarks(d, []))
     d.notes = ''
+    d.said = {}
     $('notes').value = ''
     growNotes()
   }
@@ -2033,6 +2192,27 @@ $('sheetRest').onclick = () => {
 $('sheetClose').onclick = closeSheet
 $('sheetModal').onclick = event => event.target === $('sheetModal') && closeSheet()
 $('overall').onclick = openSheet
+$('askedChip').onclick = toggleAsked
+$('asked').onclick = event => {
+  const row = event.target.closest('[data-ask]')
+  if (event.target.closest('[data-asked-shut]')) return toggleAsked()
+  if (!row) return
+  const n = Number(row.dataset.ask)
+  const say = event.target.closest('[data-ask-say]')
+  if (say) return sayAsked(n, say.dataset.askSay)
+  if (event.target.closest('[data-ask-go]')) goToAsk(n)
+}
+// Pointing at one lights its place on the picture.
+$('asked').onmouseover = event => {
+  const n = Number(event.target.closest('[data-ask]')?.dataset.ask) || null
+  if (state.askLit === n) return
+  state.askLit = n
+  paint()
+}
+$('asked').onmouseleave = () => {
+  state.askLit = null
+  paint()
+}
 $('submitYes').onclick = () => void runSubmit()
 $('submitNo').onclick = () => {
   if (!submitting) $('submitModal').hidden = true
@@ -2549,6 +2729,7 @@ document.addEventListener('keydown', event => {
   else if ((key === 'c' || key === 'C') && !event.repeat) toggleChanges()
   else if ((key === 'd' || key === 'D') && event.shiftKey) pressMic()
   else if ((key === 'i' || key === 'I') && !event.repeat) toggleMore()
+  else if ((key === 'k' || key === 'K') && !event.repeat) toggleAsked()
   else if (/^[1-4]$/.test(key)) setColour(COLOURS[Number(key) - 1].value)
   else {
     const tool = { b: 'box', a: 'arrow', p: 'pen', t: 'text', m: 'pan', e: 'words', d: 'speak' }[key.toLowerCase()]

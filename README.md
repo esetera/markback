@@ -170,6 +170,7 @@ Light and dark are separate screens. The page is the review: the picture fills t
 - **One thin bar:** the app and screen, "3 of 13", back and next, the marking tools, Before and After when there is a before, and a small menu.
 - **What to look at:** one line, in ten words or fewer as pushed. It is the first sentence of the note, or the `--check` lines, three at most; **More** (I) opens the rest over the picture, so the picture does not move. When a fitted picture leaves room at its side, the lines stand there, level with its top, and never make it smaller.
 - **Where it changed:** with a before of the same size, corner ticks mark each place that differs. They show on screen only and never in what is sent. C hides them. They do not show when most of the picture changed, and a very faint change can go unmarked.
+- **What you asked for last time:** on a screen's next round, each mark and note you sent comes back as a check. Each is numbered at its place on the new picture and listed beside it. Tick it **Fixed**, or say it **Still stands**: the bar counts what is left, and **K** hides the list. Still stands goes with Send, as a mark does. Looks good ticks them all. One ticked fixed is kept: when the picture changes there again, it comes back as **Came back?**, to say it is still fixed or that it came back.
 - **All the screens:** the count in the bar ("4 left", or **O**) opens every screen of the review with where each stands. A press goes to one, and **Looks good for the rest** answers what is left.
 - **Select words:** where a picture came with a word list, the words tool (**E**) marks the words themselves, as in a document. Without a list it draws a box.
 - **Something new:** the tab's title counts what waits. New screens are said on the page, and from behind another window by a sound and, if you allow it, a notice. The menu turns the sound and notices off.
@@ -203,6 +204,7 @@ Moving into another review is never quiet. A full overlay says what was finished
 | V | After, side by side, before |
 | C | Show or hide where it changed |
 | I | The rest of the words |
+| K | What you asked for last time: show or hide |
 | Q | Panel view |
 | F | Full screen |
 | B A P T M | Box, arrow, pen, text, move |
@@ -229,7 +231,7 @@ review push --app MyApp --screen Home --mode light \
 Say what to look at in ten words or fewer. Longer words wait behind More, and `push` warns. `--check` can be said more than once. `--from` says whose words the note and checks are, shown as "From Claude" beside them; it defaults to Claude.
 
 The pictures are copied, so scratch files can go away. Pushing the same app, screen and mode again starts round 2 on
-the same step.
+the same step. The marks and notes sent on round 1 come along as checks: the page asks the person whether each is fixed, and `push` says how many.
 
 ### A PDF
 
@@ -281,6 +283,8 @@ Inbox: `~/.review-wizard/inbox/<app>/<screen>-<mode>-<time>.{png,json}`. The JSO
   "sentAt": "2026-01-15T14:57:17.701Z"
 }
 ```
+
+After a round with marks, the next round's record has `asked`: each earlier mark, with `n` (its number on the page), the `round` it was asked in, its `type`, `box`, `text` and `words` as a mark has them, and `said`. `said` is `fixed`, `stands`, or `null` when it was not ticked. A Looks good says `fixed` for all. A mark ticked fixed before is left out, unless the person says it came back: then it has `"cameBack": true` and `fixedIn`, the round it was fixed in. `review read` says them: `Earlier marks: 1 of 3 ticked fixed, 2 still to do`, then one line each.
 
 `read --latest` and `wait --all` give one record per screen. When marks are sent twice on one picture, each marked copy holds only what was new, so the newest record carries the ones before it under `earlier`. A Looks good pressed over changes replaces them and stands alone.
 

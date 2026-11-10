@@ -192,3 +192,93 @@ test('review wait --all at its timeout says how many screens wait, and the next 
   assert.equal(all.match(/Half done \/ One, round 1: CHANGES ASKED/g).length, 1)
   assert.match(all, /Half done \/ Two, round 1: LOOKS GOOD/)
 })
+
+/* Marks become checks: each mark asked for comes to the next round, to be ticked fixed or said to still stand. */
+const later = () => {
+  const now = Date.now()
+  while (Date.now() === now);
+}
+const box = (x, more = {}) => ({ type: 'box', colour: 'red', box: { x, y: 1, w: 2, h: 2 }, ...more })
+
+test('each mark and the notes of an answer come to the next round as earlier marks, at their places', () => {
+  push({ app: 'Carry', screen: 'One', after: picture })
+  receive({ appSlug: 'carry', id: 'one', png: null, shapes: [box(1, { text: 'Bigger' }), { type: 'arrow', colour: 'blue', box: { x: 0, y: 0, w: 6, h: 4 }, from: { x: 0, y: 0 }, to: { x: 6, y: 4 } }], notes: 'Bigger title', verdict: 'changes', imageSize: { w: 8, h: 5 } })
+  const entry = push({ app: 'Carry', screen: 'One', after: picture })
+  assert.deepEqual(entry.asked.map(a => [a.n, a.round, a.type, a.state]), [[1, 1, 'box', 'open'], [2, 1, 'arrow', 'open'], [3, 1, 'notes', 'open']])
+  assert.equal(entry.asked[0].text, 'Bigger', 'with what was written there')
+  assert.deepEqual(entry.asked[0].size, { w: 8, h: 5 }, 'the size it was drawn on, so the page can fit it to a new one')
+  assert.deepEqual(entry.asked[1].box, { x: -18, y: -20, w: 48, h: 48 }, 'an arrow is about what its head points at')
+  assert.equal(entry.asked[2].box, undefined, 'notes have no place')
+  // Pushed again with no answer in between, nothing is lost and nothing doubles.
+  assert.deepEqual(push({ app: 'Carry', screen: 'One', after: picture }).asked.map(a => a.n), [1, 2, 3])
+})
+
+test('what was said of each earlier mark: fixed ones are held, the rest stay open, and read says which', () => {
+  const env = { ...process.env, REVIEW_HOME: home }
+  push({ app: 'Ticked', screen: 'One', after: picture })
+  receive({ appSlug: 'ticked', id: 'one', png: null, shapes: [box(1), box(2), box(3)], notes: '', verdict: 'changes', imageSize: { w: 8, h: 5 } })
+  push({ app: 'Ticked', screen: 'One', after: picture })
+  const record = receive({ appSlug: 'ticked', id: 'one', png: null, shapes: [box(4)], notes: '', verdict: 'changes', imageSize: { w: 8, h: 5 }, said: { 1: 'fixed', 2: 'stands', 3: 'maybe' } })
+  assert.deepEqual(record.asked.map(a => [a.n, a.said]), [[1, 'fixed'], [2, 'stands'], [3, null]], 'a word that is not one of the two is not said')
+  assert.equal(record.asked[0].state, undefined, 'the agent reads what was said, not how the page keeps it')
+  const text = execFileSync('node', [CLI, 'read', '--app', 'Ticked', '--latest'], { env, encoding: 'utf8' })
+  assert.match(text, /Earlier marks: 1 of 3 ticked fixed, 2 still to do/)
+  assert.match(text, /1\. fixed, from round 1: box \(red\) at x 1, y 1, 2x2/)
+  assert.match(text, /2\. still stands, from round 1: box/)
+  assert.match(text, /3\. not ticked, so still to do, from round 1: box/)
+  const [json] = JSON.parse(execFileSync('node', [CLI, 'read', '--app', 'Ticked', '--latest', '--json'], { env, encoding: 'utf8' }))
+  assert.deepEqual(json.asked.map(a => a.said), ['fixed', 'stands', null])
+  const third = push({ app: 'Ticked', screen: 'One', after: picture })
+  assert.deepEqual(third.asked.map(a => [a.n, a.round, a.state]), [[1, 1, 'fixed'], [2, 1, 'open'], [3, 1, 'open'], [4, 2, 'open']])
+  assert.equal(third.asked[0].fixedIn, 2)
+  // A fixed one is told again only when it came back.
+  const quiet = receive({ appSlug: 'ticked', id: 'one', png: null, shapes: [], notes: 'x', verdict: 'changes', imageSize: null })
+  assert.deepEqual(quiet.asked.map(a => a.n), [2, 3, 4])
+  later()
+  const back = receive({ appSlug: 'ticked', id: 'one', png: null, shapes: [], notes: '', verdict: 'changes', imageSize: null, said: { 1: 'stands' } })
+  assert.deepEqual(back.asked[0], { n: 1, round: 1, type: 'box', colour: 'red', box: { x: 1, y: 1, w: 2, h: 2 }, said: 'stands', cameBack: true, fixedIn: 2 })
+  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Ticked', '--latest'], { env, encoding: 'utf8' }), /1\. came back, from round 1/)
+  const fourth = push({ app: 'Ticked', screen: 'One', after: picture })
+  assert.deepEqual(fourth.asked.filter(a => a.n === 1).map(a => [a.state, a.cameBack]), [['open', true]], 'it is open again, and says it came back')
+})
+
+test('a Looks good ticks every earlier mark fixed, and one pressed over changes takes their marks back', () => {
+  push({ app: 'Good', screen: 'One', after: picture })
+  receive({ appSlug: 'good', id: 'one', png: null, shapes: [box(1), box(2)], notes: '', verdict: 'changes', imageSize: null })
+  push({ app: 'Good', screen: 'One', after: picture })
+  receive({ appSlug: 'good', id: 'one', png: null, shapes: [box(3)], notes: 'More', verdict: 'changes', imageSize: null, said: { 1: 'stands' } })
+  later()
+  const good = receive({ appSlug: 'good', id: 'one', png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null, said: { 2: 'stands' } })
+  assert.deepEqual(good.asked.map(a => a.said), ['fixed', 'fixed'])
+  const next = push({ app: 'Good', screen: 'One', after: picture })
+  assert.deepEqual(next.asked.map(a => [a.n, a.state]), [[1, 'fixed'], [2, 'fixed']], 'the marks sent before the Looks good do not come along')
+})
+
+test('marks sent twice on one picture all come along, and what was said in either counts', () => {
+  push({ app: 'Two sends', screen: 'One', after: picture })
+  receive({ appSlug: 'two-sends', id: 'one', png: null, shapes: [box(1)], notes: '', verdict: 'changes', imageSize: null })
+  push({ app: 'Two sends', screen: 'One', after: picture })
+  receive({ appSlug: 'two-sends', id: 'one', png: null, shapes: [box(2)], notes: '', verdict: 'changes', imageSize: null, said: { 1: 'fixed' } })
+  later()
+  // The page sends only what is new: the second time, what was said of mark 1 has gone already.
+  receive({ appSlug: 'two-sends', id: 'one', png: null, shapes: [box(3)], notes: '', verdict: 'changes', imageSize: null })
+  const next = push({ app: 'Two sends', screen: 'One', after: picture })
+  assert.deepEqual(next.asked.map(a => [a.n, a.round, a.state]), [[1, 1, 'fixed'], [2, 2, 'open'], [3, 2, 'open']])
+})
+
+test('an answer about an older picture says nothing of the earlier marks on the new one', async () => {
+  const first = push({ app: 'Old marks', screen: 'One', after: picture })
+  receive({ appSlug: 'old-marks', id: 'one', png: null, shapes: [box(1)], notes: '', verdict: 'changes', imageSize: null })
+  await new Promise(r => setTimeout(r, 5))
+  push({ app: 'Old marks', screen: 'One', after: picture })
+  const old = receive({ appSlug: 'old-marks', id: 'one', png: null, shapes: [box(2)], notes: '', verdict: 'changes', imageSize: null, after: first.after, round: 1, said: { 1: 'fixed' } })
+  assert.equal(old.olderPicture, true)
+  assert.equal(old.asked, undefined)
+})
+
+test('push says that earlier marks come along as checks', () => {
+  const env = { ...process.env, REVIEW_HOME: home }
+  push({ app: 'Told', screen: 'One', after: picture })
+  receive({ appSlug: 'told', id: 'one', png: null, shapes: [box(1), box(2)], notes: '', verdict: 'changes', imageSize: null })
+  assert.match(execFileSync('node', [CLI, 'push', '--app', 'Told', '--screen', 'One', '--after', picture], { env, encoding: 'utf8' }), /2 earlier marks on this screen come along as checks/)
+})

@@ -2049,3 +2049,96 @@ test('letting half a phrase go never costs the next whole phrase, and the foot m
   assert.equal(await page.locator('#notes').inputValue(), 'half a note')
   assert.deepEqual(errors, [])
 })
+
+/* ---------- marks become checks ---------- */
+
+test('marks become checks: last round\'s marks wait at their places on the new picture, to tick fixed or say they still stand', { skip }, async () => {
+  const { push, read, open, port, queue } = await rig()
+  push('Again', ['One'], null)
+  const first = (await queue('again')).screens[0]
+  // Round 1's answer, as the page sends it.
+  await fetch(`http://127.0.0.1:${port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+    appSlug: 'again', id: 'one', after: first.after, round: 1, verdict: 'changes', notes: 'Show sizes too.', imageSize: { w: 1600, h: 900 },
+    shapes: [{ type: 'box', colour: 'red', box: { x: 100, y: 100, w: 300, h: 200 } }, { type: 'text', colour: 'red', box: { x: 900, y: 500, w: 300, h: 40 }, text: 'Make this the main button' }],
+  }) })
+  push('Again', ['One'], null)
+  const { page, errors } = await open('again', { undo: 40 })
+  const asked = page.locator('#asked')
+  await asked.waitFor()
+  assert.deepEqual(await asked.locator('.ask-words').allInnerTexts(), ['A box here', '“Make this the main button”', 'Notes: “Show sizes too.”'])
+  assert.equal(await page.locator('#askedChip').innerText(), '3 to check')
+  // At its place: drawn on screen beside the picture, and the picture keeps the rest of the window.
+  // The dashed outline of mark 1, down its left side: some of that strip is drawn on.
+  await page.waitForFunction(() => {
+    const { data } = document.getElementById('canvas').getContext('2d').getImageData(94, 100, 12, 200)
+    for (let i = 3; i < data.length; i += 4) if (data[i]) return true
+    return false
+  }, null, { timeout: 3000 })
+  const stage = await page.locator('#stage').boundingBox()
+  const side = await asked.boundingBox()
+  assert.ok(side.x >= stage.x + stage.width, 'beside the picture, not over it')
+  assert.ok(side.x + side.width <= 1500, 'on the page')
+  assert.equal(await page.locator('[data-act=send]').isDisabled(), true, 'nothing said yet')
+  await asked.locator('[data-ask="1"] [data-ask-say="fixed"]').click()
+  await asked.locator('[data-ask="2"] [data-ask-say="stands"]').click()
+  assert.equal(await page.locator('#askedChip').innerText(), '1 to check')
+  assert.equal(await page.locator('[data-act=send]').isDisabled(), false, 'still stands is something to send')
+  // Kept in the draft, so a reload loses nothing.
+  assert.deepEqual((await saved(page, 'again', 'one', 2)).said, { 1: 'fixed', 2: 'stands' })
+  // K hides the list and the picture takes the room; again brings it back.
+  await page.keyboard.press('k')
+  assert.equal(await asked.isVisible(), false)
+  assert.ok((await page.locator('#stage').boundingBox()).width > stage.width, 'the picture grows into the room')
+  await page.keyboard.press('k')
+  assert.equal(await asked.isVisible(), true)
+  await page.keyboard.press('Meta+Enter')
+  const sent = await waitFor(() => read('Again').find(r => r.round === 2))
+  assert.equal(sent.verdict, 'changes')
+  assert.deepEqual(sent.asked.map(a => [a.n, a.said]), [[1, 'fixed'], [2, 'stands'], [3, null]])
+  // Round 3: the fixed one is held quietly, the others are asked again, and a Looks good ticks them all.
+  push('Again', ['One'], null)
+  const next = await open('again', { undo: 40 })
+  await next.page.locator('#asked').waitFor()
+  assert.deepEqual(await next.page.locator('#asked [data-ask]').evaluateAll(rows => rows.map(r => r.dataset.ask)), ['2', '3'])
+  assert.equal(await next.page.locator('#askedHeld').innerText(), '1 held')
+  await next.page.keyboard.press('g')
+  const good = await waitFor(() => read('Again').find(r => r.round === 3))
+  assert.equal(good.verdict, 'approved')
+  assert.deepEqual(good.asked.map(a => [a.n, a.said]), [[2, 'fixed'], [3, 'fixed']])
+  assert.deepEqual([...errors, ...next.errors], [])
+})
+
+test('marks become checks: a mark fixed before is flagged when the picture changes there again, and can be said to have come back', { skip }, async () => {
+  const { push, read, open, port, queue, home } = await rig()
+  const plain = join(home, 'plain.png')
+  const moved = join(home, 'moved.png')
+  writePicture(plain, 1600, 900)
+  writePicture(moved, 1600, 900, { x: 120, y: 120, w: 200, h: 120 })
+  const answer = async (round, body) => {
+    const s = (await queue('back')).screens[0]
+    await fetch(`http://127.0.0.1:${port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: 'back', id: 'one', after: s.after, round, imageSize: { w: 1600, h: 900 }, notes: '', shapes: [], ...body }) })
+  }
+  push('Back', ['One'], null, [], plain)
+  await answer(1, { verdict: 'changes', shapes: [{ type: 'box', colour: 'red', box: { x: 100, y: 100, w: 300, h: 200 } }] })
+  push('Back', ['One'], null, [], plain)
+  await answer(2, { verdict: 'changes', notes: 'Fine now', said: { 1: 'fixed' } })
+  // Nothing changed where it was: held quietly, not asked.
+  push('Back', ['One'], null, ['--before', plain], plain)
+  const quiet = await open('back', { undo: 60000 })
+  await quiet.page.waitForTimeout(400)
+  assert.equal(await quiet.page.locator('#askedHeld').innerText(), '1 held')
+  assert.deepEqual(await quiet.page.locator('#asked [data-ask="1"]').count(), 0)
+  // Changed there again: it may have come back.
+  await answer(3, { verdict: 'approved' })
+  push('Back', ['One'], null, ['--before', plain], moved)
+  const { page, errors } = await open('back', { undo: 40 })
+  const row = page.locator('#asked [data-ask="1"]')
+  await row.waitFor()
+  assert.match(await row.innerText(), /Came back\?\s*A box here\s*You said fixed in round 2/)
+  assert.equal(await page.locator('#askedChip').innerText(), '1 came back?')
+  await row.locator('[data-ask-say="stands"]').click()
+  await page.keyboard.press('Meta+Enter')
+  const sent = await waitFor(() => read('Back').find(r => r.round === 4))
+  assert.deepEqual(sent.asked.map(a => [a.n, a.said, a.cameBack]), [[1, 'stands', true]])
+  assert.deepEqual([...errors, ...quiet.errors], [])
+})

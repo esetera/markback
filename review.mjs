@@ -84,16 +84,24 @@ const fail = message => {
 const need = key => flags[key] || fail(`Missing --${key}`)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+/** One mark in a line. Its words came from a page or a file: printed with no new lines and no codes, they cannot pass for a line of this report. */
+function markLine(s) {
+  const box = `x ${s.box.x}, y ${s.box.y}, ${s.box.w}x${s.box.h}`
+  const what = s.type === 'text' ? `text "${s.text}"` : s.type === 'arrow' && s.from ? `arrow from ${s.from.x},${s.from.y} to ${s.to.x},${s.to.y}` : s.type === 'words' ? `words "${s.text}"` : s.type === 'pin' ? `said at pin ${s.n ?? ''} "${s.text}"`.replace('  ', ' ') : s.type
+  return printable(`${what} (${s.colour ?? s.color}) at ${box}${sayWords(s)}`)
+}
+
 /** One feedback record as a change request someone can act on. */
 function describe(r) {
   const head = `${r.app} / ${r.screen}${r.mode ? ` (${r.mode})` : ''}, round ${r.round}: ${r.verdict === 'approved' ? (r.noComment ? 'LOOKS GOOD (no comment)' : 'LOOKS GOOD') : 'CHANGES ASKED'}${r.olderPicture ? ' (about an older picture; a new one has been pushed since)' : ''}`
   const lines = [head]
   if (r.notes) lines.push(`  Notes: ${r.notes.replace(/\n/g, '\n         ')}`)
-  for (const [i, s] of r.shapes.entries()) {
-    const box = `x ${s.box.x}, y ${s.box.y}, ${s.box.w}x${s.box.h}`
-    const what = s.type === 'text' ? `text "${s.text}"` : s.type === 'arrow' ? `arrow from ${s.from.x},${s.from.y} to ${s.to.x},${s.to.y}` : s.type === 'words' ? `words "${s.text}"` : s.type === 'pin' ? `said at pin ${s.n ?? ''} "${s.text}"`.replace('  ', ' ') : s.type
-    // A mark's words came from a page or a file. Printed with no new lines and no codes, they cannot pass for a line of this report.
-    lines.push(`  ${i + 1}. ${printable(`${what} (${s.colour ?? s.color}) at ${box}${sayWords(s)}`)}`)
+  for (const [i, s] of r.shapes.entries()) lines.push(`  ${i + 1}. ${markLine(s)}`)
+  const asked = Array.isArray(r.asked) ? r.asked : []
+  if (asked.length) {
+    const open = asked.filter(a => a.said !== 'fixed').length
+    lines.push(`  Earlier marks: ${asked.length - open} of ${asked.length} ticked fixed${open ? `, ${open} still to do` : ''}`)
+    for (const a of asked) lines.push(`    ${a.n}. ${a.said === 'fixed' ? 'fixed' : a.cameBack ? 'came back' : a.said === 'stands' ? 'still stands' : 'not ticked, so still to do'}, from round ${a.round}: ${a.type === 'notes' ? `notes "${printable(a.text)}"` : markLine(a)}`)
   }
   if (r.annotatedImage) lines.push(`  Marked picture: ${r.annotatedImage}`)
   lines.push(`  After: ${r.afterImage}${r.beforeImage ? `\n  Before: ${r.beforeImage}` : ''}`)
@@ -238,6 +246,9 @@ if (command === 'push') {
   // Long words go unread, and they cost time before anyone can act.
   if ([entry.note, ...(entry.check ?? [])].some(words => words.trim().split(/\s+/).length > 10)) console.error('Too long: say what to look at in ten words or fewer. Only the first sentence shows; the rest waits behind More.')
   console.log(`Queued ${entry.app} / ${entry.screen}${entry.mode ? ` (${entry.mode})` : ''}, round ${entry.round}: ${all.length} screen${all.length === 1 ? '' : 's'} for ${entry.app}. Open http://localhost:${PORT}/#${entry.appSlug}${isSetAside(entry.appSlug) ? `\nThis review is set aside: it is not offered until the reviewer brings it back.` : ''}`)
+  const open = (entry.asked ?? []).filter(a => a.state !== 'fixed').length
+  // The agent should know the page will ask about these, and that `read` says which still stand.
+  if (open) console.log(`${open} earlier mark${open === 1 ? '' : 's'} on this screen ${open === 1 ? 'comes' : 'come'} along as checks: the reviewer ticks each fixed or says it still stands, and review read says which.`)
 } else if (command === 'list') {
   const apps = listApps().filter(a => !flags.app || a.slug === slug(flags.app))
   if (!apps.length) console.log('Nothing queued.')

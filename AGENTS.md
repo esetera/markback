@@ -68,7 +68,7 @@ review push --app "My app" --screen "Home" --mode light --after after.png --befo
 - `--before` is the picture from before the change, at the same size. The page then marks where the picture changed, so you need not describe the change.
 - `--check` is what to look at, ten words or fewer. Ask a question. It can be given up to three times. It is read at a glance, so do not say what you did or why.
 - `--kind qa` (the default): something built, to check. `--kind proposal`: a new idea to shape, shown loudly as Proposal.
-- Pushing the same app, screen and mode again starts the next round on that step.
+- Pushing the same app, screen and mode again starts the next round on that step. The marks sent on the last round come along by themselves: the page shows each at its place and asks whether it is fixed. Do not repeat them with `--check`.
 - `--from "Codex"` says who pushed it. The default is Claude.
 - Pictures are copied, so temporary files are fine. PNG, JPEG, WebP and SVG all work.
 - Do not push hundreds of pages when ten will do. Offer a sample first.
@@ -136,6 +136,7 @@ Each answer has:
 - `notes`: what they typed or spoke.
 - `shapes`: each with `type` (box, arrow, text, freehand, words, pin) and `box` in the picture's own pixels. An arrow has `from` and `to`. Text has `text`. A pin is something said at a spot: `at` is the spot and `text` is what was said.
 - `words` on a shape: the words under that mark, when the picture was pushed with its words. `element` is the element they are all in. Search the code for them to find what the mark is about. A shape of type `words` is words the person chose, in `text`.
+- `asked`: the marks and notes from earlier rounds, on a screen pushed again. Each has `n`, the `round` it was asked in, and the mark's own `type`, `box`, `text` and `words`. `said` is what the person said of it: `fixed`, `stands`, or `null` when they did not tick it. `cameBack: true` means they had ticked it fixed, and it came back.
 - `annotatedImage`: the picture with the marks burned in. **Open it before you change anything.** A box round something says more than its numbers.
 - `afterImage`, `beforeImage`, `round`.
 
@@ -145,6 +146,8 @@ Each answer has:
 2. Make one change per mark, with the typed notes as the explanation.
 3. Check your change on the real screen.
 4. Take the changed screenshots again and push them under the same names and modes. The open page shows the new round by itself, so do not open it again. Tell the person the next round is ready, then wait again.
+
+Earlier marks that still stand, came back or were not ticked are still to do: act on them as on new marks. Leave the ones said fixed alone.
 
 Keep a list of the marks and tick each one when it is done, so none is lost.
 
