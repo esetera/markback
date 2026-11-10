@@ -23,7 +23,7 @@ The first two are your own agent's work, such as Claude Code or Codex: it builds
 
 ## Start with your project
 
-You need [Node](https://nodejs.org) 22.6 or later, and Chrome or Edge for the pictures.
+You need [Node](https://nodejs.org) 22.6 or later. Markback uses Chrome or Edge for screenshots, or downloads a local screenshot browser on first use inside Codex's macOS sandbox.
 
 ### Start from chat
 
@@ -32,6 +32,8 @@ Open your project in a local Claude Code or Codex session and ask in the chat.
 > Set up Markback from https://github.com/esetera/markback for this project. Open the first review and keep sending screenshots to Markback as you work.
 
 Your agent runs the setup and opens the review. As it reaches a visible change, it pushes the updated screenshots and waits for your feedback. You can draw and press **Send**, or press **Looks good**. Keep the agent session running while you review.
+
+In a fresh Codex project, the agent can use `npm install --prefix .markback github:esetera/markback` to install locally and read `.markback/node_modules/markback/AGENTS.md` in the current session. The agent keeps `REVIEW_HOME` in a writable project folder and uses that same folder for each review command. `review project` can start the review even when Codex protects `.agents/skills` from edits.
 
 ### Manual installation
 
@@ -117,7 +119,7 @@ Run it again after you update Markback. To put it in one project only, add `--to
 codex exec -s workspace-write "Here is a screen I want reviewed: shot.png. Put it in front of me for review."
 ```
 
-In Codex's sandbox, taking a new screenshot with Chrome needs leave to run outside it: say yes when asked. Pushing only writes files, so it works inside the sandbox even when `review start` cannot see the page.
+For local projects inside Codex's macOS sandbox, Markback downloads and caches Chrome Headless Shell on the first capture. The download needs network access. This capture path is for local pages and assets. An agent with a built-in browser can also capture a page there and push the screenshot to Markback.
 
 **Kimi Code** takes the skills with `--skills-dir`, in place of your others for that run: `kimi --skills-dir ~/markback/skills`, with `-S` to go back into a session.
 

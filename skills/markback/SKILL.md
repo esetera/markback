@@ -31,6 +31,8 @@ It finds how the app runs, takes pictures of its main screens, and names the rev
 
 Tell them they can draw and press **Send**. From here you keep the review going yourself, and they never run a command: use the `read-marks` skill to wait for their answer and act on it, and the `push-screens` skill after each visible change you make, for as long as this session works on the project.
 
+For a single-screen project, `review project --no-open` can also capture and push the next round. It uses the same review name and screen. Wait for that round in the same session.
+
 If a command fails or nothing shows, run `review check` and tell the person what it says.
 
 If `review` is not found, use `node <markback folder>/review.mjs` in its place (in Claude Code, `node "${CLAUDE_PLUGIN_ROOT}/review.mjs"`).

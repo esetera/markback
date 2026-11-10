@@ -286,8 +286,13 @@ if (command === 'push') {
   // Where Codex and Cursor look in a project. Without this computer's paths: the folder may be committed.
   const agentSkills = join(process.cwd(), '.agents', 'skills')
   const fresh = !existsSync(join(agentSkills, 'markback'))
-  installSkills({ to: agentSkills, root: null })
-  if (fresh) console.log("Put Markback's skills in .agents/skills, where Codex and other agents find them.")
+  try {
+    installSkills({ to: agentSkills, root: null })
+    if (fresh) console.log("Put Markback's skills in .agents/skills, where Codex and other agents find them.")
+  } catch (error) {
+    if (!['EACCES', 'EPERM', 'EROFS'].includes(error.code)) throw error
+    console.warn('Project skill files are read-only in this session. Continuing to the review.')
+  }
   const found = await findApp(process.cwd())
   let url = found.running
   if (!url && found.run) {

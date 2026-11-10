@@ -781,7 +781,7 @@ test('Chrome is told to make no calls of its own, on every way it is run', () =>
   // And as before: no window, its own profile, and nothing asked of the keychain.
   for (const kept of ['--headless=new', '--use-mock-keychain', '--password-store=basic', '--no-first-run', '--no-default-browser-check', '--user-data-dir=/a/profile', '--window-size=800,600']) assert.ok(flags.includes(kept), kept)
   // The three places Chrome is started all take their flags from here.
-  const started = file => readFileSync(join(here, '..', 'lib', file), 'utf8').split('\n').filter(line => /\b(run|spawn)\(chrome, /.test(line))
+  const started = file => readFileSync(join(here, '..', 'lib', file), 'utf8').split('\n').filter(line => /\b(run|spawn)\(browser\.executable, /.test(line))
   assert.equal(started('first.mjs').length + started('project.mjs').length, 3)
   for (const line of [...started('first.mjs'), ...started('project.mjs')]) assert.match(line, /\[\.\.\.chromeFlags\(profile/)
 })
