@@ -843,7 +843,7 @@ async function startMic() {
   return true
 }
 void findRoute().then(route => {
-  // A browser lets a page use the microphone only at a secure address. A phone on the Wi-Fi opens a plain one.
+  // A browser lets a page use the microphone only at a secure address: localhost, or the HTTPS name Tailscale serves.
   mic.route = window.isSecureContext ? route : null
   renderMic()
 })
@@ -2508,13 +2508,14 @@ function renderPhone() {
   $('phoneOn').innerHTML = `${ICONS.phone}<span>Open to your phone</span>`
   $('phoneOn').dataset.tip = st.on ? `Your phone can open this page until ${when(st.until)}. Press to see the code, or to turn it off` : ''
   if (!phoneOpen()) return
+  const promise = `<p><b>Only your own devices can reach this</b>, signed in to Tailscale as you. Nothing is open to the internet.</p>`
   if (st.on) {
     const code = qrSvg(st.url)
     // An address too long for the code is shown large, to type.
-    setHtml($('phoneBody'), `${code ? `<div class="phone-code">${code}</div>` : ''}<div class="phone-words"><p><b>On until ${esc(when(st.until))}.</b> Scan the code with your phone's camera, on the same Wi-Fi as this computer.</p><p>The code in the address is new each time. Others on the network see nothing without it.</p><p>On the phone, type your notes: speaking needs a secure address.</p><p class="phone-address${code ? '' : ' large'}"><a href="${esc(st.url)}">${esc(st.url)}</a></p></div>`)
+    setHtml($('phoneBody'), `${code ? `<div class="phone-code">${code}</div>` : ''}<div class="phone-words"><p><b>On until ${esc(when(st.until))}.</b> Scan the code with your phone's camera. The first time, it can take half a minute to open.</p>${promise}<p class="phone-address${code ? '' : ' large'}"><a href="${esc(st.url)}">${esc(st.url)}</a></p></div>`)
     setHtml($('phoneActions'), `<button class="btn" data-phone="close">Close</button><button class="btn primary" data-phone="off"${phone.busy ? ' disabled' : ''}>Turn it off</button>`)
   } else {
-    setHtml($('phoneBody'), `<div class="phone-words"><p>Mark the screens from your phone, on the same Wi-Fi as this computer.</p><p><b>Until you turn it on, this page answers this computer only.</b> Turned on, it needs a code that is new each time, so others on the network see nothing.</p><p>It turns itself off after ${st.minutes ?? 30} minutes, and when Markback stops.</p>${phone.problem ? `<p class="phone-problem" role="alert">${esc(phone.problem)}</p>` : ''}</div>`)
+    setHtml($('phoneBody'), `<div class="phone-words"><p>Mark the screens from your phone, over Tailscale, your own private network. It needs Tailscale on this computer and on your phone, signed in as the same person.</p>${promise}<p>It turns itself off after ${st.minutes ?? 30} minutes, and when Markback stops.</p>${phone.problem ? `<p class="phone-problem" role="alert">${esc(phone.problem)}</p>` : ''}</div>`)
     setHtml($('phoneActions'), `<button class="btn" data-phone="close">Not now</button><button class="btn primary" data-phone="on"${phone.busy ? ' disabled' : ''}>${phone.busy ? 'Turning it on…' : 'Turn it on'}</button>`)
   }
 }

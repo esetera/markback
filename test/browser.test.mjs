@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { writePicture } from './helpers.mjs'
+import { standInTailscale, writePicture } from './helpers.mjs'
 
 const from = process.env.REVIEW_PLAYWRIGHT_FROM
 const skip = from ? false : 'set REVIEW_PLAYWRIGHT_FROM to a package.json that has Playwright'
@@ -49,7 +49,8 @@ async function rig(more = {}) {
   const home = mkdtempSync(join(tmpdir(), 'review-browser-'))
   const port = await freePort()
   // REVIEW_CHROME here is for driving these tests; a picture of an app is taken by the Chrome a person would have.
-  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_CHROME: '', ...more }
+  // A Tailscale that is not there, unless a test gives its stand-in: the real one is never run.
+  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_CHROME: '', REVIEW_TAILSCALE: join(home, 'no-tailscale'), REVIEW_PHONE_WARM: 'off', ...more }
   // Wide: it fills the room, and what to check is the line under the bar. `tall` leaves room beside it.
   const picture = join(home, 'p.png')
   writePicture(picture, 1600, 900)
@@ -2142,26 +2143,32 @@ async function readCode(svg) {
   }
 }
 
-test('review from a phone: the page turns it on, shows a code that reads as the address, says so in the bar, and turns it off', { skip }, async t => {
-  const r = await rig({ REVIEW_PHONE_HOST: '127.0.0.1' })
+test('review from a phone: the page turns it on, shows a code that reads as the address, says so in the bar, says what stops it, and turns it off', { skip }, async t => {
+  const tail = standInTailscale(mkdtempSync(join(tmpdir(), 'review-tailscale-')), { https: false })
+  const r = await rig({ REVIEW_TAILSCALE: tail.program })
   r.push('Desk', ['One'])
   const { page, errors } = await r.open('desk')
   assert.equal(await page.locator('#phoneOn').isVisible(), false, 'off until it is turned on')
   await page.locator('#menuOpen').click()
   await page.locator('[data-menu=phone]').click()
   const modal = page.locator('#phoneModal')
-  await modal.getByText('Until you turn it on, this page answers this computer only.').waitFor()
+  await modal.getByText('Only your own devices can reach this').waitFor()
+  await modal.getByText('It needs Tailscale on this computer and on your phone, signed in as the same person.', { exact: false }).waitFor()
   await modal.getByText('It turns itself off after 30 minutes, and when Markback stops.').waitFor()
-  assert.equal((await (await fetch(`http://127.0.0.1:${r.port}/api/phone`)).json()).on, false, 'opening the window opens nothing')
+  assert.deepEqual(tail.calls(), [], 'opening the window asks Tailscale nothing')
+  // What stops it is said in the window, in plain words.
+  await modal.getByRole('button', { name: 'Turn it on' }).click()
+  await modal.getByText('HTTPS is not turned on for your tailnet.', { exact: false }).waitFor()
+  assert.equal(await page.locator('.phone-code').count(), 0)
+  tail.set({ https: true })
   await modal.getByRole('button', { name: 'Turn it on' }).click()
   await page.locator('.phone-code svg').waitFor()
-  const { url } = await (await fetch(`http://127.0.0.1:${r.port}/api/phone`)).json()
-  assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/\?key=[\w-]{24}$/)
-  assert.equal(await page.locator('.phone-address a').innerText(), url)
-  await modal.getByText('Others on the network see nothing without it.').waitFor()
+  assert.equal(await page.locator('.phone-address a').innerText(), 'https://my-mac.example.ts.net')
+  await modal.getByText('The first time, it can take half a minute to open.', { exact: false }).waitFor()
+  assert.ok(tail.calls().includes(`serve --bg --https=443 http://127.0.0.1:${r.port}`))
   const read = await readCode(await page.locator('.phone-code').innerHTML())
   if (read === null) t.diagnostic('this Chrome has no code reader: the code was not read back')
-  else assert.equal(read, url, 'a camera reads the address from the code')
+  else assert.equal(read, 'https://my-mac.example.ts.net', 'a camera reads the https address from the code')
   // The window can be closed with it still on: the bar then says so in words, until it is off.
   await page.keyboard.press('Escape')
   assert.equal(await modal.isVisible(), false)
@@ -2169,66 +2176,64 @@ test('review from a phone: the page turns it on, shows a code that reads as the 
   await page.locator('#phoneOn').click()
   await modal.getByRole('button', { name: 'Turn it off' }).click()
   await modal.getByRole('button', { name: 'Turn it on' }).waitFor()
+  assert.deepEqual(tail.state().serve.Web, {})
   assert.equal(await page.locator('#phoneOn').isVisible(), false)
-  await assert.rejects(fetch(url), 'nothing listens for a phone any more')
-  assert.deepEqual(errors, [])
-
-  // What stops it is said in the window, in plain words.
-  const away = await rig({ REVIEW_PHONE_HOST: '192.0.2.1' })
-  away.push('Desk', ['One'])
-  const other = await away.open('desk')
-  await other.page.locator('#menuOpen').click()
-  await other.page.locator('[data-menu=phone]').click()
-  await other.page.locator('#phoneModal').getByRole('button', { name: 'Turn it on' }).click()
-  await other.page.locator('.phone-problem').getByText('Markback could not listen for your phone at 192.0.2.1').waitFor()
-  assert.equal(await other.page.locator('#phoneOn').isVisible(), false)
+  assert.equal(tail.calls().some(call => /funnel/.test(call)), false)
+  // The one refusal on the way, which the window said in words, is all the browser complains of.
+  assert.deepEqual(errors.filter(e => !/400 \(Bad Request\) .*\/api\/phone$/.test(e)), [])
 })
 
-test('review from a phone: the address from the code opens the page on a phone, which marks and sends; others and the closed door get nothing', { skip }, async () => {
-  const r = await rig({ REVIEW_PHONE_HOST: '127.0.0.1' })
+test('review from a phone: the page opened at the tailnet name, on a phone, marks, holds to talk and sends; others and the closed address get nothing', { skip }, async () => {
+  const tail = standInTailscale(mkdtempSync(join(tmpdir(), 'review-tailscale-')))
+  const r = await rig({ REVIEW_TAILSCALE: tail.program })
   r.push('Afar', ['One', 'Two'], null)
-  const out = execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, encoding: 'utf8' })
-  const url = new URL(out.match(/http:\/\/127\.0\.0\.1:\d+\/\?key=[\w-]+/)[0])
-  // A name that is not this computer's own, as a phone sees the computer: a plain address, not a secure one.
-  url.hostname = 'phone.test'
-  const far = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--host-resolver-rules=MAP phone.test 127.0.0.1'] })
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, stdio: 'ignore' })
+  // The name is this computer for this browser, as Tailscale's proxy makes it for a phone. The proxy also says who is asking.
+  // Tailscale's address is https, which a browser counts as secure; this plain one is counted so too, as it would be.
+  const at = `http://my-mac.example.ts.net:${r.port}`
+  const far = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--host-resolver-rules=MAP my-mac.example.ts.net 127.0.0.1', `--unsafely-treat-insecure-origin-as-secure=${at}`] })
   try {
-    const context = await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    const context = await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, extraHTTPHeaders: { 'Tailscale-User-Login': 'alice@example.com' } })
+    await context.addInitScript(fakeSpeech())
     const page = await context.newPage()
     const errors = []
     page.on('pageerror', e => errors.push(e.message))
-    await page.goto(`${url}&undo=40#afar`)
+    await page.goto(`${at}/?undo=40#afar`)
     await page.locator('#canvas').waitFor()
     await page.waitForFunction(() => document.getElementById('canvas').width > 300)
-    assert.equal(new URL(page.url()).searchParams.has('key'), false, 'the code has left the address bar')
-    assert.equal(await page.evaluate(() => window.isSecureContext), false)
-    // No microphone at a plain address: two large buttons, and the box for notes is out to type in.
-    await page.waitForFunction(() => document.body.classList.contains('no-talk'))
-    assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Looks good'])
-    assert.ok(await page.locator('#notes').isVisible())
+    assert.equal(await page.evaluate(() => window.isSecureContext), true)
+    // The microphone can work at a secure address: Hold to talk is there.
+    await page.locator('#talkBtn').waitFor()
+    assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Hold to talk', 'Looks good'])
     assert.equal(await page.locator('#notes').getAttribute('placeholder'), 'Notes', 'no key to press on a phone')
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390)
     await page.locator('#markBtn').tap()
     await page.locator('#toolButtons [data-tool=box]').tap()
     await finger(page, [0.1, 0.2], [0.2, 0.3], [0.3, 0.45])
-    await page.locator('#notes').tap()
-    await page.keyboard.type('The title wraps too soon.')
-    assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Send'])
+    // Held, it listens, and what is said goes to the notes.
+    const t = await page.locator('#talkBtn').boundingBox()
+    const cdp = await context.newCDPSession(page)
+    const point = [{ x: Math.round(t.x + t.width / 2), y: Math.round(t.y + t.height / 2) }]
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point })
+    await page.waitForFunction(() => window.FAKE_STARTS > 0)
+    await page.evaluate(() => window.say('the title wraps too soon', true))
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await page.waitForFunction(() => document.getElementById('talkBtn').innerText === 'Hold to talk')
+    assert.equal(await page.locator('#notes').inputValue(), 'the title wraps too soon')
     await page.locator('#footActions [data-act=send]').tap()
     const sent = await waitFor(() => r.read('Afar').find(x => x.screenId === 'one'))
-    assert.deepEqual(sent.shapes.map(s => s.type), ['box'], 'sent from the phone, and written on this computer')
-    assert.equal(sent.notes, 'The title wraps too soon.')
-    // On to the next screen, where Looks good is the answer.
+    assert.deepEqual(sent.shapes.map(s => s.type), ['box'], 'sent from the tailnet name, and written on this computer')
+    assert.equal(sent.notes, 'the title wraps too soon')
     await page.waitForFunction(() => document.getElementById('overall').innerText === '2 of 2')
     await page.locator('#footActions [data-act=good]').tap()
     assert.equal((await waitFor(() => r.read('Afar').find(x => x.screenId === 'two'))).verdict, 'approved')
-    // Another phone on the same network, without the code, is shown nothing.
+    // From the phone, nothing that runs things on the computer.
+    assert.equal(await page.evaluate(async () => (await fetch('/api/show', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'http://localhost:1/' }) })).status), 403)
+    // Another device's browser, with no name from Tailscale, is shown nothing.
     const stranger = await (await far.newContext()).newPage()
-    const refused = await stranger.goto(`http://phone.test:${url.port}/`)
-    assert.equal(refused.status(), 403)
-    assert.match(await stranger.locator('body').innerText(), /needs the code from the computer/)
+    assert.equal((await stranger.goto(`${at}/`)).status(), 403)
     execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'off'], { env: r.env, stdio: 'ignore' })
-    await assert.rejects(page.goto(`http://phone.test:${url.port}/`), 'off: the same phone reaches nothing')
+    assert.equal((await page.goto(`${at}/`)).status(), 403, 'off: the same phone is refused')
     assert.deepEqual(errors, [])
   } finally {
     await far.close()

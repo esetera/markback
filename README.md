@@ -146,11 +146,19 @@ Adding one says what it adds and asks first (in a terminal; run any other way, i
 
 ## What stays on your computer
 
-The Markback server listens only on this computer, unless you turn on review from your phone (below). Screens, marks and notes are plain files in `~/.review-wizard`, a folder that keeps Markback's first name (set `REVIEW_HOME` to move it). Your coding agent handles any review material it reads under its own data settings. If you enable online speech recognition, your browser sends the audio to its speech service.
+The Markback server listens only on this computer; review from your phone (below) reaches it through Tailscale. Screens, marks and notes are plain files in `~/.review-wizard`, a folder that keeps Markback's first name (set `REVIEW_HOME` to move it). Your coding agent handles any review material it reads under its own data settings. If you enable online speech recognition, your browser sends the audio to its speech service.
 
 ## Review from your phone
 
-Choose **Review from your phone** in the page's menu (or run `review phone on`) and scan the code with your phone's camera, on the same Wi-Fi. The page works with a finger: **Mark** brings out the tools, a finger draws, and **Looks good** or **Send** answers. It is off until you turn it on. Turned on, Markback listens on this computer's address in your local network as well, and every request must carry a code that is new each time, so others on the network see nothing. The bar says **Open to your phone** while it is on. It turns itself off after 30 minutes, when you press **Turn it off** (or run `review phone off`), and when Markback stops. It changes no settings; your computer may ask once whether to let Node accept incoming connections. A phone opens a plain address, so notes there are typed: browsers keep the microphone for secure ones.
+Choose **Review from your phone** in the page's menu (or run `review phone on`) and scan the code with your phone's camera. The page works with a finger: **Mark** brings out the tools, a finger draws, **Hold to talk** speaks your notes, and **Looks good** or **Send** answers.
+
+- **What it needs:** [Tailscale](https://tailscale.com/download) on this computer and on the phone, signed in as the same person, with HTTPS Certificates turned on for your tailnet. Tailscale from the Mac App Store works too: Markback finds its program inside the app when none is on the PATH. Markback never installs Tailscale or signs you in; if something is missing it says what to do in one line.
+- **What it opens, and to whom:** it asks Tailscale to serve the page at this computer's name in your tailnet, over HTTPS (`tailscale serve`), so the phone's microphone works. Only your own devices, signed in as you, reach it. Nothing is open to the internet: Markback never uses Tailscale Funnel, and refuses an address Funnel has opened. It adds only its own serve entry and removes only that one; it never runs `tailscale up`, `down`, `logout` or `set`.
+- **What a phone may do:** review and mark. The page, the screens and sending answers work; anything that runs something on this computer (taking a picture through its browser, the sample, the work queue) is refused.
+- **The first time:** Tailscale makes the address's certificate on its first visit, which can take half a minute. Markback visits the address once from this computer as soon as it is on, so the phone's first load is quick.
+- **How to close it:** **Turn it off** in the same window, or `review phone off`. It also turns itself off after 30 minutes, and when Markback stops. The bar says **Open to your phone** while it is on.
+
+The server still listens only on this computer. Tailscale passes the phone's requests to it here, with the name of the person who asked in a header it writes itself.
 
 ## Speaking (early)
 

@@ -31,9 +31,9 @@
  *   review project [--yes] [--no-open]           in a project's folder: finds its app, takes its main screens, opens
  *                                               them in your browser (the markback command is this)
  *   review open [--app MyApp]                   opens the review page in your browser
- *   review phone [on|off] [--code]              review from a phone on the same Wi-Fi: off until turned on, with a code in
- *                                               the address that is new each time, and off by itself after 30 minutes.
- *                                               Alone, it says whether it is on. --code prints the code to scan anywhere
+ *   review phone [on|off] [--code]              review from a phone, over your own Tailscale network: off until turned on,
+ *                                               and off again by itself after 30 minutes. Alone, it says whether it is on.
+ *                                               --code prints the code to scan even where this is not a terminal
  *
  *   review plugin add <folder or git address> [--yes]   review plugin list   review plugin remove <name>
  *   review <plugin> [<command>] ...             a command a plugin adds
@@ -58,6 +58,7 @@ import { addPlugins, addsWords, fetchSource, listPlugins, pluginsIn, removePlugi
 import { findApp, openPage, shootScreens, startApp } from './lib/project.mjs'
 import { runChecks, sayResult, sayVerdict, up } from './lib/check.mjs'
 import { addNote, closeRequest, listWork, openRequests, postIdea, pushedFor, setStage, take } from './lib/work.mjs'
+import { PhoneProblem, WORDS as PHONE_WORDS, leftWords, phoneOff, phoneOn, phoneStale, phoneStatus, warmUp } from './lib/phone.mjs'
 import { qr } from './public/qr.js'
 
 const [command, ...rest] = process.argv.slice(2)
@@ -200,6 +201,8 @@ async function start() {
   // A sandbox can stop this command reaching the page while the page runs. Its process still says so.
   if (ourServer(readPid()) && !flags.port) return console.log(`Already running: http://localhost:${port}`)
   mkdirSync(HOME, { recursive: true })
+  // A server that died with review from a phone on: it starts off, every time.
+  if (phoneStale() || phoneStatus().on) await phoneOff()
   const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'server.mjs')], { detached: true, stdio: 'ignore', env: { ...process.env, REVIEW_PORT: String(port) } })
   child.unref()
   for (let i = 0; i < 50; i++) {
@@ -216,13 +219,13 @@ async function start() {
 }
 
 async function stop() {
+  // Review from a phone goes off with the page, whether or not the server is there to do it.
+  if (await phoneOff()) console.log('Review from your phone is off.')
   if (!existsSync(PID_FILE)) return console.log('It is not running from here.')
   const pid = readPid()
   if (ourServer(pid)) {
-    // The phone's door is the server's own, and closes with it. Said, so nobody wonders.
-    const wasOpen = (await askPhone().catch(() => null))?.on
     process.kill(pid)
-    console.log(wasOpen ? 'Stopped. Review from your phone is off.' : 'Stopped.')
+    console.log('Stopped.')
   } else console.log('It was not running.')
   rmSync(PID_FILE, { force: true })
 }
@@ -240,32 +243,33 @@ const qrText = text => {
   for (let y = -4; y < n + 4; y += 2) lines.push(Array.from({ length: n + 8 }, (_, i) => (on(i - 4, y) ? (on(i - 4, y + 1) ? ' ' : '▄') : on(i - 4, y + 1) ? '▀' : '█')).join(''))
   return lines.join('\n')
 }
-/** Asks the running page about the phone's door, which only it can open or close. It throws when the page is not running. */
-async function askPhone(on) {
-  const res = await fetch(`http://127.0.0.1:${PORT}/api/phone`, on === undefined ? { signal: AbortSignal.timeout(3000) } : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on }), signal: AbortSignal.timeout(10000) })
-  const got = await res.json()
-  if (!res.ok) fail(got.error ?? 'It could not be changed.')
-  return got
-}
 const sayPhone = status => {
-  if (!status.on) return console.log('Review from your phone is off. The page answers this computer only.\nTurn it on with: review phone on')
+  if (!status.on) return console.log(`Review from your phone is off. Turn it on with: review phone on\nIt needs Tailscale on this computer and on the phone, signed in as the same person. Nothing is opened to the internet.`)
   const at = new Date(status.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   const code = process.stdout.isTTY || flags.code ? qrText(status.url) : ''
-  console.log(`Review from your phone is on.\nOpen this on your phone, on the same Wi-Fi as this computer:\n\n  ${status.url}\n${code ? `\n${code}\n` : ''}\nThe code at the end of the address is new each time. Others on the network see nothing without it.\nIt turns itself off at ${at}. To turn it off now: review phone off`)
+  console.log(`Review from your phone is on.\nOpen ${status.url} on your phone.${code ? `\n\n${code}\n` : ''}\nOnly devices signed in to your Tailscale as ${status.login} can reach it. Nothing is open to the internet.\nIt turns itself off at ${at}, in ${leftWords(status.until)}. To turn it off now: review phone off`)
 }
 async function phone(what) {
-  if (what && what !== 'on' && what !== 'off') fail('review phone | phone on | phone off')
-  if (!(await up(PORT))) {
-    // No page, no door: nothing listens for a phone.
-    if (what === 'off' || !what) return console.log('Review from your phone is off. The review page is not running.')
-    fail('The review page is not running. Start it with: review start')
+  // Said plainly, whatever else was asked: this never opens to the internet.
+  if (flags.funnel || flags.public || flags.internet || what === 'funnel') fail(PHONE_WORDS.never)
+  if (what === 'off') return console.log((await phoneOff()) ? 'Review from your phone is off.' : 'Review from your phone was not on.')
+  if (what === 'on') {
+    if (!(await up(PORT))) fail('The review page is not running. Start it with: review start')
+    try {
+      const status = await phoneOn({ port: PORT })
+      sayPhone(status)
+      // Tailscale makes the address's certificate on its first visit. Made now, so the phone's first load is quick.
+      console.log('Getting it ready for the phone: the first time can take half a minute…')
+      return console.log((await warmUp(status.url)) ? 'Ready.' : 'It did not answer yet. The phone\'s first load may take half a minute.')
+    } catch (error) {
+      if (error instanceof PhoneProblem) fail(error.message)
+      throw error
+    }
   }
-  if (what === 'off') {
-    const wasOn = (await askPhone()).on
-    await askPhone(false)
-    return console.log(wasOn ? 'Review from your phone is off.' : 'Review from your phone was not on.')
-  }
-  return sayPhone(what === 'on' ? await askPhone(true) : await askPhone())
+  if (what) fail('review phone | phone on | phone off')
+  // Past its time with no server to turn it off: turned off now, so what is said is true.
+  if (phoneStale()) await phoneOff()
+  return sayPhone(phoneStatus())
 }
 
 if (command === 'push') {
