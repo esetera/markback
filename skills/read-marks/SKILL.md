@@ -5,12 +5,16 @@ description: Read what the person marked on screens pushed for review and act on
 
 Every mark is a request. Do not ask whether to act on it: do it, unless it is a choice only the person can make.
 
+If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
+
 ## Wait
+
+In Codex Desktop, when the chat's native Markback heartbeat is active, end the turn after a push. The next check reads this review's marks with `review wake poll --app <slug>`. Use the wait below for sessions without the Desktop heartbeat.
 
 After pushing a round, tell the person they can press **Send** or **Looks good**. Then wait for them yourself: they do not have to tell you they have finished, and they never run a command.
 
 ```bash
-review wait --app "My app" --all --timeout 7200
+review wait --app "My app" --all --timeout 7200 --by "your name"
 ```
 
 It ends when they have answered, and prints the answers. How you run it depends on your tool:
@@ -19,6 +23,8 @@ It ends when they have answered, and prints the answers. How you run it depends 
 - **It cannot** (Codex): run it in the foreground and wait for it. If your tool stops the command before they have answered, run it again.
 
 `--all` waits until every queued screen has an answer for its current round. Without `--all`, the first new answer ends the wait. If the command ends with "before the timeout", they have not finished: run it again, unless they asked to stop. Nothing is lost: it gives every answer when the last one comes. If it says the review is set aside, tell the person and stop waiting until they bring it back. Act on each answer once. The review is over when every screen is approved, or when they ask to stop. In a new session, start by reading what is pending.
+
+`--by` names you on the page, which shows the person whether an agent is listening. Do not go idle when this wait is over. After any round, and whenever you would otherwise stop, start `review work wait --by "your name"` in the same way (see the `ideas-and-queue` skill). When it ends, do what it prints: take an approved item and build it without asking, read new marks, answer a request for ideas.
 
 ## Read
 
@@ -47,7 +53,7 @@ review inferred --app "My app" --screen "Home" --mode light --mark 1 --text "Mak
 
 `--mark` is the mark's number as `review read` gives it. When `review read` shows more than one answer on a screen, each has `Answer: <time>` at the end of its first line: add `--answer <time>` for the one you read. Say what you will do, in twelve words or fewer, not what the mark looks like. The person sees each line beside its mark, and answers **Yes, that** or corrects it in a few words.
 
-Do not wait for them: go on with the work. Run `review wait --app "My app"` in the background as you work; it ends when they answer a line. `review read --app "My app" --latest` shows each line with what they said back. A correction stands in place of your reading: do what it says, and undo what you did on the wrong reading.
+Do not wait for them: go on with the work. Run `review wait --app "My app" --by "your name"` in the background as you work; it ends when they answer a line. `review read --app "My app" --latest` shows each line with what they said back. A correction stands in place of your reading: do what it says, and undo what you did on the wrong reading.
 
 ## Act
 

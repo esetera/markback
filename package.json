@@ -20,6 +20,7 @@
   "files": [
     ".claude-plugin",
     "bin",
+    "hooks",
     "docs/picture.png",
     "docs/icon.svg",
     "docs/icon.png",
