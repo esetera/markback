@@ -18,7 +18,7 @@ const work = mkdtempSync(join(tmpdir(), 'review-read-'))
 after(() => rmSync(work, { recursive: true, force: true }))
 // The store is chosen when it is first loaded: this test's own, never the person's.
 process.env.REVIEW_HOME = join(work, 'home')
-const { jpegOrientation, readingDone, readingOrder, readPicture, wordsForPicture, wordsFromTsv } = await import('../lib/read-words.mjs')
+const { foundLittle, jpegOrientation, readingDone, readingOrder, readPicture, wordsForPicture, wordsFromTsv } = await import('../lib/read-words.mjs')
 const { push, receive } = await import('../lib/store.mjs')
 
 const say = words => words.map(w => w.t).join(' ')
@@ -379,6 +379,9 @@ test('a read that finds few words is read again in halves, then by tesseract if 
     writeFileSync(log, '')
     assert.equal(say((await readPicture(picture, { mac: mac(3) })).words), Array.from({ length: 12 }, (_, i) => `t${i}`).join(' '))
     assert.deepEqual(runs(), ['whole', 'halves'])
+    // tesseract finds a little more, not half as many again: the Mac's words are kept, since tesseract reads icons as letters.
+    process.env.REVIEW_TESSERACT = writeReader(join(work, 'four-reader.mjs'), { w: 800, h: 600 }, Array.from({ length: 4 }, (_, i) => ({ t: `t${i}`, x: 10 + i * 60, y: 300, w: 50, h: 20 })))
+    assert.equal(say((await readPicture(picture, { mac: mac(3) })).words), 'w0 w1 w2')
     // No tesseract: the most the Mac found.
     process.env.REVIEW_TESSERACT = join(work, 'no-tesseract')
     assert.equal((await readPicture(picture, { mac: mac(3) })).words.length, 3)
@@ -416,4 +419,13 @@ function run(argv) {
   assert.equal(say(list).replace(/ /g, ''), 'UpperleftUpperrightAcrossthemiddleofthepageLowerleftLowerright')
   const across = list.find(word => word.t === 'Across')
   assert.ok(Math.abs(across.x - 520) < 12 && Math.abs(across.y - 352) < 14, JSON.stringify(across))
+})
+
+test('almost nothing is judged by the size of the words, so a sharp screenshot is judged as its plain one, and an ordinary screen is not read twice', () => {
+  const words = (n, h) => Array.from({ length: n }, (_, i) => ({ t: `w${i}`, x: i * 10, y: 0, w: 8, h }))
+  // A screen 1280 by 720 with 14 pixel words, and the same screen at 2x.
+  for (const n of [1, 4, 8, 30, 105]) assert.equal(foundLittle(words(n, 18), { w: 1280, h: 720 }), foundLittle(words(n, 36), { w: 2560, h: 1440 }), `${n} words`)
+  assert.equal(foundLittle(words(1, 24), { w: 1280, h: 720 }), true, 'one heading on a whole screen')
+  assert.equal(foundLittle(words(28, 18), { w: 1280, h: 720 }), false, 'a short settings page')
+  assert.equal(foundLittle(words(2, 16), { w: 300, h: 200 }), false, 'a small picture may hold little')
 })

@@ -269,9 +269,13 @@ The list is `{ "size": { "w": 1440, "h": 900 }, "words": [{ "t": "Saturday", "x"
 
 A screenshot pushed without `--words` gets its words read off the picture, on this computer, when it is first on show in the review page. Pushing does not wait for it. On a Mac the system's own text reader does it, with nothing to install. Anywhere else it takes `tesseract`, if the computer has it. With neither, the picture has no list, as before. Nothing leaves the computer. The first read after a while takes a few seconds while the reader loads; after that a screen takes under a second. What to expect:
 
-- A read list is a guess. A word can be misread, two short words can run together, and an icon can come out as letters.
-- A drag along one line always selects that line's words, and a drag down one column or card stays in it.
-- The order across columns can be wrong on a dense or unusual layout, so a drag from one column into another may take words you did not mean.
+- A read list is a guess. A word can be misread, and two short words can run together.
+- A drag along one row, or down one card, takes the right words.
+- An icon can come out as letters.
+- A table cell whose text wraps, and tiles that sit over a paragraph, may be read out of order.
+- A drag straight across two columns at one height takes that line from each column.
+- The order from one column to the next can be wrong, so a drag from one column into another may take words you did not mean.
+- On a computer with no reader, the words tool is hidden on plain screenshots.
 
 A read list says `"read": true`, and an answer whose words came from one says `"wordsRead": true`, so `review read` tells the agent. A list given with `--words`, or made by `review see`, `review project` or `review pdf`, is exact, and is always used in place of reading.
 
