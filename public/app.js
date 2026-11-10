@@ -368,7 +368,7 @@ function heardHtml() {
   const setup = `<p class="sub">Your agent can start by itself next time. Ask it once:</p>${copyRow(SETUP_LINE)}`
   if (!unheardCount(l)) {
     const who = agentsWords(l.agents)
-    return `<div class="heard-head"><p>${esc(who ? `${who}.` : 'No agent is listening.')}</p>${close}</div><p class="sub">${who ? 'It takes what you approve or send.' : l.wake?.on ? `Nothing waits for an agent now. When work waits, ${esc(l.wake.by)} is started.` : 'Nothing waits for an agent now.'}</p>${!who && !l.wake ? setup : ''}`
+    return `<div class="heard-head"><p>${esc(who ? `${who}.` : 'No agent is listening.')}</p>${close}</div><p class="sub">${who ? 'It takes what you approve or send.' : projectWake()?.on ? `Nothing waits for an agent now. When work waits, ${esc(projectWake().by)} is started.` : 'Nothing waits for an agent now.'}</p>${!who && !projectWake() ? setup : ''}`
   }
   const w = unheardWords(l, heard.made)
   return `<div class="heard-head"><p>${esc(w.head)}</p>${close}</div><p class="sub">${esc(w.sub)}</p>${w.log ? `<p class="sub">It last said:</p><pre>${esc(w.log)}</pre>` : ''}${w.line ? copyRow(w.line) : ''}${w.setup ? setup : ''}`
@@ -414,13 +414,15 @@ $('heard').onclick = async event => {
   copy.textContent = done ? 'Copied' : 'Selected: copy it'
   return undefined
 }
+/** The wake of the project this review belongs to. Each project has its own, or none. */
+const projectWake = () => state.listening?.wakes?.find(w => w.apps?.includes(state.appSlug)) ?? null
 async function toggleWake() {
   closeMenu()
   const desktop = desktopWake()
-  const wake = desktop ?? state.listening?.wake
+  const wake = desktop ?? projectWake()
   if (!wake) return
   try {
-    const res = await fetch('/api/wake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: !wake.on, ...(desktop ? { app: state.appSlug } : {}) }) })
+    const res = await fetch('/api/wake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: !wake.on, ...(desktop ? { app: state.appSlug } : { key: wake.key }) }) })
     const got = await res.json()
     if (!res.ok) throw new Error(got.error || 'the server did not take it')
     setListening(got.listening)
@@ -1166,7 +1168,7 @@ function renderMenu() {
     ${panels() ? `<button data-menu="strip" role="menuitem"><span>${document.body.classList.contains('no-strip') ? 'Show' : 'Hide'} the screens</span></button><button data-menu="details" role="menuitem"><span>${document.body.classList.contains('no-details') ? 'Show' : 'Hide'} the details</span></button>` : ''}
     <button data-menu="full" role="menuitem"><span>Full screen</span><span class="kbd">F</span></button>
     <button data-menu="notices" role="menuitem"><span>${noticesLabel()}</span></button>
-    ${desktopWake() ? `<button data-menu="wake" role="menuitem"><span>Wake Codex Desktop for this review: ${desktopWake().on ? 'on' : 'off'}</span></button>` : state.listening?.wake ? `<button data-menu="wake" role="menuitem"><span>Wake my agent when work waits: ${state.listening.wake.on ? 'on' : 'off'}</span></button><div class="menu-note">It runs <code>${esc(state.listening.wake.run)}</code> in ${esc(state.listening.wake.in)}</div>` : ''}
+    ${desktopWake() ? `<button data-menu="wake" role="menuitem"><span>Wake Codex Desktop for this review: ${desktopWake().on ? 'on' : 'off'}</span></button>` : projectWake() ? `<button data-menu="wake" role="menuitem"><span>Wake my agent when work waits: ${projectWake().on ? 'on' : 'off'}</span></button><div class="menu-note">It runs <code>${esc(projectWake().run)}</code> in ${esc(projectWake().in)}</div>` : ''}
     <hr>
     <button data-menu="keys" role="menuitem"><span>Keyboard shortcuts</span><span class="kbd">?</span></button>`)
 }
