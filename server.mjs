@@ -12,6 +12,10 @@ import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './l
 import { pushSample, showApp } from './lib/first.mjs'
 import { hasReader, stopReading, wordsForPicture } from './lib/read-words.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
+import { appsOf, madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
+// Only what reads the wake command and turns it on and off. What sets the command is not imported here, on purpose:
+// nothing a web page can reach may decide what this computer runs.
+import { createWaker, listWakes, readDesktopWake, switchDesktopWake, switchWake, wakeSummary } from './lib/wake.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' }
@@ -71,6 +75,32 @@ function body(req) {
   })
 }
 
+/**
+ * The heartbeat that wakes an agent: about every 20 seconds, the same list `review work` reads. The times can be set for a
+ * test with REVIEW_WAKE_MS="every,quiet,backoff,late,gap" in milliseconds.
+ */
+const [wakeEvery = 20_000, quiet, backoff, late, gap] = (process.env.REVIEW_WAKE_MS ?? '').split(',').filter(Boolean).map(Number)
+/** What waits unheard, leaving out marks a Codex Desktop heartbeat takes: nobody needs to be told of those, or woken. */
+const commandWork = (apps, only = null) => standing(apps, { excludeMarksFor: slug => readDesktopWake(slug)?.on === true, only })
+const waker = createWaker({ look: wake => commandWork(listApps(), appsOf(wake.in)), ...(quiet >= 0 ? { quiet } : {}), ...(backoff >= 0 ? { backoff } : {}), ...(late >= 0 ? { late } : {}), ...(gap >= 0 ? { gap } : {}) })
+const total = unheard => unheard.queue + unheard.ideas + unheard.marks
+/** Who listens, what waits unheard, and whether an agent will be woken for it: with every answer the pages poll. */
+const listening = (apps = listApps()) => {
+  const now = commandWork(apps)
+  const held = apps.flatMap(({ slug }) => {
+    const desktop = readDesktopWake(slug)
+    return desktop ? [[slug, desktop]] : []
+  })
+  // Marks waiting for a Desktop heartbeat are counted only for its own sign.
+  const pendingMarks = held.length ? standing(apps).markApps : []
+  const desktop = Object.fromEntries(held.map(([slug, d]) => [slug, { on: d.on, pending: pendingMarks.includes(slug) }]))
+  const wakes = listWakes().map(wake => {
+    const there = commandWork(apps, appsOf(wake.in))
+    return { view: { ...waker.view(wake, there), apps: appsOf(wake.in) }, waits: total(there.unheard) }
+  })
+  return { agents: now.agents, heard: now.heard, unheard: now.unheard, wake: wakeSummary(total(now.unheard), wakes), wakes: wakes.map(w => w.view), desktop }
+}
+
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
 const hostOf = text => {
   try {
@@ -98,7 +128,10 @@ const server = createServer(async (req, res) => {
   if (!isLocal(req)) return json(res, 403, { error: 'Only this computer can use this.' })
   try {
     // `reader`: whether this computer can read words off a picture, so the page shows the words tool only where it can work.
-    if (req.method === 'GET' && url.pathname === '/api/queue') return json(res, 200, { apps: listApps(), reader: hasReader() })
+    if (req.method === 'GET' && url.pathname === '/api/queue') {
+      const apps = listApps()
+      return json(res, 200, { apps, listening: listening(apps), reader: hasReader() })
+    }
     if (req.method === 'POST' && url.pathname === '/api/read-words') {
       // A picture pushed with no word list: its words are read here, once, and the list is kept beside it. The answer comes at
       // once, reading or not, so a read never holds one of the few connections a browser opens to a server.
@@ -121,13 +154,16 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/show') {
       const input = JSON.parse(await body(req))
       try {
-        return json(res, 200, { appSlug: (await showApp(input.url)).appSlug })
+        // Said back, so the page can tell a new project from another round of one that is here.
+        const had = new Set(listApps().map(a => a.slug))
+        const entry = await showApp(input.url)
+        return json(res, 200, { appSlug: entry.appSlug, name: entry.app, round: entry.round, existed: had.has(entry.appSlug) })
       } catch (error) {
         return json(res, 400, { error: error.message })
       }
     }
     if (req.method === 'POST' && url.pathname === '/api/sample') return json(res, 200, { appSlug: pushSample().appSlug })
-    if (req.method === 'GET' && url.pathname === '/api/work') return json(res, 200, { items: listWork(), requests: listRequests() })
+    if (req.method === 'GET' && url.pathname === '/api/work') return json(res, 200, { items: listWork(), requests: listRequests(), listening: listening() })
     if (req.method === 'POST' && url.pathname.startsWith('/api/work/')) {
       const input = JSON.parse(await body(req))
       const action = url.pathname.slice('/api/work/'.length)
@@ -139,6 +175,17 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { ok: true })
       }
       return json(res, 404, { error: 'Not found' })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/wake') {
+      // On or off, and nothing else: whatever else is sent is not read. The command comes only from `review wake set`.
+      const input = JSON.parse(await body(req))
+      if (typeof input.on !== 'boolean') return json(res, 400, { error: 'Say on or off.' })
+      // Which project's, by the key the page was given. With one project only, that one. Never this server's own folder.
+      const wakes = listWakes()
+      const key = typeof input.key === 'string' ? input.key : wakes.length === 1 ? wakes[0].key : ''
+      const changed = typeof input.app === 'string' ? switchDesktopWake(input.app, input.on) : key && switchWake(input.on, { key })
+      if (!changed) return json(res, 404, { error: 'Wake is not set up for this review.' })
+      return json(res, 200, { ok: true, listening: listening() })
     }
     if (req.method === 'POST' && url.pathname === '/api/set-aside') {
       const input = JSON.parse(await body(req))
@@ -162,9 +209,10 @@ const server = createServer(async (req, res) => {
         round: Number(input.round) || null,
       })
       if (!record) return json(res, 200, { ok: true, olderPicture: true })
-      answered(record)
+      const stageBefore = record.item ? listWork().find(i => i.id === record.item)?.stage : null
+      const made = madeBy(record, stageBefore, answered(record))
       console.log(`received ${record.app} / ${record.screen}${record.mode ? ` (${record.mode})` : ''}: ${record.verdict}, ${record.shapes.length} marks`)
-      return json(res, 200, { ok: true, record })
+      return json(res, 200, { ok: true, record, ...(made ? { made } : {}), listening: listening() })
     }
     if (req.method === 'GET') {
       const path = inside(PUBLIC, url.pathname === '/' ? 'index.html' : url.pathname)
@@ -181,7 +229,28 @@ server.on('error', error => {
   console.error(`Port ${PORT} is taken. Choose another: review start --port ${PORT + 1}`)
   process.exit(1)
 })
-// Stopped (review stop, or Ctrl-C): a reader still at work stops too, rather than go on after the server.
-for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => void stopReading().finally(() => process.exit(0)))
 // This computer only: nothing here is reachable from another machine.
-server.listen(PORT, '127.0.0.1', () => console.log(`Markback on http://localhost:${PORT}`))
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`Markback on http://localhost:${PORT}`)
+  const beat = () => {
+    try {
+      // Said first, so a hook knows the page runs even when a look below fails.
+      serverBeat(PORT)
+      waker.check()
+    } catch (error) {
+      console.error(`wake: ${error.message}`)
+    }
+  }
+  // The first look also notes which answers were already here, so only later ones count as unread.
+  beat()
+  try {
+    standing()
+  } catch {
+    // The pages ask again.
+  }
+  setInterval(beat, wakeEvery)
+})
+// Stopped, it must not look as if it runs: the hooks ask before they hold an agent back.
+process.on('exit', serverGone)
+// Stopped (review stop, or Ctrl-C): a reader still at work stops too, rather than go on after the server.
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => void stopReading().finally(() => process.exit(0)))

@@ -1,0 +1,19 @@
+{
+  "description": "Markback: Claude Code does not go idle while approved work or marks wait. Turn it off with MARKBACK_HOOKS=off.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/review.mjs\" work --hook", "timeout": 10 }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/review.mjs\" work --hook", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

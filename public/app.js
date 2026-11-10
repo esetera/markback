@@ -1,5 +1,6 @@
 import { burnCanvas, changesBetween, COLOURS, fitZoom, isReal, paintChanged, paintMarks, redone, shapeOf, strokeFor, textFor, undone, withMark, withMarks, ZOOM_STEP, ZOOM_WHEEL_STEP, zoomedBy } from './annotate.js'
 import { createListener, findRoute, installPack } from './mic.js'
+import { agentsWords, heardWords, SETUP_LINE, signOf, signShows, unheardCount, unheardWords } from './listen.js'
 import { afterSend, answerWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from './flow.js'
 
 /**
@@ -43,6 +44,9 @@ const ICONS = {
   close: svg('<path d="m4 4 8 8M12 4l-8 8"/>'),
   check: svg('<path d="m3 8.5 3.2 3L13 4.5"/>'),
   list: svg('<path d="M2.5 4h11M2.5 8h11M2.5 12h11"/>'),
+  // An agent that listens: a point with waves. Struck through when none does.
+  listen: svg('<circle cx="8" cy="8" r="1.1" fill="currentColor"/><path d="M5.4 5.4a3.7 3.7 0 0 0 0 5.2M10.6 5.4a3.7 3.7 0 0 1 0 5.2M3.4 3.4a6.5 6.5 0 0 0 0 9.2M12.6 3.4a6.5 6.5 0 0 1 0 9.2"/>'),
+  deaf: svg('<circle cx="8" cy="8" r="1.1" fill="currentColor"/><path d="M5.4 5.4a3.7 3.7 0 0 0 0 5.2M10.6 5.4a3.7 3.7 0 0 1 0 5.2M3.4 3.4a6.5 6.5 0 0 0 0 9.2M12.6 3.4a6.5 6.5 0 0 1 0 9.2" opacity="0.45"/><path d="M2.5 13.5l11-11"/>'),
   more: svg('<circle cx="3.5" cy="8" r="0.6"/><circle cx="8" cy="8" r="0.6"/><circle cx="12.5" cy="8" r="0.6"/>'),
 }
 const TOOLS = [
@@ -142,6 +146,8 @@ const state = {
   moreOf: '',
   lineCut: false,
   changesOn: true,
+  // Who listens and what waits unheard, as the server last said. Unset with a server from before it said so.
+  listening: null,
 }
 if (prefs.get('strip') === 'hidden') document.body.classList.add('no-strip')
 if (prefs.get('details') === 'hidden') document.body.classList.add('no-details')
@@ -236,9 +242,10 @@ const liveScreen = s => state.apps.find(a => a.slug === s.appSlug)?.screens.find
 
 async function loadQueue() {
   const res = await fetch('/api/queue', { cache: 'no-store' })
-  const { apps, reader } = await res.json()
+  const { apps, reader, listening } = await res.json()
   // Whether this computer can read words off a picture. It does not change while the server runs.
   state.reader = reader === true
+  setListening(listening)
   const text = JSON.stringify(apps)
   state.loaded = true
   document.body.classList.remove('loading')
@@ -304,6 +311,127 @@ async function loadQueue() {
   render()
   if (notice) toast(notice)
   if (fresh.length) announce(fresh, !notice)
+}
+
+/* ---------- is an agent listening: a steady sign in the bar, and a notice that stays when approved work has nobody to hear it ---------- */
+
+/** The notice under the sign. `made` is what an answer just made; `quiet` is the short line when an agent will hear it. */
+const heard = { open: false, made: null, quiet: '', timer: 0 }
+let lastListening = ''
+function setListening(next) {
+  const text = JSON.stringify(next ?? null)
+  if (text === lastListening) return
+  lastListening = text
+  state.listening = next ?? null
+  // What it warned about is heard now, or has been taken: the warning has nothing left to say.
+  if (heard.open && heard.made && next && !unheardCount(next)) {
+    if (next.agents.length) return quietLine(heardWords(next.agents))
+    heard.open = false
+  }
+  return renderHeard()
+}
+function closeHeard() {
+  clearTimeout(heard.timer)
+  Object.assign(heard, { open: false, made: null, quiet: '' })
+  renderHeard()
+}
+function quietLine(words) {
+  clearTimeout(heard.timer)
+  Object.assign(heard, { open: true, made: null, quiet: words })
+  heard.timer = setTimeout(closeHeard, 4000)
+  renderHeard()
+}
+/** An answer made work for an agent. Heard: one quiet line. Not heard: said at once, and it stays until closed or heard. */
+function saidMade(made) {
+  const l = state.listening
+  if (!l?.unheard) return
+  if (made.heard && l.agents.length) return quietLine(heardWords(l.agents))
+  clearTimeout(heard.timer)
+  Object.assign(heard, { open: true, made: made.what, quiet: '' })
+  renderHeard()
+}
+const copyRow = line => `<div class="copy-line"><code>${esc(line)}</code><button class="btn" data-copy="${esc(line)}">Copy</button></div>`
+const desktopWake = () => {
+  const registrations = state.listening?.desktop
+  return registrations && Object.hasOwn(registrations, state.appSlug) ? registrations[state.appSlug] : null
+}
+const reviewSign = () => {
+  const desktop = desktopWake()
+  if (!desktop?.on) return signOf(state.listening)
+  const tip = 'Codex Desktop checks this review for new marks.'
+  return desktop.pending ? { state: 'waking', words: 'Waiting for Codex…', tip } : { state: 'on', words: '', tip }
+}
+function heardHtml() {
+  const l = state.listening
+  if (heard.quiet) return `<p class="quiet">${esc(heard.quiet)}</p>`
+  const close = `<button class="tool" data-heard-close aria-label="Close">${ICONS.close}</button>`
+  const desktop = desktopWake()
+  if (desktop?.on) return `<div class="heard-head"><p>${desktop.pending ? 'Your marks are in.' : 'Codex Desktop wake is on.'}</p>${close}</div><p class="sub">Codex picks up marks on its next check.</p>`
+  const setup = `<p class="sub">Your agent can start by itself next time. Ask it once:</p>${copyRow(SETUP_LINE)}`
+  if (!unheardCount(l)) {
+    const who = agentsWords(l.agents)
+    return `<div class="heard-head"><p>${esc(who ? `${who}.` : 'No agent is listening.')}</p>${close}</div><p class="sub">${who ? 'It takes what you approve or send.' : projectWake()?.on ? `Nothing waits for an agent now. When work waits, ${esc(projectWake().by)} is started.` : 'Nothing waits for an agent now.'}</p>${!who && !projectWake() ? setup : ''}`
+  }
+  const w = unheardWords(l, heard.made)
+  return `<div class="heard-head"><p>${esc(w.head)}</p>${close}</div><p class="sub">${esc(w.sub)}</p>${w.log ? `<p class="sub">It last said:</p><pre>${esc(w.log)}</pre>` : ''}${w.line ? copyRow(w.line) : ''}${w.setup ? setup : ''}`
+}
+/** The tab says how many screens wait, with a mark in front when work waits and no agent hears it. */
+const titleNow = () => `${reviewSign().state === 'warn' ? '! ' : ''}${waitingInAll() ? `(${waitingInAll()}) ` : ''}Markback`
+function renderHeard() {
+  const sign = reviewSign()
+  const el = $('heardSign')
+  // Said only when work waits that no agent will hear. While one listens, nothing is in the way.
+  el.hidden = !signShows(sign)
+  el.className = `tool heard-sign is-${sign.state}`
+  el.dataset.tip = sign.tip
+  el.setAttribute('aria-label', sign.tip)
+  setHtml(el, `${ICONS[sign.state === 'on' || sign.state === 'waking' ? 'listen' : 'deaf']}${sign.words ? `<span>${esc(sign.words)}</span>` : ''}`)
+  const card = $('heard')
+  // A card opened from the sign closes with it. The quiet line, and the notice for what was just sent, may stay.
+  card.hidden = !heard.open || sign.state === 'none' || (!signShows(sign) && !heard.quiet && !heard.made)
+  if (!card.hidden) {
+    card.className = `heard${!heard.quiet && sign.state === 'warn' ? ' warn' : ''}`
+    setHtml(card, heardHtml())
+  }
+  if (state.loaded) document.title = titleNow()
+}
+$('heardSign').onclick = () => {
+  if (heard.open) return closeHeard()
+  clearTimeout(heard.timer)
+  Object.assign(heard, { open: true, made: null, quiet: '' })
+  return renderHeard()
+}
+$('heard').onclick = async event => {
+  if (event.target.closest('[data-heard-close]')) return closeHeard()
+  const copy = event.target.closest('[data-copy]')
+  if (!copy) return undefined
+  let done = false
+  try {
+    await navigator.clipboard.writeText(copy.dataset.copy)
+    done = true
+  } catch {
+    // The clipboard can be refused. The line is selected instead, ready to copy with the keys.
+    getSelection().selectAllChildren(copy.previousElementSibling)
+  }
+  copy.textContent = done ? 'Copied' : 'Selected: copy it'
+  return undefined
+}
+/** The wake of the project this review belongs to. Each project has its own, or none. */
+const projectWake = () => state.listening?.wakes?.find(w => w.apps?.includes(state.appSlug)) ?? null
+async function toggleWake() {
+  closeMenu()
+  const desktop = desktopWake()
+  const wake = desktop ?? projectWake()
+  if (!wake) return
+  try {
+    const res = await fetch('/api/wake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: !wake.on, ...(desktop ? { app: state.appSlug } : { key: wake.key }) }) })
+    const got = await res.json()
+    if (!res.ok) throw new Error(got.error || 'the server did not take it')
+    setListening(got.listening)
+    toast(wake.on ? 'Your agent is not woken now' : desktop ? 'Codex Desktop will check for marks' : `${wake.by} is woken when work waits`, wake.on ? 'Work waits until an agent listens' : '')
+  } catch (error) {
+    toast('That could not be saved', error.message, { problem: true })
+  }
 }
 
 /* ---------- something new to review: said in the tab's title always, and by a sound and a notice unless turned off ---------- */
@@ -1052,6 +1180,7 @@ function renderMenu() {
   setHtml($('menu'), `
     <button data-menu="sheet" role="menuitem"${a ? '' : ' disabled'}><span>All screens of this review</span><span class="kbd">O</span></button>
     <button data-menu="list" role="menuitem"><span>Apps and screens</span><span class="kbd">L</span></button>
+    <button data-menu="new" role="menuitem"><span>New project</span></button>
     <button data-menu="work" role="menuitem"><span>Ideas and queue</span><span class="kbd">W</span></button>
     <button data-menu="rest" role="menuitem"${left ? '' : ' disabled'}><span>Looks good for the rest${left ? ` (${left})` : ''}</span><span class="kbd">⇧⌘↩</span></button>
     <button data-menu="aside-one" role="menuitem"${a ? '' : ' disabled'}><span>Set ${group ? `this ${placeOf(a).noun.trim() || 'one'}` : 'this'} aside</span></button>
@@ -1062,6 +1191,7 @@ function renderMenu() {
     ${panels() ? `<button data-menu="strip" role="menuitem"><span>${document.body.classList.contains('no-strip') ? 'Show' : 'Hide'} the screens</span></button><button data-menu="details" role="menuitem"><span>${document.body.classList.contains('no-details') ? 'Show' : 'Hide'} the details</span></button>` : ''}
     <button data-menu="full" role="menuitem"><span>Full screen</span><span class="kbd">F</span></button>
     <button data-menu="notices" role="menuitem"><span>${noticesLabel()}</span></button>
+    ${desktopWake() ? `<button data-menu="wake" role="menuitem"><span>Wake Codex Desktop for this review: ${desktopWake().on ? 'on' : 'off'}</span></button>` : projectWake() ? `<button data-menu="wake" role="menuitem"><span>Wake my agent when work waits: ${projectWake().on ? 'on' : 'off'}</span></button><div class="menu-note">It runs <code>${esc(projectWake().run)}</code> in ${esc(projectWake().in)}</div>` : ''}
     <hr>
     <button data-menu="keys" role="menuitem"><span>Keyboard shortcuts</span><span class="kbd">?</span></button>`)
 }
@@ -1134,7 +1264,7 @@ function render() {
   // One count, and only where a picture is: the overlay says it in full.
   $('overall').textContent = s && a ? countWords(openOf(a).length, waitingInAll(), { short: true }) : ''
   // The tab says how many wait, for someone working in another one.
-  document.title = waitingInAll() ? `(${waitingInAll()}) Markback` : 'Markback'
+  document.title = titleNow()
   $('overall').title = s && a ? `Screen ${state.index + 1} of ${a.screens.length}. ${countWords(openOf(a).length, waitingInAll())}.` : ''
   $('stopHere').hidden = !s
   document.body.classList.toggle('no-apps', state.loaded && !state.apps.length)
@@ -1777,6 +1907,9 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
   }
   answeredHere.set(key, { status, sentAt })
   sentHere.add(key)
+  // The answer made work for an agent: say at once whether one will hear it.
+  if (result.listening) setListening(result.listening)
+  if (result.made) saidMade(result.made)
   return result.record
 }
 
@@ -2135,8 +2268,8 @@ function hideToast() {
   $('toast').hidden = true
   $('toast').classList.remove('fading')
 }
-function toast(text, sub = '', { undo = false, problem = false } = {}) {
-  setHtml($('toast'), `<span>${esc(text)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${undo ? '<button class="link" data-undo>Undo</button>' : ''}`)
+function toast(text, sub = '', { undo = false, problem = false, go = '' } = {}) {
+  setHtml($('toast'), `<span>${esc(text)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${undo ? '<button class="link" data-undo>Undo</button>' : ''}${go ? `<button class="link" data-toast-go="${esc(go)}">Go there</button>` : ''}`)
   $('toast').classList.remove('fading')
   $('toast').classList.toggle('problem', problem)
   $('toast').hidden = false
@@ -2145,11 +2278,17 @@ function toast(text, sub = '', { undo = false, problem = false } = {}) {
   toastTimer = setTimeout(() => {
     $('toast').classList.add('fading')
     toastTimer = setTimeout(hideToast, 200)
-  }, undo ? UNDO_MS - 200 : 3000)
+  }, undo ? UNDO_MS - 200 : go ? 8000 : 3000)
 }
 $('toast').onclick = event => {
+  const go = event.target.closest('[data-toast-go]')?.dataset.toastGo
   if (event.target.closest('[data-undo]')) undoAnswer()
-  else if ($('toast').classList.contains('problem')) hideToast()
+  else if (go) {
+    // A window up holds the page: it must not change under it. The notice stays until its time is up.
+    if (windowUp()) return
+    hideToast()
+    if (state.apps.some(a => a.slug === go)) pickApp(go)
+  } else if ($('toast').classList.contains('problem')) hideToast()
 }
 
 let tipTimer = null
@@ -2308,7 +2447,7 @@ function cycleView() {
   if (state.fitted) fit()
 }
 
-for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', sheetClose: 'close', viewerClose: 'close' })) $(id).innerHTML = ICONS[icon]
+for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', newClose: 'close', sheetClose: 'close', viewerClose: 'close' })) $(id).innerHTML = ICONS[icon]
 
 $('listOpen').onclick = openDrawer
 $('back').onclick = () => go(state.index - 1)
@@ -2317,6 +2456,7 @@ $('menuOpen').onclick = toggleMenu
 $('menu').onclick = event => {
   const what = event.target.closest('[data-menu]')?.dataset.menu
   if (what === 'list') openDrawer()
+  else if (what === 'new') openNewProject()
   else if (what === 'work') location.href = '/work.html'
   else if (what === 'rest') openSubmit()
   else if (what === 'stop') stopHere()
@@ -2327,6 +2467,7 @@ $('menu').onclick = event => {
   else if (what === 'details') togglePanel('details', 'no-details')
   else if (what === 'full') toggleFull()
   else if (what === 'notices') void toggleNotices()
+  else if (what === 'wake') void toggleWake()
   else if (what === 'sheet') openSheet()
   else if (what === 'keys') showHelp(true)
 }
@@ -2389,47 +2530,131 @@ $('drawerList').addEventListener('keydown', event => {
 $('center').addEventListener('click', event => {
   if (event.target.closest('[data-more]')) toggleMore()
 })
-/* The first minute: your own app, or one sentence to your agent, or a sample. */
-function firstRunHtml() {
+/* The first minute: your own app, or one sentence to your agent, or a sample. New project in the menu shows the same form,
+   without the sample, so there is one wording for both. */
+function firstRunHtml({ sample = true } = {}) {
+  // The ids are for the first screen only; the menu's copy is found through its form, so the two never share an id.
+  const id = name => (sample ? ` id="first${name}"` : '')
   return `<form class="first" data-first>
-    <h2>Two ways to start.</h2>
+    ${sample ? '<h2>Two ways to start.</h2>' : ''}
     <div class="first-or">1. Your app's address, on this computer or online</div>
-    <div class="first-row"><input id="firstAddress" placeholder="http://localhost:3000" aria-label="Your app's address" autocomplete="off"><button class="btn primary" id="firstShow">Show it</button></div>
-    <p class="first-said" id="firstSaid" hidden></p>
+    <div class="first-row"><input${id('Address')} data-first-address placeholder="http://localhost:3000" aria-label="Your app's address" autocomplete="off"><button class="btn primary"${id('Show')} data-first-show>Show it</button></div>
+    <p class="first-said"${id('Said')} data-first-said hidden></p>
     <div class="first-or">2. In your agent, in your project: it finds the app and opens it here</div>
-    <div class="first-row"><code id="firstAsk">/markback</code><button type="button" class="btn" data-first-copy>Copy</button></div>
+    <div class="first-row"><code${id('Ask')} data-first-ask>/markback</code><button type="button" class="btn" data-first-copy>Copy</button></div>
     <p class="first-said">No app yet? Say what you want after it: <b>/markback a recipe box for my family</b>. In a terminal, <b>markback</b> in the project's folder does the same, once installed: <b>npm install -g github:esetera/markback</b></p>
-    <div class="first-or">Just looking</div>
-    <div class="first-row"><button type="button" class="btn" data-first-sample>Try the sample</button></div>
+    ${sample ? '<div class="first-or">Just looking</div>\n    <div class="first-row"><button type="button" class="btn" data-first-sample>Try the sample</button></div>' : ''}
   </form>`
 }
-async function firstRun(path, body) {
-  const said = $('firstSaid')
+async function firstRun(form, path, body) {
+  const said = form.querySelector('[data-first-said]')
+  const show = form.querySelector('[data-first-show]')
+  // A picture can take most of a minute. The window may be closed by then, and the person busy on another screen.
+  const watching = form.closest('#newModal') ? newWindow : null
+  const late = () => (watching ? !watching.open : !form.isConnected)
   said.hidden = false
-  said.textContent = path === '/api/show' ? 'Taking a picture…' : ''
-  $('firstShow').disabled = true
+  if (watching && path === '/api/show') newCapture = body.url
+  said.textContent = path !== '/api/show' ? '' : watching ? capturingWords() : 'Taking a picture…'
+  show.disabled = true
   try {
     const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     const got = await res.json()
     if (!res.ok) throw new Error(got.error)
+    // The server says when the address was a project already: the window is called New project, so say it was not new.
+    const again = got.existed ? `That address is already the project ${got.name}. This made round ${got.round} of it.` : ''
+    if (late()) {
+      // Too late to move the page: it may be on another screen, with words half written. Only say so, with a way there.
+      await loadQueue()
+      const input = form.querySelector('[data-first-address]')
+      if (watching && !newProjectOpen() && input?.value === body.url) setHtml($('newBody'), '')
+      return void toast(again || `New: ${got.name ?? got.appSlug}`, '', { go: got.appSlug })
+    }
+    if (watching) {
+      setHtml($('newBody'), '')
+      closeNewProject()
+    }
     location.hash = got.appSlug
     await loadQueue()
+    // With projects already here, the address alone does not move the page: go to the new one, beside the others.
+    if (state.apps.length > 1 && state.apps.some(a => a.slug === got.appSlug)) {
+      if (state.appSlug !== got.appSlug || again) pickApp(got.appSlug)
+      toast(again || `Now: ${placeWords(placeOf(app()))}`)
+    }
   } catch (error) {
+    if (late()) return void toast('No new project was made', error.message, { problem: true })
     said.textContent = error.message
-    $('firstShow').disabled = false
+    show.disabled = false
+  } finally {
+    if (watching) {
+      newCapture = ''
+      // A window opened again while it ran kept Show it off. The notice says how it ended; the window can start the next.
+      if (late() && newProjectOpen()) {
+        said.hidden = true
+        show.disabled = false
+      }
+    }
   }
 }
-$('stateCard').addEventListener('submit', event => {
-  event.preventDefault()
-  void firstRun('/api/show', { url: $('firstAddress').value || $('firstAddress').placeholder })
+for (const holder of [$('stateCard'), $('newModal')]) {
+  holder.addEventListener('submit', event => {
+    event.preventDefault()
+    const input = event.target.querySelector('[data-first-address]')
+    void firstRun(event.target, '/api/show', { url: input.value || input.placeholder })
+  })
+  holder.addEventListener('click', event => {
+    const form = event.target.closest('[data-first]')
+    if (event.target.closest('[data-first-sample]')) void firstRun(form, '/api/sample', {})
+    if (event.target.closest('[data-first-copy]')) {
+      void navigator.clipboard?.writeText(form.querySelector('[data-first-ask]').textContent)
+      event.target.textContent = 'Copied'
+    }
+  })
+}
+/* New project, from the menu: the first screen's two ways in, over the page, with the projects there left as they are. */
+const newProjectOpen = () => !$('newModal').hidden
+/** A window over the page: while one is up, nothing behind it may change. */
+const windowUp = () => newProjectOpen() || sheetOpen() || ['helpModal', 'confirmModal', 'submitModal', 'viewer'].some(id => !$(id).hidden)
+// One for each time the window is open: an answer that comes after it closed knows it is late.
+let newWindow = { open: false }
+// The address of a picture the window started that is still being taken. One at a time: a second press would make two rounds.
+let newCapture = ''
+const capturingWords = () => `Taking a picture of ${newCapture}… Closing this does not stop it: the new project is said when it is ready.`
+function openNewProject() {
+  closeMenu()
+  // With no project yet, the first screen is already this form.
+  if (!state.apps.length) return $('firstAddress')?.focus()
+  closeTextEntry(true)
+  closeDrawer()
+  newWindow = { open: true }
+  // A typed address stays from last time until a project is made from it. A picture still being taken goes on by itself.
+  if (!$('newBody').querySelector('[data-first]')) setHtml($('newBody'), firstRunHtml({ sample: false }))
+  const said = $('newBody').querySelector('[data-first-said]')
+  said.hidden = !newCapture
+  if (newCapture) said.textContent = capturingWords()
+  $('newBody').querySelector('[data-first-show]').disabled = !!newCapture
+  $('newModal').hidden = false
+  for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = true
+  return $('newBody').querySelector('[data-first-address]').focus()
+}
+function closeNewProject() {
+  if (!newProjectOpen()) return
+  newWindow.open = false
+  $('newModal').hidden = true
+  for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = false
+  $('menuOpen').focus()
+}
+$('newClose').onclick = () => closeNewProject()
+// Only a press that starts and ends outside closes it: a drag out of the address box, or into it, is not a close.
+// A click that starts and ends in different places goes to what holds both, the backdrop, so the release is checked too.
+let pressedOutside = false
+let releasedOutside = false
+$('newModal').addEventListener('pointerdown', event => {
+  pressedOutside = event.target === $('newModal')
 })
-$('stateCard').addEventListener('click', event => {
-  if (event.target.closest('[data-first-sample]')) void firstRun('/api/sample', {})
-  if (event.target.closest('[data-first-copy]')) {
-    void navigator.clipboard?.writeText($('firstAsk').textContent)
-    event.target.textContent = 'Copied'
-  }
+$('newModal').addEventListener('pointerup', event => {
+  releasedOutside = event.target === $('newModal')
 })
+$('newModal').addEventListener('click', event => event.target === $('newModal') && pressedOutside && releasedOutside && closeNewProject())
 $('stateCard').onclick = event => {
   if (event.target.closest('[data-look]')) go(0)
   if (event.target.closest('[data-go-on]')) goOn()
@@ -2521,6 +2746,10 @@ document.addEventListener('keydown', event => {
   }
   if (!$('viewer').hidden) {
     if (key === 'Escape') $('viewer').hidden = true
+    return
+  }
+  if (newProjectOpen()) {
+    if (key === 'Escape') closeNewProject()
     return
   }
   if (!$('helpModal').hidden) {
