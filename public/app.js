@@ -2078,8 +2078,8 @@ function hideToast() {
   $('toast').hidden = true
   $('toast').classList.remove('fading')
 }
-function toast(text, sub = '', { undo = false, problem = false } = {}) {
-  setHtml($('toast'), `<span>${esc(text)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${undo ? '<button class="link" data-undo>Undo</button>' : ''}`)
+function toast(text, sub = '', { undo = false, problem = false, go = '' } = {}) {
+  setHtml($('toast'), `<span>${esc(text)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${undo ? '<button class="link" data-undo>Undo</button>' : ''}${go ? `<button class="link" data-toast-go="${esc(go)}">Go there</button>` : ''}`)
   $('toast').classList.remove('fading')
   $('toast').classList.toggle('problem', problem)
   $('toast').hidden = false
@@ -2088,11 +2088,15 @@ function toast(text, sub = '', { undo = false, problem = false } = {}) {
   toastTimer = setTimeout(() => {
     $('toast').classList.add('fading')
     toastTimer = setTimeout(hideToast, 200)
-  }, undo ? UNDO_MS - 200 : 3000)
+  }, undo ? UNDO_MS - 200 : go ? 8000 : 3000)
 }
 $('toast').onclick = event => {
+  const go = event.target.closest('[data-toast-go]')?.dataset.toastGo
   if (event.target.closest('[data-undo]')) undoAnswer()
-  else if ($('toast').classList.contains('problem')) hideToast()
+  else if (go) {
+    hideToast()
+    if (state.apps.some(a => a.slug === go)) pickApp(go)
+  } else if ($('toast').classList.contains('problem')) hideToast()
 }
 
 let tipTimer = null
@@ -2352,22 +2356,38 @@ function firstRunHtml({ sample = true } = {}) {
 async function firstRun(form, path, body) {
   const said = form.querySelector('[data-first-said]')
   const show = form.querySelector('[data-first-show]')
+  // A picture can take most of a minute. The window may be closed by then, and the person busy on another screen.
+  const watching = form.closest('#newModal') ? newWindow : null
+  const late = () => (watching ? !watching.open : !form.isConnected)
   said.hidden = false
-  said.textContent = path === '/api/show' ? 'Taking a picture…' : ''
+  said.textContent = path !== '/api/show' ? '' : watching ? 'Taking a picture… Closing this does not stop it: the new project is said when it is ready.' : 'Taking a picture…'
   show.disabled = true
   try {
     const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     const got = await res.json()
     if (!res.ok) throw new Error(got.error)
+    // The server says when the address was a project already: the window is called New project, so say it was not new.
+    const again = got.existed ? `That address is already the project ${got.name}. This made round ${got.round} of it.` : ''
+    if (late()) {
+      // Too late to move the page: it may be on another screen, with words half written. Only say so, with a way there.
+      await loadQueue()
+      const input = form.querySelector('[data-first-address]')
+      if (watching && !newProjectOpen() && input?.value === body.url) setHtml($('newBody'), '')
+      return void toast(again || `New: ${got.name ?? got.appSlug}`, '', { go: got.appSlug })
+    }
+    if (watching) {
+      setHtml($('newBody'), '')
+      closeNewProject()
+    }
     location.hash = got.appSlug
-    closeNewProject()
     await loadQueue()
     // With projects already here, the address alone does not move the page: go to the new one, beside the others.
-    if (state.appSlug !== got.appSlug && state.apps.some(a => a.slug === got.appSlug)) {
-      pickApp(got.appSlug)
-      toast(`Now: ${placeWords(placeOf(app()))}`)
+    if (state.apps.length > 1 && state.apps.some(a => a.slug === got.appSlug)) {
+      if (state.appSlug !== got.appSlug || again) pickApp(got.appSlug)
+      toast(again || `Now: ${placeWords(placeOf(app()))}`)
     }
   } catch (error) {
+    if (late()) return void toast('No new project was made', error.message, { problem: true })
     said.textContent = error.message
     show.disabled = false
   }
@@ -2389,27 +2409,37 @@ for (const holder of [$('stateCard'), $('newModal')]) {
 }
 /* New project, from the menu: the first screen's two ways in, over the page, with the projects there left as they are. */
 const newProjectOpen = () => !$('newModal').hidden
+// One for each time the window is open: an answer that comes after it closed knows it is late.
+let newWindow = { open: false }
 function openNewProject() {
   closeMenu()
   // With no project yet, the first screen is already this form.
   if (!state.apps.length) return $('firstAddress')?.focus()
   closeTextEntry(true)
   closeDrawer()
-  setHtml($('newBody'), firstRunHtml({ sample: false }))
+  newWindow = { open: true }
+  // A typed address stays from last time until a project is made from it. A picture still being taken goes on by itself.
+  if (!$('newBody').querySelector('[data-first]')) setHtml($('newBody'), firstRunHtml({ sample: false }))
+  $('newBody').querySelector('[data-first-said]').hidden = true
+  $('newBody').querySelector('[data-first-show]').disabled = false
   $('newModal').hidden = false
   for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = true
   return $('newBody').querySelector('[data-first-address]').focus()
 }
 function closeNewProject() {
   if (!newProjectOpen()) return
+  newWindow.open = false
   $('newModal').hidden = true
   for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = false
-  // The form is dropped, so a half-typed address or an old error is not there next time.
-  setHtml($('newBody'), '')
   $('menuOpen').focus()
 }
 $('newClose').onclick = () => closeNewProject()
-$('newModal').addEventListener('click', event => event.target === $('newModal') && closeNewProject())
+// Only a press that starts and ends outside closes it: a drag out of the address box is not a close.
+let pressedOutside = false
+$('newModal').addEventListener('pointerdown', event => {
+  pressedOutside = event.target === $('newModal')
+})
+$('newModal').addEventListener('click', event => event.target === $('newModal') && pressedOutside && closeNewProject())
 $('stateCard').onclick = event => {
   if (event.target.closest('[data-look]')) go(0)
   if (event.target.closest('[data-go-on]')) goOn()
