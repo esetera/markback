@@ -43,6 +43,8 @@ When work on this project's reviews waits and no agent has listened for a minute
 
 In Claude Code with the Markback plugin, two hooks also keep you listening: when you are about to stop and work waits, you are told to take it. Without the plugin, put them in the project once with `review install-skills --hooks`, and take them out with `review install-skills --remove-hooks`. They only hold you for work on this project's own reviews.
 
+If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
+
 ## Ideas
 
 `review work wait` ends when a request for ideas comes. To wait only for requests:

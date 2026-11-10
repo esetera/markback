@@ -5,6 +5,8 @@ description: Read what the person marked on screens pushed for review and act on
 
 Every mark is a request. Do not ask whether to act on it: do it, unless it is a choice only the person can make.
 
+If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
+
 ## Wait
 
 In Codex Desktop, when the chat's native Markback heartbeat is active, end the turn after a push. The next check reads this review's marks with `review wake poll --app <slug>`. Use the wait below for sessions without the Desktop heartbeat.

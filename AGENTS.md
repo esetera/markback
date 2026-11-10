@@ -14,6 +14,8 @@ The goal is the person drawing on their own app's screens within a minute. Never
 
 Start from what the person said.
 
+If `review` is not found, use `node review.mjs` in the Markback folder in its place.
+
 ### In their project
 
 Run this in the project's folder:
@@ -46,13 +48,13 @@ For sessions without a Desktop heartbeat, keep listening after each round: start
 
 If a command fails or nothing shows, run `review check` and tell the person what it says.
 
-If `review` is not found, use `node review.mjs` in the Markback folder in its place.
-
 ## push-screens
 
 _Put screenshots in front of the person to review and mark up. Use after any change to a user interface, a designed document or a slide, instead of pasting pictures in chat._
 
 The person reviews by drawing on real screens in a local page. In a session using Markback, push a review as soon as a meaningful visible change is ready to check. Push the screens that changed and include the earlier pictures when you have them. The person can review directly on the page.
+
+If `review` is not found, use `node review.mjs` in the Markback folder in its place.
 
 ### Start it
 
@@ -60,7 +62,7 @@ The person reviews by drawing on real screens in a local page. In a session usin
 review start
 ```
 
-It prints the address, by default http://localhost:5741. If `review` is not found, use `node review.mjs` in the Markback folder in its place. If the port is taken: `review start --port 5742`. Pushing only writes files, so it works with the page closed, or where a sandbox stops `start` from seeing it.
+It prints the address, by default http://localhost:5741. If the port is taken: `review start --port 5742`. Pushing only writes files, so it works with the page closed, or where a sandbox stops `start` from seeing it.
 
 ### Push one screen at a time
 
@@ -110,6 +112,8 @@ If the review is not open yet, open it for them: in the desktop session's built-
 _Read what the person marked on screens pushed for review and act on each mark. Use after pushing screens, or when the person says they have finished reviewing._
 
 Every mark is a request. Do not ask whether to act on it: do it, unless it is a choice only the person can make.
+
+If `review` is not found, use `node review.mjs` in the Markback folder in its place.
 
 ### Wait
 
@@ -161,6 +165,8 @@ Keep a list of the marks and tick each one when it is done, so none is lost.
 _Draw a workflow as a simple architect's sketch for the person to check and mark up. Use when a feature has a multi-step flow, or to check who may do what and what triggers it._
 
 A workflow can only be checked when it says who may do each step and what makes it happen. A plain flowchart hides what goes wrong. Keep it simple.
+
+If `review` is not found, use `node review.mjs` in the Markback folder in its place.
 
 ### Rules for a sheet
 
@@ -237,6 +243,8 @@ That line is for Claude Code: a run with no window that continues the last conve
 When work on this project's reviews waits and no agent has listened for a minute, the server runs that command in this folder, with a fixed prompt that names this project and its reviews and says to run `review work` and do what it says. In the project's folder, `review work` lists only that project's work. Take only that: another project's work is not yours. Work on a review no project has pushed starts nobody. If the project has pushed no review yet, add `--app "<review name>"` to `wake set`. It runs one at a time, rests 30 seconds after each run, and does not run again for the same work within ten minutes. You run with the permissions the person already gave your tool: Markback adds none. Do not put a flag that skips permission prompts in the command. `review wake show` says what is set for this project (`--all` for every project), `review wake off` stops it, and `review wake clear` removes it. A run that goes on for 30 minutes no longer stops a new one. The person can also turn it off in the page's menu, where the command is shown. Nothing on the page can set or change the command.
 
 In Claude Code with the Markback plugin, two hooks also keep you listening: when you are about to stop and work waits, you are told to take it. Without the plugin, put them in the project once with `review install-skills --hooks`, and take them out with `review install-skills --remove-hooks`. They only hold you for work on this project's own reviews.
+
+If `review` is not found, use `node review.mjs` in the Markback folder in its place.
 
 ### Ideas
 
