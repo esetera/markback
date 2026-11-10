@@ -26,6 +26,7 @@ It finds how the app runs, takes pictures of its main screens, and names the rev
 
 - **"Your app runs with npm run dev, and it is not running":** starting it runs their code. Ask them first, in one line. On a yes, run `review project --yes`.
 - **"needs a small Chrome from Google":** that is a download. Ask them first, in one line, saying what it is and how big. On a yes, run the same command again with `--fetch-browser`.
+- **"No Chrome or Edge here":** your sandbox has none. Follow "In a sandbox" in the `push-screens` skill: take the screenshots yourself and push them.
 - **"There is no app in this folder yet":** make the first screen from what they said (below).
 
 ### No app yet
@@ -57,6 +58,22 @@ review start
 ```
 
 It prints the address, by default http://localhost:5741. If `review` is not found, use `node review.mjs` in the Markback folder in its place. If the port is taken: `review start --port 5742`. Pushing only writes files, so it works with the page closed, or where a sandbox stops `start` from seeing it.
+
+### In a sandbox
+
+Some agents run commands in a sandbox that drops environment variables, cannot write outside the project, or has no Chrome. There, run this once, in the project's folder:
+
+```bash
+review project --store .markback-store
+```
+
+It writes `.markback`, a small file that names the store. Every `review` command in this folder, or below it, then uses that store, with no setting needed. Add `--port 5760` to name the port too.
+
+- Push your own screenshots with `review push`. Without Chrome, `review see` and `review project` stop at once and say so.
+- You cannot start the page from the sandbox, and you do not need to. Pushing writes files, and says so. Ask the person to run `review start` in the project's folder, outside the sandbox. The page then shows everything you pushed.
+- `review wait` and `review read` work as usual: they read the same files.
+- When it says the store is not in `.gitignore`, add it there, or tell the person.
+- `--home <folder>` with any command names the store for that command. It wins over `REVIEW_HOME`, which wins over `.markback`.
 
 ### Push one screen at a time
 

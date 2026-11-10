@@ -8,7 +8,7 @@ import { createServer } from 'node:http'
 import { readFileSync, existsSync, statSync } from 'node:fs'
 import { extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
+import { HOME, IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
 
@@ -174,4 +174,4 @@ server.on('error', error => {
   process.exit(1)
 })
 // This computer only: nothing here is reachable from another machine.
-server.listen(PORT, '127.0.0.1', () => console.log(`Markback on http://localhost:${PORT}`))
+server.listen(PORT, '127.0.0.1', () => console.log(`Markback on http://localhost:${PORT}, with screens and marks in ${HOME}`))

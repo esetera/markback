@@ -30,6 +30,8 @@
  *
  *   review project [--yes] [--no-open]           in a project's folder: finds its app, takes its main screens, opens
  *                                               them in your browser (the markback command is this)
+ *   review project --store .markback-store [--port 5760]   writes .markback here: this project's store and port, for a
+ *                                               sandbox that drops REVIEW_HOME or cannot write outside the project
  *   review open [--app MyApp]                   opens the review page in your browser
  *
  *   review plugin add <folder or git address> [--yes]   review plugin list   review plugin remove <name>
@@ -38,15 +40,19 @@
  *
  *   review install-skills [--to ~/.agents/skills | --codex] [--agents-md <project folder> [--no-path]]
  *                                               the skills for Codex, Cursor and others; AGENTS.md for the rest
+ *
+ *   --home <folder>, with any command: the store to use. Else REVIEW_HOME, else a .markback file at or above this folder,
+ *   else ~/.review-wizard.
  */
 
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { HOME, INBOX, PORT, clearApp, isSetAside, listApps, listScreens, push, readInbox, rememberPort, slug } from './lib/store.mjs'
-import { pushSample, showApp } from './lib/first.mjs'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { HOME, INBOX, PORT, WHERE, clearApp, isSetAside, listApps, listScreens, push, readInbox, rememberPort, slug } from './lib/store.mjs'
+import { ignoreHint, writeProjectFile } from './lib/home.mjs'
+import { NO_CHROME, canTakePictures, pushSample, showApp } from './lib/first.mjs'
 import { showPdf } from './lib/pdf.mjs'
 import { PAGE_SCRIPT, printable, readWords, sayWords } from './lib/words.mjs'
 import { sketch } from './lib/sketch.mjs'
@@ -56,7 +62,20 @@ import { findApp, openPage, shootScreens, startApp } from './lib/project.mjs'
 import { runChecks, sayResult, sayVerdict, up } from './lib/check.mjs'
 import { addNote, closeRequest, listWork, openRequests, postIdea, pushedFor, setStage, take } from './lib/work.mjs'
 
-const [command, ...rest] = process.argv.slice(2)
+const args = process.argv.slice(2)
+// The store reads --home itself (lib/home.mjs), so it can come before the command or after it. It is taken out here.
+const homeAt = args.indexOf('--home')
+if (homeAt >= 0) {
+  if (!args[homeAt + 1] || args[homeAt + 1].startsWith('--')) {
+    console.error('--home takes a folder: review --home .markback-store push ...')
+    process.exit(1)
+  }
+  args.splice(homeAt, 2)
+}
+const [command, ...rest] = args
+// Where the store is when a project file chose it, a file that was ignored, and a store git would commit: on stderr, so
+// --json stays plain.
+for (const line of [...WHERE.say, ignoreHint(HOME)].filter(Boolean)) console.error(line)
 const flags = {}
 for (let i = 0; i < rest.length; i++) {
   const arg = rest[i]
@@ -83,6 +102,19 @@ const fail = message => {
 }
 const need = key => flags[key] || fail(`Missing --${key}`)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+/**
+ * Pushing only writes files, so it works with no page running, and inside a sandbox that can start none. When the page cannot
+ * be seen from here, say what was kept and how the person sees it: by starting Markback on the same store, outside the sandbox.
+ */
+async function pageHint() {
+  if (await up(PORT)) return
+  const port = process.env.REVIEW_PORT ? ` --port ${PORT}` : ''
+  const how = WHERE.from === 'file' ? `"review start${port}" in ${WHERE.file.root}` : WHERE.from === 'default' ? `"review start${port}"` : `"review start --home ${HOME}${port}"`
+  // After --json output this goes to stderr, so what comes out on stdout still reads as JSON.
+  const say = flags.json ? console.error : console.log
+  say(`The review page is not running, or cannot be seen from here. It is saved in ${HOME}, and shows once the person runs ${how} outside any sandbox.`)
+}
 
 /** One feedback record as a change request someone can act on. */
 function describe(r) {
@@ -199,7 +231,7 @@ async function start() {
   // A sandbox can stop this command reaching the page while the page runs. Its process still says so.
   if (ourServer(readPid()) && !flags.port) return console.log(`Already running: http://localhost:${port}`)
   mkdirSync(HOME, { recursive: true })
-  const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'server.mjs')], { detached: true, stdio: 'ignore', env: { ...process.env, REVIEW_PORT: String(port) } })
+  const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'server.mjs')], { detached: true, stdio: 'ignore', env: { ...process.env, REVIEW_HOME: HOME, REVIEW_PORT: String(port) } })
   child.unref()
   for (let i = 0; i < 50; i++) {
     if (await up(port)) {
@@ -238,6 +270,7 @@ if (command === 'push') {
   // Long words go unread, and they cost time before anyone can act.
   if ([entry.note, ...(entry.check ?? [])].some(words => words.trim().split(/\s+/).length > 10)) console.error('Too long: say what to look at in ten words or fewer. Only the first sentence shows; the rest waits behind More.')
   console.log(`Queued ${entry.app} / ${entry.screen}${entry.mode ? ` (${entry.mode})` : ''}, round ${entry.round}: ${all.length} screen${all.length === 1 ? '' : 's'} for ${entry.app}. Open http://localhost:${PORT}/#${entry.appSlug}${isSetAside(entry.appSlug) ? `\nThis review is set aside: it is not offered until the reviewer brings it back.` : ''}`)
+  await pageHint()
 } else if (command === 'list') {
   const apps = listApps().filter(a => !flags.app || a.slug === slug(flags.app))
   if (!apps.length) console.log('Nothing queued.')
@@ -284,6 +317,18 @@ if (command === 'push') {
     }
     await sleep(2000)
   }
+} else if (command === 'project' && flags.store) {
+  // One step for a sandboxed agent: the store and port go in a file, so no setting has to reach later commands.
+  if (typeof flags.store !== 'string') fail('--store takes a folder inside this project, for example --store .markback-store')
+  try {
+    const written = writeProjectFile(process.cwd(), { home: flags.store, port: flags.port ? Number(flags.port) : undefined })
+    console.log(`Wrote ${written.path}. Markback commands in this folder now keep screens and marks in ${written.home}.`)
+    const hint = ignoreHint(written.home)
+    if (hint) console.log(hint)
+    console.log('Push screenshots with review push. The person sees them once they run review start in this folder.')
+  } catch (error) {
+    fail(error.message)
+  }
 } else if (command === 'project') {
   await start()
   // Where Codex and Cursor look in a project. Without this computer's paths: the folder may be committed.
@@ -297,6 +342,8 @@ if (command === 'push') {
     console.warn('Project skill files are read-only in this session. Continuing to the review.')
   }
   const found = await findApp(process.cwd())
+  // Said before an app is started or anything is waited for.
+  if ((found.running || found.run || found.file) && !canTakePictures(found.running ? new URL(found.running) : pathToFileURL(process.cwd()))) fail(NO_CHROME)
   let url = found.running
   if (!url && found.run) {
     let yes = !!flags.yes
@@ -355,12 +402,14 @@ if (command === 'push') {
 } else if (command === 'demo') {
   pushSample()
   console.log(`A sample is waiting. Open http://localhost:${PORT}/#sample`)
+  await pageHint()
 } else if (command === 'see') {
   try {
     // The address is the first word that is not a flag: --fetch-browser may come before it.
     const address = rest.find((word, i) => !word.startsWith('--') && (i === 0 || rest[i - 1] === '--fetch-browser' || !rest[i - 1].startsWith('--')))
     const shown = await showApp(address ?? flags.url, { app: typeof flags.app === 'string' ? flags.app : '', screen: typeof flags.screen === 'string' ? flags.screen : 'First look', files: true, kind: flags.kind || 'qa' })
     console.log(`It is ready to mark. Open http://localhost:${PORT}/#${shown.appSlug}`)
+    await pageHint()
   } catch (error) {
     fail(error.message)
   }
@@ -374,6 +423,7 @@ if (command === 'push') {
     const many = shown.entries.length
     if ([entry.note, ...(entry.check ?? [])].some(words => words.trim().split(/\s+/).length > 10)) console.error('Too long: say what to look at in ten words or fewer. Only the first sentence shows; the rest waits behind More.')
     console.log(`Queued ${shown.name}, ${many === 1 ? `page ${shown.first}` : `pages ${shown.first} to ${shown.last}`}${shown.total ? ` of ${shown.total}` : ''}. Open http://localhost:${PORT}/#${entry.appSlug}${shown.more ? `\nThere are more pages. Ask for them by number: --pages ${shown.last + 1}-${shown.last + many}` : ''}`)
+    await pageHint()
   } catch (error) {
     fail(error.message)
   }
@@ -398,8 +448,10 @@ if (command === 'push') {
   showItem(item)
 } else if (command === 'note') {
   showItem(addNote(need('item'), need('text'), typeof flags.by === 'string' ? flags.by : 'a session'))
+  await pageHint()
 } else if (command === 'stage') {
   showItem(setStage(need('item'), need('to'), typeof flags.by === 'string' ? flags.by : 'a session'))
+  await pageHint()
 } else if (command === 'plugin') {
   const what = rest[0]
   if (what === 'list') {

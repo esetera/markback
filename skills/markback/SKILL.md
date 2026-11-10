@@ -20,6 +20,7 @@ It finds how the app runs, takes pictures of its main screens, and names the rev
 
 - **"Your app runs with npm run dev, and it is not running":** starting it runs their code. Ask them first, in one line. On a yes, run `review project --yes`.
 - **"needs a small Chrome from Google":** that is a download. Ask them first, in one line, saying what it is and how big. On a yes, run the same command again with `--fetch-browser`.
+- **"No Chrome or Edge here":** your sandbox has none. Follow "In a sandbox" in the `push-screens` skill: take the screenshots yourself and push them.
 - **"There is no app in this folder yet":** make the first screen from what they said (below).
 
 ## No app yet
