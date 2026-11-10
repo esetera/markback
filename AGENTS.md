@@ -79,6 +79,7 @@ It writes `.markback`, a small file that names the store. Every `review` command
 - You cannot start the page from the sandbox, and you do not need to. Pushing writes files, and says so. Ask the person to run `review start` in the project's folder, outside the sandbox. The page then shows everything you pushed.
 - `review wait` and `review read` work as usual: they read the same files.
 - When it says the store is not in `.gitignore`, add it there, or tell the person.
+- If it says the small browser in the store is inside the project, ask the person first. On a yes, run the same command again with `--use-store-browser`.
 - If it says the page on that port shows another store, ask the person to run `review start` in the project's folder. It moves this store to a free port and says the address.
 - `--home <folder>` with any command names the store for that command. It wins over `REVIEW_HOME`, which wins over `.markback`.
 

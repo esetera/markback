@@ -105,7 +105,7 @@ for (let i = 0; i < rest.length; i++) {
   if (key === 'check') {
     if (next !== undefined && !next.startsWith('--')) (flags.check ??= []).push(next)
     if (next !== undefined && !next.startsWith('--')) i++
-  } else if (key === 'fetch-browser' || next === undefined || next.startsWith('--')) flags[key] = true // --fetch-browser is a yes, never a name: what follows it is not its value
+  } else if (key === 'fetch-browser' || key === 'use-store-browser' || next === undefined || next.startsWith('--')) flags[key] = true // --fetch-browser is a yes, never a name: what follows it is not its value
   else {
     flags[key] = next
     i++
@@ -114,6 +114,8 @@ for (let i = 0; i < rest.length; i++) {
 
 // The person said yes to fetching the small browser that pictures need inside a sandbox. Without the flag, nothing is fetched.
 if (flags['fetch-browser']) process.env.MARKBACK_FETCH_BROWSER = 'yes'
+// The person said yes to running the browser kept in their project's store, for this one command.
+if (flags['use-store-browser']) process.env.MARKBACK_USE_STORE_BROWSER = 'yes'
 
 const fail = message => {
   console.error(message)
@@ -418,10 +420,20 @@ async function start() {
   fail(`It did not start. Port ${port} may be taken, or the page may already run there where this command cannot see it. Pushing works without the page: try review push, or review start --port ${port + 1}`)
 }
 
+/**
+ * The server.pid of a store a project's .markback named may have come with the project, naming any Markback server on this
+ * computer. It is signalled only when the page on this store's port says it is that process, serving this store.
+ */
+async function servesThisStore(pid) {
+  if (WHERE.from !== 'file') return true
+  const queue = await fetch(`http://127.0.0.1:${PORT}/api/queue`, { signal: AbortSignal.timeout(1500) }).then(r => (r.ok ? r.json() : null), () => null).catch(() => null)
+  return queue?.store === STORE_ID && queue?.pid === pid
+}
+
 async function stop() {
   if (!existsSync(PID_FILE)) return console.log('It is not running from here.')
   const pid = readPid()
-  if (ourServer(pid)) {
+  if (ourServer(pid) && (await servesThisStore(pid))) {
     process.kill(pid)
     console.log('Stopped.')
   } else console.log('It was not running.')
@@ -614,8 +626,8 @@ if (command === 'push') {
   await pageHint()
 } else if (command === 'see') {
   try {
-    // The address is the first word that is not a flag: --fetch-browser may come before it.
-    const address = rest.find((word, i) => !word.startsWith('--') && (i === 0 || rest[i - 1] === '--fetch-browser' || !rest[i - 1].startsWith('--')))
+    // The address is the first word that is not a flag: --fetch-browser or --use-store-browser may come before it.
+    const address = rest.find((word, i) => !word.startsWith('--') && (i === 0 || ['--fetch-browser', '--use-store-browser'].includes(rest[i - 1]) || !rest[i - 1].startsWith('--')))
     const shown = await showApp(address ?? flags.url, { app: typeof flags.app === 'string' ? flags.app : '', screen: typeof flags.screen === 'string' ? flags.screen : 'First look', files: true, kind: flags.kind || 'qa' })
     console.log(`It is ready to mark. Open http://localhost:${PORT}/#${shown.appSlug}`)
     await pageHint()
@@ -646,7 +658,11 @@ if (command === 'push') {
 } else if (command === 'work') {
   await work(rest[0] && !rest[0].startsWith('--') ? rest[0] : 'list')
 } else if (command === 'wake') {
-  wake(rest[0] && !rest[0].startsWith('--') ? rest[0] : 'show')
+  try {
+    wake(rest[0] && !rest[0].startsWith('--') ? rest[0] : 'show')
+  } catch (error) {
+    fail(error.message)
+  }
 } else if (command === 'queue') {
   const items = listWork().filter(i => !['idea', 'later', 'no'].includes(i.stage))
   if (flags.json) console.log(JSON.stringify(items, null, 2))

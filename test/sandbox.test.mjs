@@ -467,3 +467,117 @@ test('a link added to a .markback store while the page runs: the page saves noth
     server.kill()
   }
 })
+
+/** A store with a program planted where the small browser goes: it leaves a mark if anything runs it. */
+function plantedBrowser(dir) {
+  const folder = join(dir, '.markback-store', 'browser', `chrome-headless-shell-${process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64'}`)
+  mkdirSync(folder, { recursive: true })
+  writeFileSync(join(folder, 'chrome-headless-shell'), `#!/bin/sh\necho ran >> ${JSON.stringify(join(dir, 'planted-ran'))}\nexit 1\n`)
+  chmodSync(join(folder, 'chrome-headless-shell'), 0o755)
+  writeFileSync(join(dir, 'index.html'), '<h1>Hi</h1>')
+  return folder
+}
+
+test('a browser planted in a .markback store is never run by see, check or project, in a sandbox or out of one', async () => {
+  const port = await freePort()
+  const dir = project({ home: '.markback-store', port })
+  plantedBrowser(dir)
+  const page = pathToFileURL(join(dir, 'index.html')).href
+  const inside = dropped({ CODEX_SANDBOX: 'seatbelt' })
+  const outside = dropped({ REVIEW_CHROME: join(dir, 'no-chrome') })
+  try {
+    for (const env of [inside, outside]) {
+      const seen = await run(['see', page], { cwd: dir, env })
+      assert.equal(seen.code, 1)
+      if (env === inside && process.platform === 'darwin') assert.match(seen.stderr, /inside the project, and Markback cannot tell that it put it there.*--use-store-browser/)
+      await run(['check'], { cwd: dir, env })
+      const made = await run(['project', '--no-open'], { cwd: dir, env })
+      assert.equal(made.code, 1)
+    }
+  } finally {
+    await run(['stop'], { cwd: dir })
+  }
+  assert.equal(existsSync(join(dir, 'planted-ran')), false)
+})
+
+test('a store browser runs only on the person\'s yes, and never from a store git tracks', { skip: process.platform !== 'darwin' }, async () => {
+  const dir = project({ home: '.markback-store' })
+  plantedBrowser(dir)
+  const page = pathToFileURL(join(dir, 'index.html')).href
+  const env = dropped({ CODEX_SANDBOX: 'seatbelt' })
+  // Committed: the store's path is in the repository's index, as it is after a clone.
+  mkdirSync(join(dir, '.git'))
+  const entry = Buffer.from('.markback-store/browser/chrome-headless-shell\0')
+  const header = Buffer.alloc(12)
+  header.write('DIRC', 0, 'latin1')
+  header.writeUInt32BE(2, 4)
+  header.writeUInt32BE(1, 8)
+  writeFileSync(join(dir, '.git', 'index'), Buffer.concat([header, Buffer.alloc(62), entry]))
+  const tracked = await run(['see', page, '--use-store-browser'], { cwd: dir, env })
+  assert.match(tracked.stderr, /git tracks files in .*so they came with the project/)
+  assert.equal(existsSync(join(dir, 'planted-ran')), false)
+  // An index git compresses cannot be read here: not run either.
+  header.writeUInt32BE(4, 4)
+  writeFileSync(join(dir, '.git', 'index'), Buffer.concat([header, Buffer.alloc(62), entry]))
+  assert.match((await run(['see', page, '--use-store-browser'], { cwd: dir, env })).stderr, /cannot tell whether git tracks/)
+  assert.equal(existsSync(join(dir, 'planted-ran')), false)
+  // Not committed, and the person said yes for this command: it runs, and says it is a program inside the project.
+  rmSync(join(dir, '.git', 'index'))
+  const yes = await run(['see', page, '--use-store-browser'], { cwd: dir, env })
+  assert.match(yes.stderr, /Running the browser in .*a program inside the project/)
+  assert.ok(existsSync(join(dir, 'planted-ran')))
+  const { trackedByGit } = await import('../lib/capture-browser.mjs')
+  assert.equal(trackedByGit(join(dir, '.markback-store')), 'no')
+})
+
+test('wake commands in a .markback store are never run: a project\'s store keeps its commands in the person\'s own folder', async () => {
+  const dir = project({ home: '.markback-store' })
+  mkdirSync(join(dir, '.git'))
+  const store = join(dir, '.markback-store')
+  // A command as it would be committed in the store: made the old way, with the store as REVIEW_HOME.
+  const wakeLib = JSON.stringify(join(ROOT, 'lib', 'wake.mjs'))
+  execFileSync(process.execPath, ['--input-type=module', '-e', `const w = await import(${wakeLib}); w.setWake({ run: 'touch planted {prompt}', folder: ${JSON.stringify(dir)} })`], { env: { ...process.env, REVIEW_HOME: store }, cwd: dir })
+  assert.ok(readdirSync(join(store, 'work', 'wake')).some(f => f.endsWith('.json')))
+  const own = join(base, 'wake-home')
+  mkdirSync(own)
+  const list = () => JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `const w = await import(${wakeLib}); console.log(JSON.stringify(w.listWakes()))`], { env: dropped({ HOME: own }), cwd: dir, encoding: 'utf8' }))
+  assert.deepEqual(list(), [], 'the server lists none of them')
+  // Set on this computer, it is kept outside the project, and listed.
+  const set = await run(['wake', 'set', '--run', 'echo {prompt}'], { cwd: dir, env: dropped({ HOME: own }) })
+  assert.equal(set.code, 0, set.stderr)
+  assert.ok(existsSync(join(own, '.review-wizard', 'store-wakes')))
+  assert.deepEqual(list().map(w => w.run), ['echo {prompt}'])
+  // In a sandbox that cannot write there, it says so in one line, and sets nothing in the store.
+  const refused = await run(['wake', 'set', '--run', 'echo {prompt}'], { cwd: dir })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stderr, /kept in .*outside the project, and this sandbox cannot write there/)
+  // The page says the store's own commands are not run.
+  const port = await freePort()
+  writeFileSync(join(dir, '.markback'), JSON.stringify({ home: '.markback-store', port }))
+  const { spawn } = await import('node:child_process')
+  const server = spawn(process.execPath, [join(ROOT, 'server.mjs')], { cwd: dir, env: dropped({ HOME: own }), stdio: ['ignore', 'ignore', 'pipe'] })
+  let said = ''
+  server.stderr.on('data', part => (said += part))
+  try {
+    for (let i = 0; i < 100 && !(await queueAt(port)); i++) await new Promise(r => setTimeout(r, 100))
+    assert.match(said, /Not running the wake commands in .*they came with the project's store/)
+  } finally {
+    server.kill()
+  }
+})
+
+test('review stop never signals a server named by a .markback store\'s server.pid unless that server serves this store', async () => {
+  const theirPort = await freePort()
+  const { spawn } = await import('node:child_process')
+  const theirs = spawn(process.execPath, [join(ROOT, 'server.mjs')], { env: { ...process.env, REVIEW_HOME: join(base, 'their-store'), REVIEW_PORT: String(theirPort) }, stdio: 'ignore' })
+  try {
+    for (let i = 0; i < 100 && !(await queueAt(theirPort)); i++) await new Promise(r => setTimeout(r, 100))
+    const dir = project({ home: '.markback-store', port: await freePort() })
+    mkdirSync(join(dir, '.markback-store'))
+    writeFileSync(join(dir, '.markback-store', 'server.pid'), String(theirs.pid))
+    assert.match((await run(['stop'], { cwd: dir })).stdout, /It was not running/)
+    assert.ok((await queueAt(theirPort))?.apps, 'their page still runs')
+  } finally {
+    theirs.kill()
+  }
+})

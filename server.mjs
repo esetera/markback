@@ -15,7 +15,7 @@ import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder
 import { appsOf, madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
 // Only what reads the wake command and turns it on and off. What sets the command is not imported here, on purpose:
 // nothing a web page can reach may decide what this computer runs.
-import { createWaker, listWakes, readDesktopWake, switchDesktopWake, switchWake, wakeSummary } from './lib/wake.mjs'
+import { WAKES, WAKES_IN_STORE, createWaker, listWakes, readDesktopWake, switchDesktopWake, switchWake, wakeSummary } from './lib/wake.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' }
@@ -130,7 +130,7 @@ const server = createServer(async (req, res) => {
     // Which store this page shows: a command on the same port can then tell whether its pushes are here.
     if (req.method === 'GET' && url.pathname === '/api/queue') {
       const apps = listApps()
-      return json(res, 200, { apps, listening: listening(apps), store: STORE_ID })
+      return json(res, 200, { apps, listening: listening(apps), store: STORE_ID, pid: process.pid })
     }
     // A store a project's .markback named may hold no link: one added while the page runs would send this write anywhere.
     if (req.method === 'POST' && WHERE.from === 'file' && linkIn(HOME)) return json(res, 409, { error: `Not saved: ${LINK_OUT}.` })
@@ -216,6 +216,8 @@ const server = createServer(async (req, res) => {
     json(res, 500, { error: error instanceof Error ? error.message : String(error) })
   }
 })
+
+if (WAKES_IN_STORE) console.error(`Not running the wake commands in ${join(HOME, 'work', 'wake')}: they came with the project's store. Set one on this computer with review wake set, kept in ${WAKES}.`)
 
 if (WHERE.problem) {
   console.error(`Not starting: ${WHERE.problem}`)
