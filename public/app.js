@@ -523,7 +523,8 @@ function closeSheet() {
 /** How long a step stays, when a test says so. The film's own times come with it, in seconds. */
 const FILM_MS = Number(new URLSearchParams(location.search).get('film')) || 0
 /** `at` is the step on show. `picked` is true when a round was chosen and not reached by playing or stepping. */
-const film = { data: null, of: null, names: [], at: 0, playing: false, timer: null, picked: true, loading: false }
+/** `loading` is the ask on its way, from the press until the film comes. `back` has the focus to go back to when it closes. */
+const film = { data: null, of: null, names: [], at: 0, playing: false, timer: null, picked: true, loading: null, back: null }
 const filmOpen = () => !$('film').hidden
 /** The step on show: the picture comes in over the last one, the strip says which round, and the button says what it does. */
 function showFilm() {
@@ -594,31 +595,61 @@ function pickFilmRound(round) {
   film.at = film.data.steps.findLastIndex(step => step.at === round)
   showFilm()
 }
+/** The page behind the film, shut or open again: nothing there takes the focus, a key or a press while it is shut. */
+function shutBehindFilm(shut) {
+  for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = shut
+}
+/** The focus goes back where it was before the film: a press in the menu goes back to the menu's button. */
+function focusBeforeFilm() {
+  const back = film.back
+  film.back = null
+  if (back && back !== document.body && back.isConnected && back.checkVisibility() && !back.closest('[inert]')) back.focus({ preventScroll: true })
+  // Nowhere to go back to: the focus leaves the shut film, so no key lands on a button nobody sees.
+  else if (document.activeElement?.closest('#film')) document.activeElement.blur()
+}
 async function openFilm() {
   const s = screen()
   if (filmOpen()) return closeFilm()
   if (!s || film.loading) return
+  const was = document.activeElement
+  film.back = was?.closest('#menu') ? $('menuOpen') : was
   closeTextEntry(true)
   closeMenu()
   closeDrawer()
   endPin()
-  film.loading = true
+  // Shut from the press on, not from when the film comes: G pressed while it loads would answer the screen behind unseen.
+  shutBehindFilm(true)
+  const asked = {}
+  film.loading = asked
   let data = null
   try {
     const res = await fetch(`/api/film?app=${encodeURIComponent(s.appSlug)}&id=${encodeURIComponent(s.id)}`, { cache: 'no-store' })
     data = res.ok ? (await res.json()).film : null
   } catch {
     data = null
-  } finally {
-    film.loading = false
   }
-  if (!data?.steps?.length) return toast('No film of this screen', 'Its pictures are not in the store.', { problem: true })
+  // Esc while it loaded, or another screen by now: the film is dropped. It would open over a screen it is not the film of.
+  const now = screen()
+  const wanted = film.loading === asked && now?.appSlug === s.appSlug && now?.id === s.id
+  if (film.loading === asked) film.loading = null
+  if (!wanted || !data?.steps?.length) {
+    shutBehindFilm(false)
+    focusBeforeFilm()
+    return wanted ? toast('No film of this screen', 'Its pictures are not in the store.', { problem: true }) : undefined
+  }
   const last = data.rounds.length - 1
   Object.assign(film, { data, of: { appSlug: s.appSlug, id: s.id }, names: data.rounds.map((r, i) => (data.finished && i === last ? 'Finished' : `Round ${r.round}`)), playing: false, picked: true })
   const name = `${data.screen}${data.mode ? ` (${data.mode})` : ''}`
   const seconds = Math.round(data.seconds)
   $('filmTitle').textContent = `${name}: from first mark to ${data.finished ? 'finished' : 'now'}`
-  $('filmLength').textContent = `${data.rounds.length} round${data.rounds.length === 1 ? '' : 's'} · ${seconds} second${seconds === 1 ? '' : 's'}${data.missing > 0 ? ` · ${data.missing} older ${data.missing === 1 ? 'picture is' : 'pictures are'} gone` : ''}`
+  $('filmTitle').title = $('filmTitle').textContent
+  // A sketch is a drawing, and ffmpeg makes films of pictures: it plays here, and the page says so in place of the button.
+  const why = data.save?.why ?? ''
+  $('filmLength').textContent = `${data.rounds.length} round${data.rounds.length === 1 ? '' : 's'} · ${seconds} second${seconds === 1 ? '' : 's'}${data.missing > 0 ? ` · ${data.missing} older ${data.missing === 1 ? 'picture is' : 'pictures are'} gone` : ''}${why ? ' · Plays here only: a film of a sketch cannot be saved as a file' : ''}`
+  $('filmLength').title = why || $('filmLength').textContent
+  $('filmSave').hidden = !!why
+  // A long story is saved as its newest rounds. The button says so before it is pressed, and the note after.
+  $('filmSave').dataset.tip = `Save the film as a video file${data.save?.leftOut ? `. ${data.save.leftOut}` : ''}`
   // What was said in a round is words, and not in its picture: it is on the round's name, for a pointer that rests there.
   const said = r => (r.answer ? `: ${answerWords(r.answer)}${r.answer.notes && !r.answer.noComment ? `. ${r.answer.notes}` : ''}` : '')
   $('filmStrip').innerHTML = data.rounds.map((r, i) => `<button class="film-round" data-round="${i}" title="${esc(`${film.names[i]}${said(r)}`)}"><span class="thumb"><img src="${esc(r.url)}" alt="" decoding="async"></span><span>${esc(film.names[i])}</span></button>`).join('')
@@ -628,19 +659,24 @@ async function openFilm() {
   $('filmUnder').hidden = true
   $('film').hidden = false
   document.body.classList.add('film-open')
-  // Nothing behind it can take the focus or a key while it is up: G there would answer a screen unseen.
-  for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = true
   // It opens on the first round as it was left: the first marks.
   film.at = data.steps.findLastIndex(step => step.at === 0)
   showFilm()
   $('filmPlay').focus()
   return undefined
 }
+/** Esc while the film loads: it does not open, and the page is as it was. */
+function cancelFilm() {
+  film.loading = null
+  shutBehindFilm(false)
+  focusBeforeFilm()
+}
 function closeFilm() {
   pauseFilm()
   $('film').hidden = true
   document.body.classList.remove('film-open')
-  for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = false
+  shutBehindFilm(false)
+  focusBeforeFilm()
 }
 /** The film as a video file. The server makes it with ffmpeg, when this computer has it, and says so plainly when it has not. */
 async function saveFilm() {
@@ -655,7 +691,8 @@ async function saveFilm() {
     link.download = `${s.appSlug}-${s.id}-film.mp4`
     link.click()
     setTimeout(() => URL.revokeObjectURL(link.href), 10000)
-    toast('Film saved', link.download)
+    // A long story is saved as its newest rounds: the note says the older ones are not in the file.
+    toast('Film saved', `${link.download}${film.data.save?.leftOut ? `. ${film.data.save.leftOut}` : ''}`)
   } catch (error) {
     toast('The film was not saved', error.message, { problem: true })
   } finally {
@@ -2613,6 +2650,12 @@ document.addEventListener('keydown', event => {
   }
   if (sheetOpen()) {
     if (key === 'Escape' || ((key === 'o' || key === 'O') && !mod)) closeSheet()
+    return
+  }
+  // While the film loads, no key reaches the screen behind it either. Esc gives up waiting.
+  if (film.loading) {
+    if (!mod) event.preventDefault()
+    if (key === 'Escape') cancelFilm()
     return
   }
   // The film takes every key while it is up: none reaches the screen behind it.

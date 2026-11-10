@@ -49,7 +49,7 @@ import { fileURLToPath } from 'node:url'
 import { HOME, INBOX, PORT, clearApp, isSetAside, listApps, listScreens, push, readInbox, rememberPort, slug } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { showPdf } from './lib/pdf.mjs'
-import { filmOf, filmScreen, saveFilm } from './lib/film.mjs'
+import { filmOf, filmScreen, leftOutLine, saveFilm } from './lib/film.mjs'
 import { PAGE_SCRIPT, printable, readWords, sayWords } from './lib/words.mjs'
 import { sketch } from './lib/sketch.mjs'
 import { installSkills } from './lib/skills.mjs'
@@ -379,7 +379,7 @@ if (command === 'push') {
   try {
     const out = typeof flags.out === 'string' ? flags.out : fail('Say where to write it: --out film.mp4')
     const made = await saveFilm(filmOf(need('app'), filmScreen(flags.app, need('screen'), typeof flags.mode === 'string' ? flags.mode : '')), out)
-    console.log(`Wrote ${flags.out}: ${made.rounds} round${made.rounds === 1 ? '' : 's'}, ${Math.round(made.seconds)} second${Math.round(made.seconds) === 1 ? '' : 's'}.`)
+    console.log(`Wrote ${flags.out}: ${made.rounds} round${made.rounds === 1 ? '' : 's'}, ${Math.round(made.seconds)} second${Math.round(made.seconds) === 1 ? '' : 's'}.${made.leftOut ? ` ${leftOutLine(made)}` : ''}`)
   } catch (error) {
     fail(error.message)
   }

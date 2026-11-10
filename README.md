@@ -171,7 +171,7 @@ Light and dark are separate screens. The page is the review: the picture fills t
 - **What to look at:** one line, in ten words or fewer as pushed. It is the first sentence of the note, or the `--check` lines, three at most; **More** (I) opens the rest over the picture, so the picture does not move. When a fitted picture leaves room at its side, the lines stand there, level with its top, and never make it smaller.
 - **Where it changed:** with a before of the same size, corner ticks mark each place that differs. They show on screen only and never in what is sent. C hides them. They do not show when most of the picture changed, and a very faint change can go unmarked.
 - **All the screens:** the count in the bar ("4 left", or **O**) opens every screen of the review with where each stands. A press goes to one, and **Looks good for the rest** answers what is left.
-- **The film of a screen:** **R**, or the menu, plays one screen's story over the page: each round's picture, then the same picture as you marked it, on to the newest. It opens on the first marks. **Play** (Space) plays and pauses, ← and → go one step, and a press on a round shows it as it was left. **Save the film** writes it as a video file, where this computer has ffmpeg.
+- **The film of a screen:** **R**, or the menu, plays one screen's story over the page: each round's picture, then the same picture as you marked it, on to the newest. It opens on the first marks. **Play** (Space) plays and pauses, ← and → go one step, and a press on a round shows it as it was left. **Save the film** writes it as a video file, where this computer has ffmpeg. A long story is saved as its newest rounds, and the page says how many older ones the file leaves out. The film of a sketch plays in the page only, and says so in place of the button.
 - **Select words:** where a picture came with a word list, the words tool (**E**) marks the words themselves, as in a document. Without a list it draws a box.
 - **Something new:** the tab's title counts what waits. New screens are said on the page, and from behind another window by a sound and, if you allow it, a notice. The menu turns the sound and notices off.
 - **At the foot:** a slim notes box that grows up over the picture as you type, Looks good and Send. If there are answers already, a small line opens them.
@@ -274,6 +274,8 @@ The film is made from files Markback already keeps. Every push keeps its picture
 
 The video needs [ffmpeg](https://ffmpeg.org) on this computer. Markback does not install it, and says so in one line when it is missing. The film in the page needs nothing.
 
+A file holds at most 40 steps: the newest rounds that fit, and a line says how many older rounds it leaves out. It is no bigger than 1920 by 1920; a bigger picture is made smaller to fit. A sketch is an SVG, which ffmpeg does not read, so the film of a sketch plays in the page and is not saved as a file. The review page's server makes one film at a time: a second ask while one is being made is told so.
+
 Inbox: `~/.review-wizard/inbox/<app>/<screen>-<mode>-<time>.{png,json}`. The JSON:
 
 ```json
@@ -307,7 +309,7 @@ annotated image). A screen sent with the set with nothing on it is `approved` wi
 The page also reads `GET /api/history?app=<app>&id=<screen id>` (earlier answers for one screen),
 `GET /inbox/<app>/<file>.png` (the marked pictures) and `GET /api/film?app=<app>&id=<screen id>` (the rounds of one screen's
 film, and the steps that play). All three only read. `GET /api/film/file` with the same two gives the film as a video, made
-with ffmpeg when it is asked for and not kept.
+with ffmpeg when it is asked for and not kept, one at a time.
 
 ## Ideas and the queue
 

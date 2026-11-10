@@ -2145,9 +2145,9 @@ test('Save the film: the server makes a video with ffmpeg, and without ffmpeg th
   assert.equal(await first.page.locator('#film').isVisible(), true, 'the film stays up, and still plays')
   assert.equal(await first.page.locator('#filmSave').isEnabled(), true)
   await first.page.close()
-  // A stand-in for ffmpeg: it writes what it was asked for where the film should go.
+  // A stand-in for ffmpeg: it writes what it was asked for where the film should go, with the list of steps it was given.
   const tool = join(r.home, 'ffmpeg-stand-in.cjs')
-  writeFileSync(tool, '#!/usr/bin/env node\nconst words = process.argv.slice(2)\nrequire(\'node:fs\').writeFileSync(words.at(-1), JSON.stringify(words))\n')
+  writeFileSync(tool, '#!/usr/bin/env node\nconst fs = require(\'node:fs\')\nconst words = process.argv.slice(2)\nfs.writeFileSync(words.at(-1), words.includes(\'concat\') ? fs.readFileSync(words[words.indexOf(\'-i\') + 1], \'utf8\') : \'\')\n')
   chmodSync(tool, 0o755)
   r.env.REVIEW_FFMPEG = tool
   await r.stop()
@@ -2155,8 +2155,8 @@ test('Save the film: the server makes a video with ffmpeg, and without ffmpeg th
   const res = await fetch(`http://127.0.0.1:${r.port}/api/film/file?app=saving&id=home`)
   assert.equal(res.headers.get('content-type'), 'video/mp4')
   assert.equal(res.headers.get('content-disposition'), 'attachment; filename="saving-home-film.mp4"')
-  const words = await res.json()
-  assert.equal(words.filter(word => word === '-i').length, 5, 'five steps: two rounds with marks, and the finished one')
+  const list = await res.text()
+  assert.equal(list.match(/^duration /gm).length, 5, 'five steps: two rounds with marks, and the finished one')
   assert.equal((await fetch(`http://127.0.0.1:${r.port}/api/film/file?app=saving&id=nothing`)).status, 404)
   const { page, errors } = await r.open('saving/home', { film: 60000 })
   // The file is not kept by the test: the page hands it over under this name.
@@ -2169,5 +2169,111 @@ test('Save the film: the server makes a video with ffmpeg, and without ffmpeg th
   await page.locator('#filmSave').click()
   await page.locator('#toast').getByText('Film saved').waitFor()
   assert.equal(await page.evaluate(() => window.SAVED), 'saving-home-film.mp4')
+  assert.deepEqual(errors, [])
+})
+
+test('a narrow window: the film\'s head fits, its title keeps room and is cut short, the cross stays inside, and nothing goes sideways', { skip }, async () => {
+  const r = await rig()
+  r.push('Narrow', ['The home page with a rather long name that cannot fit'])
+  const { page, errors } = await r.open('narrow', { width: 375, height: 700, colorScheme: 'dark' })
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  const head = await page.evaluate(() => {
+    const parts = [...document.querySelector('.film-head').children].filter(el => el.checkVisibility())
+    const title = document.getElementById('filmTitle')
+    return {
+      outside: parts.filter(el => el.getBoundingClientRect().left < 0 || el.getBoundingClientRect().right > innerWidth).map(el => el.id),
+      title: title.getBoundingClientRect().width,
+      cut: title.scrollWidth > title.clientWidth && getComputedStyle(title).textOverflow === 'ellipsis',
+      close: document.getElementById('filmClose').getBoundingClientRect().right,
+      film: document.getElementById('film').getBoundingClientRect().width,
+      width: innerWidth,
+    }
+  })
+  assert.deepEqual(head.outside, [], 'every part of the head is inside the window')
+  assert.ok(head.title > 200, `the title has room: ${head.title}px`)
+  assert.equal(head.cut, true, 'and a long one ends in an ellipsis')
+  assert.ok(head.close <= head.width - 8, 'the cross is inside, with a margin')
+  assert.equal(head.film, head.width)
+  await page.mouse.move(200, 300)
+  await page.mouse.wheel(400, 0)
+  await page.mouse.move(200, 30)
+  await page.mouse.wheel(400, 0)
+  await settled(page)
+  assert.deepEqual(await page.evaluate(() => [scrollX, document.documentElement.scrollLeft, document.querySelector('.film-head').scrollLeft]), [0, 0, 0], 'nothing scrolls sideways')
+  assert.deepEqual(errors, [])
+})
+
+test('the film shuts the page from the press on: R then G at once answers nothing, Esc while it loads gives up, and another screen by then drops it', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Quick')
+  const { page, errors } = await r.open('quick/other', { film: 60000 })
+  // The film is slow to come, as on a busy computer.
+  await page.route('**/api/film?*', async route => {
+    await new Promise(resolve => setTimeout(resolve, 400))
+    await route.continue()
+  })
+  await page.keyboard.press('r')
+  for (const key of ['g', 'ArrowLeft', 'b', 'Meta+Enter']) await page.keyboard.press(key)
+  await page.locator('#film').waitFor()
+  assert.equal(await page.locator('#filmTitle').innerText(), 'Other: from first mark to now', 'the film of the screen R was pressed on')
+  assert.equal(await at(page), 2, 'the screen behind did not move')
+  assert.equal((await r.queue('quick')).screens.find(s => s.id === 'other').status, 'waiting', 'and was not answered')
+  await page.keyboard.press('Escape')
+  // Esc while it loads: it never opens, and the page is the page's again.
+  await page.keyboard.press('r')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(600)
+  assert.equal(await page.locator('#film').isHidden(), true)
+  assert.equal(await page.evaluate(() => document.getElementById('bar').inert || document.getElementById('workspace').inert), false)
+  // Another screen before the film came: it is not opened over a screen it is not the film of.
+  await page.keyboard.press('r')
+  await page.evaluate(() => document.getElementById('back').click())
+  await page.waitForTimeout(600)
+  assert.equal(await at(page), 1)
+  assert.equal(await page.locator('#film').isHidden(), true)
+  assert.equal(await page.evaluate(() => document.getElementById('bar').inert || document.getElementById('workspace').inert), false)
+  await page.keyboard.press('ArrowRight')
+  assert.equal(await at(page), 2, 'the keys are the page\'s again')
+  assert.deepEqual(errors, [])
+})
+
+test('closed, the film gives the focus back where it was: to the menu\'s button from the menu, and to a button that had it', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Focus')
+  const { page, errors } = await r.open('focus/home', { film: 60000 })
+  await page.locator('#menuOpen').click()
+  await page.locator('#menu [data-menu=film]').click()
+  await page.locator('#film').waitFor()
+  await page.keyboard.press('Escape')
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'menuOpen')
+  await page.locator('#next').focus()
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'filmPlay')
+  await page.locator('#filmClose').click()
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'next')
+  // With nowhere to go back to, the focus does not stay on a button nobody sees.
+  await page.evaluate(() => document.activeElement.blur())
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  await page.keyboard.press('Escape')
+  assert.equal(await page.evaluate(() => !!document.activeElement?.closest('#film')), false)
+  assert.deepEqual(errors, [])
+})
+
+test('the film of a sketch plays, and says in place of Save that it cannot be saved as a file', { skip }, async () => {
+  const { writeFileSync } = await import('node:fs')
+  const r = await rig()
+  const sheet = join(r.home, 'sheet.svg')
+  writeFileSync(sheet, '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><rect width="1600" height="900" fill="#eee"/></svg>')
+  r.push('Sketch', ['Flow'], null, [], sheet)
+  r.push('Sketch', ['Flow'], null, [], sheet)
+  const { page, errors } = await r.open('sketch/flow', { film: 60000 })
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  assert.deepEqual(await page.locator('.film-round').allInnerTexts(), ['Round 1', 'Round 2'])
+  assert.equal(await page.locator('#filmSave').isHidden(), true)
+  assert.match(await page.locator('#filmLength').innerText(), /Plays here only: a film of a sketch cannot be saved as a file$/)
   assert.deepEqual(errors, [])
 })

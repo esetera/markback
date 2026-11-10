@@ -368,9 +368,19 @@ body.answers-open:not(.panels) .insp-head { display: none; }
 /* ---------- the film of one screen: every round in order, over the whole page ---------- */
 .film { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--well); }
 .film-head { flex: none; display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 12px; background: var(--ground); border-bottom: 1px solid var(--rule-firm); }
-.film-head h2 { flex: 1 1 0; min-width: 0; margin: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.film-length { flex: none; margin-right: 2px; font-size: 14px; color: var(--soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.film-head .btn { flex: none; font-size: 14px; }
+/* The title keeps room for a few words and is cut short after that. The length gives way first: the buttons never do. */
+.film-head h2 { flex: 1 1 0; min-width: 8em; margin: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.film-length { flex: 0 1 auto; min-width: 0; margin-right: 2px; font-size: 14px; color: var(--soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.film-head .btn, .film-head .tool { flex: none; font-size: 14px; }
+/* Narrow, the head is two rows: the title, then the length and the buttons. The cross stays in the corner, beside the title. */
+@media (max-width: 640px) {
+  .film-head { position: relative; display: grid; grid-template: auto auto / minmax(0, 1fr) auto auto; grid-template-areas: 'title title title' 'length play save'; height: auto; gap: 6px 10px; padding: 7px 12px; }
+  .film-head h2 { grid-area: title; min-width: 0; padding-right: 40px; line-height: 26px; }
+  .film-head .tool { position: absolute; top: 7px; right: 12px; }
+  .film-length { grid-area: length; }
+  #filmPlay { grid-area: play; }
+  #filmSave { grid-area: save; }
+}
 /* The picture, whole, in all the room between the head and the strip. Two are stacked while one gives way to the next. */
 .film-stage { flex: 1 1 0; min-height: 0; position: relative; }
 .film-fit { position: absolute; inset: 16px; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; }
@@ -385,6 +395,7 @@ body.answers-open:not(.panels) .insp-head { display: none; }
 .film-round.current .thumb { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* A note said while the film is up sits under its head: at the foot it would cover the rounds. */
 body.film-open .toast { bottom: auto; top: 58px; }
+@media (max-width: 640px) { body.film-open .toast { top: 96px; } }
 .film-round:focus-visible { outline: 0; }
 .film-round:focus-visible .thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent); }
 
