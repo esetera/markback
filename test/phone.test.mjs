@@ -230,6 +230,10 @@ test('a phone reviews and marks, nothing more: what runs things on this computer
   for (const path of ['/', '/index.html', '/app.js', '/annotate.js', '/mic.js', '/qr.js', '/flow.js', '/style.css', '/icon.svg', '/api/queue', '/api/history?app=x&id=y', '/api/phone']) assert.equal((await r.ask(path)).status, 200, path)
   assert.equal((await r.ask('/images/nothing.png')).status, 404, 'pictures are asked for, and there is none')
   assert.equal((await r.ask('/inbox/nothing.png')).status, 404)
+  // The film of a screen plays on a phone: its rounds are read. Making it into a video file runs ffmpeg here: refused.
+  assert.equal((await r.ask('/api/film?app=x&id=y')).status, 200)
+  assert.equal((await r.ask('/api/film/file?app=x&id=y')).status, 403)
+  assert.equal(phoneMay('GET', '/api/film/file'), false)
   // An answer reaches the page (a screen that is not there is its own matter); the browser tests send real ones this way.
   assert.notEqual((await r.ask('/api/send', { method: 'POST', headers: { origin }, body: { appSlug: 'none', id: 'none' } })).status, 403, 'answers are let through')
   const refusedHere = [['POST', '/api/show', { url: 'http://localhost:1/' }], ['POST', '/api/sample', {}], ['GET', '/api/work'], ['POST', '/api/work/ask', { target: 'x' }], ['POST', '/api/work/decide', { id: 'x', decision: 'yes' }], ['GET', '/api/anything-new'], ['GET', '/work.html'], ['GET', '/work.js'], ['GET', '/a-file-added-later.js'], ['GET', '/images/'], ['GET', '/x/../api/work'], ['HEAD', '/'], ['PUT', '/api/send', {}], ['DELETE', '/api/queue']]

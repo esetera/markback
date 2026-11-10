@@ -796,7 +796,8 @@ async function openFilm() {
   const why = data.save?.why ?? ''
   $('filmLength').textContent = `${data.rounds.length} round${data.rounds.length === 1 ? '' : 's'} · ${seconds} second${seconds === 1 ? '' : 's'}${data.missing > 0 ? ` · ${data.missing} older ${data.missing === 1 ? 'picture is' : 'pictures are'} gone` : ''}${why ? ' · Plays here only: a film of a sketch cannot be saved as a file' : ''}`
   $('filmLength').title = why || $('filmLength').textContent
-  $('filmSave').hidden = !!why
+  // Saving runs ffmpeg on the computer: a phone plays the film, and saves nothing.
+  $('filmSave').hidden = !!why || state.remote
   // A long story is saved as its newest rounds. The button says so before it is pressed, and the note after.
   $('filmSave').dataset.tip = `Save the film as a video file${data.save?.leftOut ? `. ${data.save.leftOut}` : ''}`
   // What was said in a round is words, and not in its picture: it is on the round's name, for a pointer that rests there.

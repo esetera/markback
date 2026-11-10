@@ -2890,3 +2890,32 @@ test('letting half a phrase go never costs the next whole phrase, and the foot m
   assert.equal(await page.locator('#notes').inputValue(), 'half a note')
   assert.deepEqual(errors, [])
 })
+
+test('on a phone through Tailscale, the film of a screen plays, and cannot be saved: making the file runs on the computer', { skip }, async () => {
+  const tail = standInTailscale(mkdtempSync(join(tmpdir(), 'review-tailscale-')))
+  const r = await rig({ REVIEW_TAILSCALE: tail.program })
+  await threeRounds(r, 'Film')
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, stdio: 'ignore' })
+  const proxy = await standInProxy(tail, 'my-mac.example.ts.net:443')
+  cleanups.push(proxy.close)
+  const at = `http://my-mac.example.ts.net:${proxy.port}`
+  const far = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--host-resolver-rules=MAP my-mac.example.ts.net 127.0.0.1', `--unsafely-treat-insecure-origin-as-secure=${at}`] })
+  try {
+    const page = await (await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })).newPage()
+    const errors = []
+    page.on('pageerror', e => errors.push(e.message))
+    await page.goto(`${at}/?undo=40&film=150#film/home`)
+    await page.locator('#canvas').waitFor()
+    await page.locator('#menuOpen').tap()
+    await page.getByRole('menuitem', { name: /The film of this screen/ }).tap()
+    await page.locator('#film').waitFor()
+    assert.deepEqual(await page.locator('.film-round').allInnerTexts(), ['Round 1', 'Round 2', 'Finished'])
+    assert.equal(await page.locator('#filmSave').isHidden(), true, 'no Save on a phone')
+    // Asked for anyway, the file is refused at the door's list: ffmpeg never runs for a phone.
+    assert.equal(await page.evaluate(async () => (await fetch('/api/film/file?app=film&id=home')).status), 403)
+    assert.equal(await page.evaluate(async () => (await fetch('/api/film?app=film&id=home')).status), 200)
+    assert.deepEqual(errors, [])
+  } finally {
+    await far.close()
+  }
+})
