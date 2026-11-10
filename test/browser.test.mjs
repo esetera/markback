@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { writePicture } from './helpers.mjs'
+import { writePicture, writeReader } from './helpers.mjs'
 
 const from = process.env.REVIEW_PLAYWRIGHT_FROM
 const skip = from ? false : 'set REVIEW_PLAYWRIGHT_FROM to a package.json that has Playwright'
@@ -41,12 +41,15 @@ after(async () => {
   for (const clean of cleanups) clean()
 })
 
-/** A store and a server for one test. */
-async function rig() {
+/**
+ * A store and a server for one test. With no reader: a computer that cannot read words off a picture, unless a test gives
+ * a stand-in, so no test waits on the real one.
+ */
+async function rig({ reader = null } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'review-browser-'))
   const port = await freePort()
   // REVIEW_CHROME here is for driving these tests; a picture of an app is taken by the Chrome a person would have.
-  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_CHROME: '' }
+  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_CHROME: '', REVIEW_TESSERACT: reader ? writeReader(join(home, 'reader.mjs'), ...reader) : join(home, 'no-reader') }
   // Wide: it fills the room, and what to check is the line under the bar. `tall` leaves room beside it.
   const picture = join(home, 'p.png')
   writePicture(picture, 1600, 900)
@@ -2175,7 +2178,7 @@ test('something new to review: the tab counts it, the page says it, and from beh
   assert.deepEqual(errors, [])
 })
 
-test('select the words themselves: where a picture has a word list, the words tool marks words, and they go as what they say', { skip }, async () => {
+test('select the words themselves: where a picture has a word list, the words tool marks words, and they go as what they say, with no reader here too', { skip }, async () => {
   const { readFileSync, writeFileSync } = await import('node:fs')
   const r = await rig()
   r.push('Words', ['With', 'Without'], null)
@@ -2217,9 +2220,10 @@ test('select the words themselves: where a picture has a word list, the words to
   assert.deepEqual([sent.shapes[0].type, sent.shapes[0].text, sent.shapes[0].colour], ['words', 'work day Saturday 14', 'red'])
   assert.deepEqual(sent.shapes[0].box, { x: 200, y: 100, w: 620, h: 100 })
   assert.ok(sent.annotatedImage, 'the marked picture is made, with the words tinted')
-  // The next picture has no list: the same tool draws a box, and says so on its button.
+  // The next picture has no list, and this computer cannot read one: the tool is not there, and a box stands in for it.
   await page.waitForFunction(() => /Without/.test(document.getElementById('crumbs').innerText))
-  assert.equal(await page.locator('#toolButtons [data-tool=words]').evaluate(el => el.classList.contains('unlit')), true)
+  assert.equal(await page.locator('#toolButtons [data-tool=words]').count(), 0)
+  assert.equal(await page.locator('#toolButtons [data-tool=box]').evaluate(el => el.classList.contains('on')), true)
   const d = await page.locator('#canvas').boundingBox()
   await page.mouse.move(d.x + 100, d.y + 100)
   await page.mouse.down()
@@ -2227,6 +2231,109 @@ test('select the words themselves: where a picture has a word list, the words to
   await page.mouse.up()
   await settled(page)
   assert.equal((await saved(page, 'words', 'without')).marks[0].tool, 'box')
+  assert.deepEqual(errors, [])
+})
+
+test('a drag along one row takes that row, and a drag down a card stays in the card, whatever order the list is in', { skip }, async () => {
+  const { readFileSync, writeFileSync } = await import('node:fs')
+  const r = await rig()
+  r.push('Order', ['Table'], null)
+  // A dense table, its list a column at a time, as a reader can get it wrong; and two cards beside it whose lines are listed
+  // in among each other.
+  const cells = [['Ana', 'Editor', 'Active'], ['Ben', 'Author', 'Invited'], ['Chen', 'Admin', 'Paused']]
+  const table = [0, 1, 2].flatMap(c => cells.map((row, r) => ({ t: row[c], x: 100 + c * 200, y: 100 + r * 24, w: 120, h: 20 })))
+  const card = (x, lines) => lines.map((t, n) => ({ t, x, y: 400 + n * 22, w: 200, h: 20 }))
+  const left = card(100, ['Starter', 'Free', 'Three'])
+  const right = card(600, ['Team', 'Paid', 'Many'])
+  const list = { size: { w: 1600, h: 900 }, words: [...table, ...left.flatMap((w, n) => [w, right[n]])] }
+  writeFileSync(join(r.home, 'images', 'order', 'table-words-1.json'), JSON.stringify(list))
+  const entry = join(r.home, 'queue', 'order', 'table.json')
+  writeFileSync(entry, JSON.stringify({ ...JSON.parse(readFileSync(entry, 'utf8')), words: 'order/table-words-1.json' }))
+  const { page, errors } = await r.open('order')
+  await page.keyboard.press('e')
+  await page.waitForFunction(() => !document.querySelector('#toolButtons [data-tool=words]').classList.contains('unlit'))
+  const c = await page.locator('#canvas').boundingBox()
+  const k = c.width / 1600
+  const drag = async (x1, y1, x2, y2) => {
+    await page.mouse.move(c.x + x1 * k, c.y + y1 * k)
+    await page.mouse.down()
+    await page.mouse.move(c.x + x2 * k, c.y + y2 * k, { steps: 4 })
+    await page.mouse.up()
+    await settled(page)
+  }
+  // Along the middle row, from Ben to Invited.
+  await drag(150, 134, 550, 134)
+  // Down the left card, from Free to Three.
+  await drag(150, 432, 150, 454)
+  assert.deepEqual((await saved(page, 'order', 'table')).marks.map(m => m.text), ['Ben Author Invited', 'Free Three'])
+  assert.deepEqual(errors, [])
+})
+
+test('with nothing to read words with, a picture without a list has no words tool, and E does nothing there', { skip }, async () => {
+  const r = await rig()
+  r.push('Bare', ['One'], null)
+  const { page, errors } = await r.open('bare')
+  assert.equal(await page.locator('#toolButtons [data-tool=box]').count(), 1)
+  assert.equal(await page.locator('#toolButtons [data-tool=words]').count(), 0)
+  await page.keyboard.press('a')
+  await page.keyboard.press('e')
+  await settled(page)
+  assert.equal(await page.locator('#toolButtons [data-tool=arrow]').evaluate(el => el.classList.contains('on')), true, 'E leaves the tool as it was')
+  assert.equal(await page.locator('#toolButtons [data-tool=words]').count(), 0)
+  assert.deepEqual(errors, [])
+})
+
+test('a bare picture gets its words read on this computer: the tool says it is reading, then E snaps to the words', { skip }, async () => {
+  // Two lines of three words, as a reader finds them in a picture 1600 by 900, given in the reader's own jumbled order.
+  const line = (y, words) => words.map((t, n) => ({ t, x: 200 + n * 220, y, w: 180, h: 40 }))
+  const r = await rig({ reader: [{ w: 1600, h: 900 }, [...line(160, ['Saturday', '14', 'March']), ...line(100, ['First', 'work', 'day'])], { wait: 1500 }] })
+  r.push('Read', ['Shot'], null)
+  const { page, errors } = await r.open('read')
+  await page.keyboard.press('e')
+  // Shown while the words are read, saying so.
+  const button = page.locator('#toolButtons [data-tool=words]')
+  await button.waitFor()
+  assert.match(await button.getAttribute('data-tip'), /Reading the words/)
+  await page.waitForFunction(() => !document.querySelector('#toolButtons [data-tool=words]').classList.contains('unlit'), null, { timeout: 8000 })
+  assert.equal(await button.getAttribute('data-tip'), 'Select the words themselves')
+  const c = await page.locator('#canvas').boundingBox()
+  const k = c.width / 1600
+  const to = (x, y) => [c.x + x * k, c.y + y * k]
+  // From "work" on the first line to "14" on the second: everything between, in lines.
+  await page.mouse.move(...to(510, 120))
+  await page.mouse.down()
+  await page.mouse.move(...to(510, 180), { steps: 4 })
+  await page.mouse.up()
+  await settled(page)
+  assert.equal((await saved(page, 'read', 'shot')).marks[0].text, 'work day Saturday 14')
+  // A box drawn too carries the words read, and the agent is told they were read.
+  await page.keyboard.press('b')
+  await draw(page, 180 / 1600, 90 / 900, 1000 / 1600, 150 / 900)
+  await page.keyboard.press('Meta+Enter')
+  const sent = await waitFor(() => r.read('Read')[0])
+  assert.deepEqual(sent.shapes.map(x => x.words ?? x.text), ['work day Saturday 14', 'First work day'])
+  assert.equal(sent.wordsRead, true)
+  assert.deepEqual(errors, [])
+})
+
+test('a slow reader never slows the review: through ten bare screens, the picture on show comes and marks go at once', { skip }, async () => {
+  // Each read takes four seconds: ten of them would hold every connection the browser has, if asking waited on them.
+  const r = await rig({ reader: [{ w: 1600, h: 900 }, [{ t: 'Hello', x: 100, y: 100, w: 100, h: 30 }], { wait: 4000 }] })
+  const shots = Array.from({ length: 10 }, (_, n) => `S${n}`)
+  r.push('Slow', shots, null)
+  const { page, errors } = await r.open('slow')
+  for (let n = 1; n < shots.length; n++) {
+    await page.keyboard.press('ArrowRight')
+    // Each picture shows as soon as it is the one on show.
+    await page.waitForFunction(id => document.getElementById('afterImg').src.includes(`/${id}-after-`), `s${n}`, { timeout: 1500 })
+  }
+  const started = Date.now()
+  await page.keyboard.press('b')
+  await draw(page, 0.2, 0.2, 0.4, 0.4)
+  await page.keyboard.press('Meta+Enter')
+  const sent = await waitFor(() => r.read('Slow').find(x => x.screenId === 's9'))
+  assert.ok(Date.now() - started < 2500, `sent after ${Date.now() - started} ms`)
+  assert.equal(sent.shapes[0].type, 'box')
   assert.deepEqual(errors, [])
 })
 
