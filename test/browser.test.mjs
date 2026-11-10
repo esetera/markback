@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { standInTailscale, writePicture } from './helpers.mjs'
+import { standInProxy, standInTailscale, writePicture } from './helpers.mjs'
 
 const from = process.env.REVIEW_PLAYWRIGHT_FROM
 const skip = from ? false : 'set REVIEW_PLAYWRIGHT_FROM to a package.json that has Playwright'
@@ -2165,7 +2165,7 @@ test('review from a phone: the page turns it on, shows a code that reads as the 
   await page.locator('.phone-code svg').waitFor()
   assert.equal(await page.locator('.phone-address a').innerText(), 'https://my-mac.example.ts.net')
   await modal.getByText('The first time, it can take half a minute to open.', { exact: false }).waitFor()
-  assert.ok(tail.calls().some(call => /^serve --bg --https=443 http:\/\/127\.0\.0\.1:\d+$/.test(call) && !call.endsWith(`:${r.port}`)), 'the door, not the page\'s own port')
+  assert.ok(tail.calls().some(call => /^serve --bg --https=443 http:\/\/127\.0\.0\.1:\d+\/[\w-]{32}$/.test(call) && !call.includes(`:${r.port}/`)), 'the door with its secret path, not the page\'s own port')
   const read = await readCode(await page.locator('.phone-code').innerHTML())
   if (read === null) t.diagnostic('this Chrome has no code reader: the code was not read back')
   else assert.equal(read, 'https://my-mac.example.ts.net', 'a camera reads the https address from the code')
@@ -2203,12 +2203,13 @@ test('review from a phone: the page opened at the tailnet name, on a phone, mark
   execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, stdio: 'ignore' })
   // The name is this computer for this browser, as Tailscale's proxy makes it for a phone. The proxy also says who is asking.
   // Tailscale's address is https, which a browser counts as secure; this plain one is counted so too, as it would be.
-  // Tailscale hands the phone's requests to the door, a listener of its own; the stand-in says which port it serves.
-  const door = new URL(tail.state().serve.Web['my-mac.example.ts.net:443'].Handlers['/'].Proxy).port
-  const at = `http://my-mac.example.ts.net:${door}`
+  // A stand-in for Tailscale's proxy hands the phone's requests to the door, with the door's secret path in front and the login.
+  const proxy = await standInProxy(tail, 'my-mac.example.ts.net:443')
+  cleanups.push(proxy.close)
+  const at = `http://my-mac.example.ts.net:${proxy.port}`
   const far = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--host-resolver-rules=MAP my-mac.example.ts.net 127.0.0.1', `--unsafely-treat-insecure-origin-as-secure=${at}`] })
   try {
-    const context = await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, extraHTTPHeaders: { 'Tailscale-User-Login': 'alice@example.com' } })
+    const context = await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
     await context.addInitScript(fakeSpeech())
     const page = await context.newPage()
     const errors = []
@@ -2244,11 +2245,12 @@ test('review from a phone: the page opened at the tailnet name, on a phone, mark
     assert.equal((await waitFor(() => r.read('Afar').find(x => x.screenId === 'two'))).verdict, 'approved')
     // From the phone, nothing that runs things on the computer.
     assert.equal(await page.evaluate(async () => (await fetch('/api/show', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'http://localhost:1/' }) })).status), 403)
-    // Another device's browser, with no name from Tailscale, is shown nothing.
-    const stranger = await (await far.newContext()).newPage()
-    assert.equal((await stranger.goto(`${at}/`)).status(), 403)
+    // A page that renamed itself to the door, without the secret the proxy adds: nothing.
+    const door = new URL(tail.state().serve.Web['my-mac.example.ts.net:443'].Handlers['/'].Proxy).port
+    const stranger = await (await far.newContext({ extraHTTPHeaders: { 'Tailscale-User-Login': 'alice@example.com' } })).newPage()
+    assert.equal((await stranger.goto(`http://my-mac.example.ts.net:${door}/`)).status(), 404)
     execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'off'], { env: r.env, stdio: 'ignore' })
-    await assert.rejects(page.goto(`${at}/`), 'off: the door is closed, and the same phone reaches nothing')
+    await assert.rejects(page.goto(`${at}/`), 'off: Tailscale serves nothing there, and the same phone reaches nothing')
     assert.deepEqual(errors, [])
   } finally {
     await far.close()

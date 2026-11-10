@@ -52,33 +52,48 @@ say(!!tail && tail.BackendState === 'Running' && host === new URL(url).hostname,
 say((tail?.CertDomains ?? []).map(String).map(s => s.toLowerCase()).includes(host), 'status --json: CertDomains holds that name (HTTPS is on)')
 say(String(tail?.User?.[tail?.Self?.UserID]?.LoginName ?? '').toLowerCase() === status.login, `status --json: the login of this computer's person is ${status.login}`)
 
-// 2. What serve status --json says: Markback's entry, in the shape it reads, to the tailnet only.
+// 2. What serve status --json says: Markback's entry, in the shape it reads, to the tailnet only. The secret path is never shown.
 const serve = await tailscaleJson(['serve', 'status', '--json'])
-const proxy = serve?.Web?.[name]?.Handlers?.['/']?.Proxy ?? ''
-say(/^http:\/\/127\.0\.0\.1:\d+$/.test(proxy) && !proxy.endsWith(`:${port}`), `serve status --json: Web["${name}"].Handlers["/"].Proxy is the door, not the page's own port (${proxy || 'none'})`)
+const proxy = String(serve?.Web?.[name]?.Handlers?.['/']?.Proxy ?? '').replace(/\/$/, '')
+const door = /^http:\/\/127\.0\.0\.1:(\d+)(\/[\w-]{32})?$/.exec(proxy)
+say(!!door && door[1] !== String(port), `serve status --json: Web["${name}"].Handlers["/"].Proxy is the door, not the page's own port`)
+if (door?.[2]) say(status.guard === 'path', 'Tailscale took a target with a path: the door needs the secret path only its proxy puts in front (the strong guard)')
+else say(false, `Tailscale did not keep a path on the target (${door ? 'it serves the door without one' : 'none'}): the door knows Tailscale's requests by the tailnet name alone, the weaker guard`)
+if (status.guard === 'host') note('the weaker guard is in use: a request must name this computer\'s tailnet name')
 say(!!serve?.TCP?.[String(new URL(url).port || 443)]?.HTTPS, 'serve status --json: TCP[port].HTTPS is on')
 say(!serve?.AllowFunnel?.[name], 'serve status --json: no Funnel for it: nothing is open to the internet')
 const others = Object.keys(serve?.Web ?? {}).filter(n => n !== name)
 if (others.length) note(`Tailscale serves other things too, which Markback leaves alone: ${others.join(', ')}`)
 
-// 3. Through Tailscale, from this computer: the certificate, and the login Tailscale writes.
+// 3. Through Tailscale, from this computer: the page loads, with a good certificate and the login Tailscale writes.
 const started = Date.now()
-const plain = await ask(url, '/api/queue')
-say(plain.status === 200, `the https address answers with a good certificate, and Tailscale wrote this person's login (${plain.status || plain.text}; ${Math.round((Date.now() - started) / 1000)} s)`)
+const page = await ask(url, '/')
+say(page.status === 200 && /<html/i.test(page.text), `the page loads through ${url}: a good certificate, the path joined in front, and this person's login (${page.status || page.text}; ${Math.round((Date.now() - started) / 1000)} s)`)
 
-// 4. A login sent by the caller: Tailscale must put its own in its place.
+// 4. Which name Tailscale hands on: the door says what arrived.
+const echo = await ask(url, '/api/phone/echo').then(got => (got.status === 200 ? JSON.parse(got.text) : null))
+const passes = !!echo && new URL(`http://${echo.host}`).hostname.toLowerCase() === host
+note(echo ? `Tailscale hands the door the name ${echo.host || '(none)'}${passes ? ': the name the phone asked by' : ''}` : 'the door did not say which name arrived')
+if (passes) say(echo.hostGuard === true, 'so the door also checks that name, as a second guard')
+
+// 5. A login sent by the caller: Tailscale must put its own in its place.
 const forged = await ask(url, '/api/queue', { 'Tailscale-User-Login': 'someone-else@example.com' })
 say(forged.status === 200, `a Tailscale-User-Login sent by the caller is replaced by Tailscale's own (${forged.status === 403 ? 'it was passed on: the door refused it, but Tailscale did not replace it' : forged.status || forged.text})`)
-
-// 5. A Host that says this computer: the door gives a phone's rights only, whatever Tailscale hands on.
-const local = await ask(url, '/api/work', { Host: 'localhost' })
-say(local.status === 403 || local.status === 400 || local.status === 404 || local.status === 421, `Host: localhost through the address does not reach the work queue (${local.status || local.text})`)
-const named = await ask(url, '/api/queue', { Host: 'localhost' })
-note(named.status === 200 ? 'Tailscale hands on the Host the caller sent' : `with Host: localhost Tailscale answered ${named.status || named.text}: it routes by the name, and does not hand that Host on`)
 const work = await ask(url, '/api/work')
 say(work.status === 403, `the work queue is refused through Tailscale (${work.status || work.text})`)
 
-// 6. Turned off: only Markback's entry goes.
+// 6. The door itself, asked directly from here as a page that renamed itself could: the login is not enough.
+if (door) {
+  const direct = (path, headers = {}) => fetch(`http://127.0.0.1:${door[1]}${path}`, { headers: { 'tailscale-user-login': status.login, ...headers } }).then(r => r.status, () => 0)
+  say((await direct('/api/queue')) === 404, 'the door, asked directly with the login but without the secret path: 404')
+  if (door[2]) {
+    say((await direct(`${door[2]}/api/queue`, { 'tailscale-user-login': 'someone-else@example.com' })) === 403, 'with the secret path and another login: refused')
+    const fromHere = await direct(`${door[2]}/api/work`, { host: 'localhost' })
+    say(fromHere === 403 || fromHere === 404, `with the secret path, the login and Host: localhost: still only a phone's rights (${fromHere})`)
+  }
+}
+
+// 7. Turned off: only Markback's entry goes.
 if (words.includes('--and-off')) {
   const before = Object.keys(serve?.Web ?? {})
   const off = await fetch(`http://127.0.0.1:${port}/api/phone`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: false }) }).then(r => r.json())

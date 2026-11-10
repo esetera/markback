@@ -38,6 +38,8 @@ const freePort = () => new Promise((resolve, reject) => {
 const served = tail => tail.state().serve.Web ?? {}
 /** The door's port, from what the stand-in serves at an address. */
 const doorOf = (tail, at = `${NAME}:443`) => new URL(served(tail)[at]?.Handlers['/'].Proxy ?? 'http://127.0.0.1:1').port
+/** The path Tailscale was told to put in front of every request: the door's secret. */
+const secretOf = (tail, at = `${NAME}:443`) => new URL(served(tail)[at]?.Handlers['/'].Proxy ?? 'http://127.0.0.1:1').pathname.replace(/\/$/, '')
 const records = home => (existsSync(join(home, 'phone')) ? readdirSync(join(home, 'phone')) : [])
 
 /** One request to a port on this computer, without a proxy's help: every header is as given. */
@@ -73,7 +75,8 @@ async function rig({ page = true, tailscale = {}, env: more = {}, home = mkdtemp
   }
   const server = page ? await startServer(env) : null
   /** As a phone asks through Tailscale: to the door, with the tailnet name and the login Tailscale writes. */
-  const ask = (path, { host = NAME, login = ME, at, headers = {}, ...rest } = {}) => send(doorOf(tail, at), path, { headers: { host, ...(login ? { 'tailscale-user-login': login } : {}), ...headers }, ...rest })
+  // The secret path Tailscale puts in front, unless `bare`: as a page that renamed itself to the door would ask.
+  const ask = (path, { host = NAME, login = ME, at, bare = false, headers = {}, ...rest } = {}) => send(doorOf(tail, at), `${bare ? '' : secretOf(tail, at)}${path}`, { headers: { host, ...(login ? { 'tailscale-user-login': login } : {}), ...headers }, ...rest })
   /** As this computer's own page asks. */
   const local = (path, { headers = {}, ...rest } = {}) => send(port, path, { headers: { host: `127.0.0.1:${port}`, ...headers }, ...rest })
   return { home, tail, port, env, review, ask, local, server }
@@ -96,7 +99,7 @@ test('review phone: off until it is turned on, then it says the address and when
   // Tailscale serves the door, a listener of its own on this computer, not the page's own port.
   const door = doorOf(r.tail)
   assert.notEqual(door, r.port)
-  assert.ok(r.tail.calls().includes(`serve --bg --https=443 http://127.0.0.1:${door}`))
+  assert.ok(r.tail.calls().includes(`serve --bg --https=443 http://127.0.0.1:${door}${secretOf(r.tail)}`), 'the door, with its secret path in front')
   assert.deepEqual(Object.keys(served(r.tail)), [`${NAME}:443`])
   assert.equal(r.tail.calls().some(call => /funnel/.test(call)), false, 'Funnel is never asked for')
   assert.match(r.review('phone').out, /is on\.\nOpen https:\/\/my-mac\.example\.ts\.net/)
@@ -122,16 +125,9 @@ test('the door lets in only the person\'s own login, whatever name a request giv
     assert.equal(got.status, 403, login || 'no login')
     assert.match(got.text, /Only your own devices/)
   }
-  // A name that says this computer, through the door: still only a phone, with the owner's login or without.
-  for (const host of ['localhost', `127.0.0.1:${r.port}`, '[::1]']) {
-    assert.equal((await r.ask('/api/queue', { host })).status, 200, `${host}: the review is there`)
-    assert.equal((await r.ask('/api/work', { host })).status, 403, `${host}: the work queue is not`)
-    assert.equal((await r.ask('/api/work/ask', { host, method: 'POST', headers: { origin: `http://${host}` }, body: { target: 'x' } })).status, 403)
-    assert.equal((await r.ask('/api/show', { host, method: 'POST', headers: { origin: `http://${host}` }, body: { url: 'http://localhost:1/' } })).status, 403)
-    const longer = await r.ask('/api/phone', { host, method: 'POST', headers: { origin: `http://${host}` }, body: { on: true } })
-    assert.equal(longer.status, 403, `${host}: it cannot be kept on from a phone`)
-    for (const login of ['bob@example.com', '']) assert.equal((await r.ask('/api/queue', { host, login })).status, 403)
-  }
+  // The first request with the secret said Tailscale hands on the phone's name: from then on the name must be the tailnet's.
+  assert.equal(JSON.parse((await r.local('/api/phone')).text).hostGuard, true)
+  for (const host of ['localhost', `127.0.0.1:${r.port}`, '[::1]', 'evil.example.com']) assert.equal((await r.ask('/api/queue', { host })).status, 404, host)
   // Another site's page on the phone cannot read or write through the door.
   assert.equal((await r.ask('/api/queue', { headers: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'cors' } })).status, 403)
   assert.equal((await r.ask('/api/set-aside', { method: 'POST', headers: { origin: 'https://evil.example.com' }, body: { slugs: [] } })).status, 403)
@@ -142,6 +138,76 @@ test('the door lets in only the person\'s own login, whatever name a request giv
   for (let i = 0; i < 30 && !(await refused(door)); i++) await sleep(50)
   assert.equal(await refused(door), true)
   for (let i = 0; i < 30 && Object.keys(served(r.tail)).length; i++) await sleep(50)
+  assert.deepEqual(served(r.tail), {})
+})
+
+test('where Tailscale hands on another name, a name that says this computer still has only a phone\'s rights', async () => {
+  const r = await rig()
+  r.review('phone', 'on')
+  // The first request with the secret comes with a name that is not the tailnet's: no name guard, and still only a phone.
+  assert.equal((await r.ask('/api/queue', { host: `127.0.0.1:${doorOf(r.tail)}` })).status, 200)
+  assert.equal(JSON.parse((await r.local('/api/phone')).text).hostGuard, false)
+  for (const host of ['localhost', `127.0.0.1:${r.port}`, '[::1]']) {
+    assert.equal((await r.ask('/api/queue', { host })).status, 200, `${host}: the review is there`)
+    assert.equal((await r.ask('/api/work', { host })).status, 403, `${host}: the work queue is not`)
+    assert.equal((await r.ask('/api/work/ask', { host, method: 'POST', headers: { origin: `http://${host}` }, body: { target: 'x' } })).status, 403)
+    assert.equal((await r.ask('/api/show', { host, method: 'POST', headers: { origin: `http://${host}` }, body: { url: 'http://localhost:1/' } })).status, 403)
+    assert.equal((await r.ask('/api/phone', { host, method: 'POST', headers: { origin: `http://${host}` }, body: { on: true } })).status, 403, `${host}: it cannot be kept on from a phone`)
+    for (const login of ['bob@example.com', '']) assert.equal((await r.ask('/api/queue', { host, login })).status, 403)
+  }
+})
+
+test('a page that renames itself to the door, and sends the login itself, gets nothing without the secret Tailscale adds', async () => {
+  const r = await rig()
+  const on = r.review('phone', 'on')
+  const door = doorOf(r.tail)
+  const secret = secretOf(r.tail)
+  assert.match(secret, /^\/[\w-]{32}$/, 'a long random path, made new each time')
+  // Same origin as the door, owner's login, every name: 404, with no hint.
+  for (const host of [`evil.example.com:${door}`, `127.0.0.1:${door}`, NAME]) {
+    for (const path of ['/', '/api/queue', '/app.js', '/api/phone/echo', `${secret.slice(0, -1)}x/api/queue`, `/x${secret}/api/queue`]) {
+      const got = await r.ask(path, { host, bare: true, headers: { origin: `http://${host}` } })
+      assert.equal(got.status, 404, `${host} ${path}`)
+      assert.equal(got.text, 'Not found')
+    }
+    assert.equal((await r.ask('/api/send', { host, bare: true, method: 'POST', headers: { origin: `http://${host}` }, body: { appSlug: 'x', id: 'y' } })).status, 404)
+  }
+  // The secret is never said: not to the page, not by the command, not in what a phone is sent.
+  assert.equal(on.out.includes(secret.slice(1)), false)
+  assert.equal((await r.local('/api/phone')).text.includes(secret.slice(1)), false)
+  assert.equal((await r.local('/api/queue')).text.includes(secret.slice(1)), false)
+  assert.equal((await r.ask('/api/queue')).text.includes(secret.slice(1)), false)
+  assert.equal((await r.ask('/')).text.includes(secret.slice(1)), false)
+  // Kept only in the server's own record, which only this computer's person may read.
+  const { statSync, readFileSync } = await import('node:fs')
+  const file = join(r.home, 'phone', `${r.port}.json`)
+  assert.equal(statSync(file).mode & 0o777, 0o600)
+  assert.equal(statSync(join(r.home, 'phone')).mode & 0o077, 0)
+  assert.ok(readFileSync(file, 'utf8').includes(secret.slice(1)))
+  // Opened again: a new secret, and the old one opens nothing.
+  r.review('phone', 'off')
+  r.review('phone', 'on')
+  assert.notEqual(secretOf(r.tail), secret)
+  assert.equal((await r.ask(`${secret}/api/queue`, { bare: true })).status, 404)
+})
+
+test('where Tailscale will not serve a path, the door knows its requests by the tailnet name, and says so', async () => {
+  const r = await rig({ tailscale: { noPath: true } })
+  assert.equal(r.review('phone', 'on').code, 0)
+  const calls = r.tail.calls().filter(call => call.startsWith('serve --bg'))
+  assert.equal(calls.length, 2)
+  assert.match(calls[0], /^serve --bg --https=443 http:\/\/127\.0\.0\.1:\d+\/[\w-]{32}$/, 'a path was asked for first')
+  assert.match(calls[1], /^serve --bg --https=443 http:\/\/127\.0\.0\.1:\d+$/)
+  const status = JSON.parse((await r.local('/api/phone')).text)
+  assert.equal(status.guard, 'host')
+  assert.equal(status.hostGuard, true)
+  assert.equal((await r.ask('/api/queue')).status, 200, 'the tailnet name, and the owner')
+  assert.equal((await r.ask('/api/queue', { host: `${NAME}:443` })).status, 200)
+  for (const host of [`evil.example.com:${doorOf(r.tail)}`, 'localhost', `127.0.0.1:${doorOf(r.tail)}`]) assert.equal((await r.ask('/api/queue', { host })).status, 404, host)
+  assert.equal((await r.ask('/api/queue', { login: 'bob@example.com' })).status, 403)
+  const echo = JSON.parse((await r.ask('/api/phone/echo')).text)
+  assert.deepEqual(echo, { host: NAME, guard: 'host', hostGuard: true })
+  r.review('phone', 'off')
   assert.deepEqual(served(r.tail), {})
 })
 
@@ -276,7 +342,7 @@ test('when Tailscale cannot take it down, it says so with the command, shows it 
   const door = doorOf(r.tail)
   r.tail.set({ down: true })
   const off = r.review('phone', 'off')
-  assert.match(off.out, /Could not turn it off in Tailscale: failed to connect to local Tailscale service; is Tailscale running\?\. Run: tailscale serve --https=443 off|Could not turn it off in Tailscale: failed to connect to local Tailscale service; is Tailscale running\? Run: tailscale serve --https=443 off/)
+  assert.match(off.out, /Could not turn it off in Tailscale: failed to connect to local Tailscale service; is Tailscale running\? Run: tailscale serve --https=443 off/)
   assert.equal(await refused(door), true, 'the door is closed at once, whatever Tailscale says')
   const status = JSON.parse((await r.local('/api/phone')).text)
   assert.equal(status.on, true, 'still shown as open: it is, in Tailscale')
