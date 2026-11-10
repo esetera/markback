@@ -2094,6 +2094,8 @@ $('toast').onclick = event => {
   const go = event.target.closest('[data-toast-go]')?.dataset.toastGo
   if (event.target.closest('[data-undo]')) undoAnswer()
   else if (go) {
+    // A window up holds the page: it must not change under it. The notice stays until its time is up.
+    if (windowUp()) return
     hideToast()
     if (state.apps.some(a => a.slug === go)) pickApp(go)
   } else if ($('toast').classList.contains('problem')) hideToast()
@@ -2360,7 +2362,8 @@ async function firstRun(form, path, body) {
   const watching = form.closest('#newModal') ? newWindow : null
   const late = () => (watching ? !watching.open : !form.isConnected)
   said.hidden = false
-  said.textContent = path !== '/api/show' ? '' : watching ? 'Taking a picture… Closing this does not stop it: the new project is said when it is ready.' : 'Taking a picture…'
+  if (watching && path === '/api/show') newCapture = body.url
+  said.textContent = path !== '/api/show' ? '' : watching ? capturingWords() : 'Taking a picture…'
   show.disabled = true
   try {
     const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -2390,6 +2393,15 @@ async function firstRun(form, path, body) {
     if (late()) return void toast('No new project was made', error.message, { problem: true })
     said.textContent = error.message
     show.disabled = false
+  } finally {
+    if (watching) {
+      newCapture = ''
+      // A window opened again while it ran kept Show it off. The notice says how it ended; the window can start the next.
+      if (late() && newProjectOpen()) {
+        said.hidden = true
+        show.disabled = false
+      }
+    }
   }
 }
 for (const holder of [$('stateCard'), $('newModal')]) {
@@ -2409,8 +2421,13 @@ for (const holder of [$('stateCard'), $('newModal')]) {
 }
 /* New project, from the menu: the first screen's two ways in, over the page, with the projects there left as they are. */
 const newProjectOpen = () => !$('newModal').hidden
+/** A window over the page: while one is up, nothing behind it may change. */
+const windowUp = () => newProjectOpen() || sheetOpen() || ['helpModal', 'confirmModal', 'submitModal', 'viewer'].some(id => !$(id).hidden)
 // One for each time the window is open: an answer that comes after it closed knows it is late.
 let newWindow = { open: false }
+// The address of a picture the window started that is still being taken. One at a time: a second press would make two rounds.
+let newCapture = ''
+const capturingWords = () => `Taking a picture of ${newCapture}… Closing this does not stop it: the new project is said when it is ready.`
 function openNewProject() {
   closeMenu()
   // With no project yet, the first screen is already this form.
@@ -2420,8 +2437,10 @@ function openNewProject() {
   newWindow = { open: true }
   // A typed address stays from last time until a project is made from it. A picture still being taken goes on by itself.
   if (!$('newBody').querySelector('[data-first]')) setHtml($('newBody'), firstRunHtml({ sample: false }))
-  $('newBody').querySelector('[data-first-said]').hidden = true
-  $('newBody').querySelector('[data-first-show]').disabled = false
+  const said = $('newBody').querySelector('[data-first-said]')
+  said.hidden = !newCapture
+  if (newCapture) said.textContent = capturingWords()
+  $('newBody').querySelector('[data-first-show]').disabled = !!newCapture
   $('newModal').hidden = false
   for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = true
   return $('newBody').querySelector('[data-first-address]').focus()
@@ -2434,12 +2453,17 @@ function closeNewProject() {
   $('menuOpen').focus()
 }
 $('newClose').onclick = () => closeNewProject()
-// Only a press that starts and ends outside closes it: a drag out of the address box is not a close.
+// Only a press that starts and ends outside closes it: a drag out of the address box, or into it, is not a close.
+// A click that starts and ends in different places goes to what holds both, the backdrop, so the release is checked too.
 let pressedOutside = false
+let releasedOutside = false
 $('newModal').addEventListener('pointerdown', event => {
   pressedOutside = event.target === $('newModal')
 })
-$('newModal').addEventListener('click', event => event.target === $('newModal') && pressedOutside && closeNewProject())
+$('newModal').addEventListener('pointerup', event => {
+  releasedOutside = event.target === $('newModal')
+})
+$('newModal').addEventListener('click', event => event.target === $('newModal') && pressedOutside && releasedOutside && closeNewProject())
 $('stateCard').onclick = event => {
   if (event.target.closest('[data-look]')) go(0)
   if (event.target.closest('[data-go-on]')) goOn()

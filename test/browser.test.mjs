@@ -1806,7 +1806,7 @@ test('a picture that comes after New project was closed only says so: the page s
   await page.keyboard.press('Enter')
   await page.keyboard.press('Escape')
   await openNewProject(page)
-  assert.equal(await page.locator('#newModal [data-first-said]').isVisible(), false, 'the new window starts clean')
+  assert.match(await page.locator('#newModal [data-first-said]').innerText(), /Taking a picture of localhost:9/, 'the new window says the first is still being taken')
   await page.locator('#newModal [data-first-address]').fill('localhost:3000/half-typed')
   await page.locator('#toast').getByText('New: Kitchen').waitFor({ timeout: 8000 })
   assert.equal(await page.locator('#newModal').isVisible(), true)
@@ -1824,7 +1824,42 @@ test('a picture that comes after New project was closed only says so: the page s
   assert.deepEqual(errors.filter(e => !/400 .*\/api\/show/.test(e)), [])
 })
 
-test('New project: a drag out of the address box does not close it, and a typed address is kept until a project is made', { skip }, async () => {
+test('New project opened again while a picture is taken says so and keeps Show it off, and Go there waits for a window to close', { skip }, async () => {
+  const r = await rig()
+  r.push('Garden', ['Home'], null)
+  r.push('Kitchen', ['Stove'], null)
+  const { page, errors } = await r.open('garden')
+  let asked = 0
+  await page.route('**/api/show', async route => {
+    asked++
+    await new Promise(r => setTimeout(r, 1500))
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ appSlug: 'kitchen', name: 'Kitchen', round: 1, existed: false }) })
+  })
+  await openNewProject(page)
+  await page.locator('#newModal [data-first-address]').fill('localhost:9')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Escape')
+  await openNewProject(page)
+  const said = page.locator('#newModal [data-first-said]')
+  assert.equal(await said.isVisible(), true)
+  assert.match(await said.innerText(), /Taking a picture of localhost:9/)
+  assert.equal(await page.locator('#newModal [data-first-show]').isDisabled(), true, 'one picture at a time')
+  await page.keyboard.press('Enter')
+  await page.locator('#toast').getByText('New: Kitchen').waitFor({ timeout: 8000 })
+  assert.equal(asked, 1, 'only one round was asked for')
+  assert.equal(await page.locator('#newModal [data-first-show]').isDisabled(), false, 'on again once it is done')
+  assert.equal(await said.isVisible(), false)
+  // The window is still up: Go there leaves the page as it is.
+  await page.locator('#toast [data-toast-go]').evaluate(el => el.click())
+  assert.match(await page.locator('#crumbs').innerText(), /Garden/)
+  assert.equal(await page.locator('#newModal').isVisible(), true)
+  await page.keyboard.press('Escape')
+  await page.locator('#toast').getByRole('button', { name: 'Go there' }).click()
+  assert.match(await page.locator('#crumbs').innerText(), /Kitchen/)
+  assert.deepEqual(errors, [])
+})
+
+test('New project: a drag out of the address box, or into it, does not close it, and a typed address is kept until a project is made', { skip }, async () => {
   const r = await rig()
   r.push('Garden', ['Home'], null)
   const { page, errors } = await r.open('garden')
@@ -1837,6 +1872,12 @@ test('New project: a drag out of the address box does not close it, and a typed 
   await page.mouse.move(10, 700, { steps: 4 })
   await page.mouse.up()
   assert.equal(await page.locator('#newModal').isVisible(), true, 'a drag that ends outside is not a close')
+  // Pressed outside and let go inside: not a close either.
+  await page.mouse.move(10, 700)
+  await page.mouse.down()
+  await page.mouse.move(box.x + 20, box.y + box.height / 2, { steps: 4 })
+  await page.mouse.up()
+  assert.equal(await page.locator('#newModal').isVisible(), true, 'a drag that ends inside is not a close')
   await page.mouse.click(10, 700)
   assert.equal(await page.locator('#newModal').isVisible(), false, 'a press outside is')
   await openNewProject(page)
