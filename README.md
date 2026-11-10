@@ -188,7 +188,7 @@ Light and dark are separate screens. The page is the review: the picture fills t
 - **Where it changed:** with a before of the same size, corner ticks mark each place that differs. They show on screen only and never in what is sent. C hides them. They do not show when most of the picture changed, and a very faint change can go unmarked.
 - **All the screens:** the count in the bar ("4 left", or **O**) opens every screen of the review with where each stands. A press goes to one, and **Looks good for the rest** answers what is left.
 - **The film of a screen:** **R**, or the menu, plays one screen's story over the page: each round's picture, then the same picture as you marked it, on to the newest. It opens on the first marks. **Play** (Space) plays and pauses, ← and → go one step, and a press on a round shows it as it was left. **Save the film** writes it as a video file, where this computer has ffmpeg. A long story is saved as its newest rounds, and the page says how many older ones the file leaves out. The film of a sketch plays in the page only, and says so in place of the button.
-- **Select words:** where a picture came with a word list, the words tool (**E**) marks the words themselves, as in a document. Without a list it draws a box.
+- **Select words:** the words tool (**E**) marks the words themselves, as in a document. A drag along one line takes that line's words. It works where a picture has a word list: one pushed with it, or one Markback reads off the picture when it is first on show. While the words are being read, its tip says so, and it draws a box until they come. On a computer with nothing to read with, a picture without a list has no words tool, and **E** does nothing there.
 - **Something new:** the tab's title counts what waits. New screens are said on the page, and from behind another window by a sound and, if you allow it, a notice. The menu turns the sound and notices off.
 - **New project:** in the menu, the same two ways in as the first screen: a running app's address, or `/markback` in your agent, with one sentence after it when there is no app yet. The new project stands beside the ones there, which are left as they are. An address that is already a project makes its next round, and the page says so. **Esc** closes the window; a picture still being taken goes on, and the page says when it is ready, with a way to go there.
 - **At the foot:** a slim notes box that grows up over the picture as you type, Looks good and Send. If there are answers already, a small line opens them.
@@ -227,7 +227,7 @@ Moving into another review is never quiet. A full overlay says what was finished
 | B A P T M | Box, arrow, pen, text, move |
 | D | Speak at a spot: click on the picture, then say it |
 | ⇧D | Speak your notes into the notes box |
-| E | Select the words themselves, where the picture has a word list |
+| E | Select the words themselves, where the picture has a word list or one can be read |
 | 1–4 | Red, amber, blue, black |
 | ⌘Z / ⇧⌘Z | Undo / redo a mark |
 | + − 0 | Zoom in, zoom out, fit. On a tall picture, 0 again shows the whole of it |
@@ -267,7 +267,19 @@ review words-script                # a script to run in the page with a browser 
 review push --app MyApp --screen Home --after after.png --words after-words.json
 ```
 
-The list is `{ "size": { "w": 1440, "h": 900 }, "words": [{ "t": "Saturday", "x": 795, "y": 1038, "w": 132, "h": 34, "el": "div.item > b" }] }`: each word with its box in the picture's own pixels, in reading order, and `el`, the element it is in, where there is one. Markback does not read words off a bare picture: a screenshot pushed without `--words` has no list, and its marks carry no words. The page script reads the text the window shows and what its form fields show (never a password); it leaves out frames, closed shadow roots and text a style sheet adds (`::before`).
+The list is `{ "size": { "w": 1440, "h": 900 }, "words": [{ "t": "Saturday", "x": 795, "y": 1038, "w": 132, "h": 34, "el": "div.item > b" }] }`: each word with its box in the picture's own pixels, in reading order, and `el`, the element it is in, where there is one. The page script reads the text the window shows and what its form fields show (never a password); it leaves out frames, closed shadow roots and text a style sheet adds (`::before`).
+
+A screenshot pushed without `--words` gets its words read off the picture, on this computer, when it is first on show in the review page. Pushing does not wait for it. On a Mac the system's own text reader does it, with nothing to install. Anywhere else it takes `tesseract`, if the computer has it. With neither, the picture has no list, as before. Nothing leaves the computer. The first read after a while takes a few seconds while the reader loads; after that a screen takes under a second. On a Mac each picture is read twice, whole and in halves, since the reader can leave out a column of a dense table that it finds in a smaller part: that is about a third of a second, once for each picture, while you look at it. What to expect:
+
+- A read list is a guess. A word can be misread, and two short words can run together.
+- A drag along one row, or down one card, takes the right words.
+- An icon can come out as letters.
+- A table cell whose text wraps, and tiles that sit over a paragraph, may be read out of order.
+- A drag straight across two columns at one height takes that line from each column.
+- The order from one column to the next can be wrong, so a drag from one column into another may take words you did not mean.
+- On a computer with no reader, the words tool is hidden on plain screenshots.
+
+A read list says `"read": true`, and an answer whose words came from one says `"wordsRead": true`, so `review read` tells the agent. A list given with `--words`, or made by `review see`, `review project` or `review pdf`, is exact, and is always used in place of reading.
 
 ## Read the feedback
 
@@ -319,7 +331,7 @@ Inbox: `~/.review-wizard/inbox/<app>/<screen>-<mode>-<time>.{png,json}`. The JSO
 
 `read --latest` and `wait --all` give one record per screen. When marks are sent twice on one picture, each marked copy holds only what was new, so the newest record carries the ones before it under `earlier`. A Looks good pressed over changes replaces them and stands alone.
 
-When the picture came with its words, a mark has `"words"`, as one line, 200 words at most. A box has the words that are at least half inside it. A freehand line has the words it runs through or under, and a loop the words inside it. An arrow has the one word nearest its head. When those words are all in one element, the mark has `"element"` too, such as `"div.item > b"`. A mark of type `words` is words the reviewer chose, in `"text"`. `review read` says them: `1. box (red) at x 781, y 1001, 351x116, on the words "First work day Saturday 14 March"`.
+When the picture came with its words, or they were read off it, a mark has `"words"`, as one line, 200 words at most. A box has the words that are at least half inside it. A freehand line has the words it runs through or under, and a loop the words inside it. An arrow has the one word nearest its head. When those words are all in one element, the mark has `"element"` too, such as `"div.item > b"`. A mark of type `words` is words the reviewer chose, in `"text"`. `review read` says them: `1. box (red) at x 781, y 1001, 351x116, on the words "First work day Saturday 14 March"`.
 
 Every `box` is in the after picture's own pixels. `verdict` is `changes` or `approved` (approved has no shapes and no
 annotated image). A screen sent with the set with nothing on it is `approved` with `"notes": "No comment."` and an extra

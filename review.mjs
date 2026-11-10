@@ -130,6 +130,7 @@ function describe(r) {
     const reading = r.inferred?.find(x => x.n === i + 1)
     if (reading) lines.push(`     ${printable(`Read as: "${reading.text}". ${saidBack(reading)}`)}`)
   }
+  if (r.wordsRead && r.shapes.some(s => s.words)) lines.push('  The words on the marks were read off the picture, so a few may be wrong.')
   if (r.annotatedImage) lines.push(`  Marked picture: ${r.annotatedImage}`)
   lines.push(`  After: ${r.afterImage}${r.beforeImage ? `\n  Before: ${r.beforeImage}` : ''}`)
   lines.push(`  File: ${r.file}`)

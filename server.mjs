@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { IMAGES, INBOX, PORT, listApps, readInbox, receive, replyToReading, setAside } from './lib/store.mjs'
 import { filmOf, leftOutLine, saveFilm, savedPart } from './lib/film.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
+import { hasReader, stopReading, wordsForPicture } from './lib/read-words.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
 import { appsOf, madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
 // Only what reads the wake command and turns it on and off. What sets the command is not imported here, on purpose:
@@ -153,9 +154,16 @@ const server = createServer(async (req, res) => {
   // Only this computer's own pages: another site open in the browser must not write here, or read by renaming itself.
   if (!isLocal(req)) return json(res, 403, { error: 'Only this computer can use this.' })
   try {
+    // `reader`: whether this computer can read words off a picture, so the page shows the words tool only where it can work.
     if (req.method === 'GET' && url.pathname === '/api/queue') {
       const apps = listApps()
-      return json(res, 200, { apps, listening: listening(apps) })
+      return json(res, 200, { apps, listening: listening(apps), reader: hasReader() })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/read-words') {
+      // A picture pushed with no word list: its words are read here, once, and the list is kept beside it. The answer comes at
+      // once, reading or not, so a read never holds one of the few connections a browser opens to a server.
+      const input = JSON.parse(await body(req))
+      return json(res, 200, wordsForPicture(String(input.after ?? '')))
     }
     if (req.method === 'GET' && url.pathname.startsWith('/images/')) {
       const path = inside(IMAGES, decodeURIComponent(url.pathname.slice('/images/'.length)))
@@ -303,4 +311,5 @@ server.listen(PORT, '127.0.0.1', () => {
 })
 // Stopped, it must not look as if it runs: the hooks ask before they hold an agent back.
 process.on('exit', serverGone)
-for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => process.exit(0))
+// Stopped (review stop, or Ctrl-C): a reader still at work stops too, rather than go on after the server.
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => void stopReading().finally(() => process.exit(0)))
