@@ -212,26 +212,35 @@ const saveDraft = s => {
 /** What this screen's draft would send: 'changes', 'approved', or null when nothing is on it yet. */
 function verdictOf(s) {
   const d = draftOf(s)
-  if (marksOrNotes(d)) return 'changes'
-  // Ticks alone: every earlier mark fixed is a Looks good; one left or said to stand is a change asked for.
-  if (Object.keys(d.said).length) return allFixed(s) ? 'approved' : 'changes'
+  // Still stands, or came back, asks for a change as a mark does.
+  if (marksOrNotes(d) || stands(d)) return 'changes'
+  // A tick never answers a screen. On a picture already answered with changes this round, it is an update to them.
+  if (fixedTicks(d) && s.status === 'sent') return 'changes'
   return d.good ? 'approved' : null
 }
 const marksOrNotes = d => d.marks.some(isReal) || !!d.notes.trim()
-/** Only ticks on it: no marks, no notes. */
-const ticksOnly = d => !marksOrNotes(d) && Object.keys(d.said).length > 0
-/** Every earlier mark still asked for is ticked fixed, and none is said to stand or to have come back. */
-function allFixed(s) {
+/** Only Fixed ticks on it: no marks, no notes, nothing said to stand. They ride along with an answer, and never go by themselves. */
+const fixedTicks = d => !marksOrNotes(d) && !stands(d) && Object.keys(d.said).length > 0
+/** What goes without a press of Send: the same, but Fixed ticks alone stay in the draft and the screen waits. */
+const goesOf = s => (fixedTicks(draftOf(s)) && !draftOf(s).good ? null : verdictOf(s))
+/** Every earlier mark still asked for is ticked fixed, and no "came back?" waits for an answer. */
+function allChecked(s) {
   const said = saidOf(s)
-  return askedOf(s).open.every(a => said[a.n] === 'fixed') && !Object.values(said).includes('stands')
+  const asked = askedNow(s)
+  return asked.open.length + asked.back.length > 0 && asked.open.every(a => said[a.n] === 'fixed') && asked.back.every(a => said[a.n] === 'fixed')
 }
+/** Marks sent on this picture this round since the last Looks good pressed: what replacing the changes drops. */
+function marksSentNow(s) {
+  const records = (histories.get(historyKey(s)) ?? []).filter(r => r.round === s.round && !r.olderPicture)
+  const upTo = records.findIndex(r => r.verdict === 'approved' && !r.noComment)
+  return (upTo < 0 ? records : records.slice(0, upTo)).filter(r => r.verdict === 'changes').reduce((n, r) => n + (r.marks || 0), 0)
+}
+/** The "came back?" marks the person has said nothing of. Never decided for them. */
+const unansweredBack = s => askedNow(s).back.filter(a => !saidOf(s)[a.n])
 /** An earlier mark said to still stand is something to send, as a mark is, and so is a word said before and taken back (null). */
 const stands = d => Object.values(d.said).some(word => word === 'stands' || word === null)
-/**
- * Something is on it to go by itself. Marks that cannot be trusted to this picture wait to be looked at. Ticks alone that
- * leave some earlier mark unticked or standing wait for Send: moving on keeps them, and the screen still waits.
- */
-const saysAnswer = s => !!verdictOf(s) && !draftOf(s).unsure && !(ticksOnly(draftOf(s)) && verdictOf(s) !== 'approved')
+/** Something is on it to go by itself. Marks that cannot be trusted to this picture wait to be looked at, and so do Fixed ticks alone. */
+const saysAnswer = s => !!goesOf(s) && !draftOf(s).unsure
 const waitingOf = a => (a ? a.screens.filter(s => s.status === 'waiting') : [])
 /** What the page will offer next by itself: something to answer, and not set aside. */
 const offered = a => openOf(a).length > 0 && !a.setAside
@@ -241,12 +250,12 @@ const placeOf = a => placeIn(a, state.apps)
 const sentHere = new Set()
 /** Waiting, and not answered here on its way to the server. */
 const openOf = a => waitingOf(a).filter(s => !queued.has(keyOf(s)))
-const setOf = a => (a ? a.screens.filter(s => s.status === 'waiting' || verdictOf(s)) : [])
+const setOf = a => (a ? a.screens.filter(s => s.status === 'waiting' || goesOf(s)) : [])
 function tallyOf(a) {
   const set = setOf(a)
-  const changes = set.filter(s => verdictOf(s) === 'changes')
-  const good = set.filter(s => verdictOf(s) === 'approved')
-  const untouched = set.filter(s => !verdictOf(s))
+  const changes = set.filter(s => goesOf(s) === 'changes')
+  const good = set.filter(s => goesOf(s) === 'approved')
+  const untouched = set.filter(s => !goesOf(s))
   return { set, changes, good, untouched, reviewed: changes.length + good.length }
 }
 const label = s => `${s.screen}${s.mode ? ` (${s.mode})` : ''}`
@@ -412,6 +421,7 @@ function renderHeard() {
     card.className = `heard${!heard.quiet && sign.state === 'warn' ? ' warn' : ''}`
     setHtml(card, heardHtml())
   }
+  keepApart()
   if (state.loaded) document.title = titleNow()
 }
 $('heardSign').onclick = () => {
@@ -638,7 +648,7 @@ const sheetOpen = () => !$('sheetModal').hidden
 function renderSheet() {
   const a = app()
   if (!sheetOpen() || !a) return
-  const left = openOf(a).filter(s => !verdictOf(s)).length
+  const left = openOf(a).filter(s => !goesOf(s)).length
   $('sheetTitle').textContent = `${a.name}: ${a.screens.length} screen${a.screens.length === 1 ? '' : 's'}`
   setHtml($('sheetGrid'), a.screens.map((s, i) => {
     const st = statusOf(s)
@@ -1042,8 +1052,10 @@ async function loadHistory(s) {
 function renderFoot(a, s) {
   const v = s ? verdictOf(s) : null
   const good = s && draftOf(s).good && v === 'approved'
+  // Every earlier mark ticked fixed, and nothing else on it: Looks good is the answer, so it is lit.
+  const lit = s && !v && allChecked(s)
   const off = !s ? ' disabled' : ''
-  setHtml($('footActions'), `<button class="btn${good ? ' good-on' : ''}" data-act="good"${off} ${tip(good ? 'Looking good; press to take it back' : 'Looks good, and on to the next', 'G')}>${good ? ICONS.check : ''}Looks good</button><button class="btn primary" data-act="send"${v !== 'changes' && !(v === 'approved' && s && ticksOnly(draftOf(s))) ? ' disabled' : ''} ${tip('Send your marks and notes, and on to the next', '⌘↩')}>Send</button>`)
+  setHtml($('footActions'), `<button class="btn${good ? ' good-on' : lit ? ' good-lit' : ''}" data-act="good"${off} ${tip(good ? 'Looking good; press to take it back' : 'Looks good, and on to the next', 'G')}>${good ? ICONS.check : ''}Looks good</button><button class="btn primary" data-act="send"${v !== 'changes' ? ' disabled' : ''} ${tip('Send your marks and notes, and on to the next', '⌘↩')}>Send</button>`)
 }
 
 /* ---------- a change of review: unmissable, and it waits for a press ---------- */
@@ -1194,7 +1206,7 @@ async function setAside(slugs, aside, { staying = false } = {}) {
 
 function renderMenu() {
   const a = app()
-  const left = a ? openOf(a).filter(s => !verdictOf(s)).length : 0
+  const left = a ? openOf(a).filter(s => !goesOf(s)).length : 0
   const group = a ? placeOf(a).group : null
   setHtml($('menu'), `
     <button data-menu="sheet" role="menuitem"${a ? '' : ' disabled'}><span>All screens of this review</span><span class="kbd">O</span></button>
@@ -1379,7 +1391,7 @@ const pictureOf = s => pictureAt(`/images/${s.after}`).catch(() => {
 function preloadAround(a) {
   const s = screen()
   if (!s) return
-  const ahead = a.screens.filter((x, i) => i > state.index && x.status === 'waiting' && !verdictOf(x)).slice(0, AHEAD)
+  const ahead = a.screens.filter((x, i) => i > state.index && x.status === 'waiting' && !goesOf(x)).slice(0, AHEAD)
   for (const each of [...ahead, a.screens[state.index + 1], a.screens[state.index - 1]]) {
     if (each) void pictureAt(`/images/${each.after}`).catch(() => undefined)
   }
@@ -1600,7 +1612,7 @@ function askedNow(s) {
   return askedOf(s, changed, state.size)
 }
 /** The list stands beside the picture, in the After view, until it is closed. */
-const askedShown = s => !!s && state.view === 'after' && !state.askedShut.has(keyOf(s)) && askedNow(s).rows.length > 0
+const askedShown = s => !!s && state.view === 'after' && (!state.askedShut.has(keyOf(s)) || !askedBeside()) && askedNow(s).rows.length > 0
 const askedBeside = () => $('scroller').clientWidth - 14 - (ASKED_WIDE + 16) >= ASKED_MIN_PICTURE
 const askedRoom = () => (askedShown(screen()) && askedBeside() ? ASKED_WIDE + 16 : 0)
 /** Beside the picture, or under it in a narrow window: set as soon as the list shows, before the picture has come. */
@@ -1634,12 +1646,14 @@ function renderAsked(s) {
   const said = s ? saidOf(s) : {}
   const count = asked ? askedCount(asked, said) : { words: '', done: true }
   const chip = $('askedChip')
-  chip.hidden = !count.words
+  // A narrow window has no room in the bar: the count is on the list's own header, under the picture.
+  const narrow = !askedBeside()
+  chip.hidden = !count.words || narrow
   chip.textContent = count.words
   chip.classList.toggle('done', count.done)
   chip.setAttribute('aria-expanded', String(askedShown(s)))
   const held = asked?.held.length ?? 0
-  $('askedHeld').hidden = !held
+  $('askedHeld').hidden = !held || narrow
   $('askedHeld').textContent = held ? `${held} held` : ''
   const box = $('asked')
   box.hidden = !askedShown(s)
@@ -1658,7 +1672,23 @@ function renderAsked(s) {
       + `<span class="ask-acts"><button class="btn ask-say${word === 'fixed' ? ' on' : ''}" data-ask-say="fixed" aria-pressed="${word === 'fixed'}">${ICONS.check}${back ? 'Still fixed' : 'Fixed'}</button>`
       + `<button class="btn ask-say${word === 'stands' ? ' on' : ''}" data-ask-say="stands" aria-pressed="${word === 'stands'}">${back ? 'Came back' : 'Still stands'}</button></span></div></li>`
   }
-  setHtml(box, `<h2><span>You asked for these last time</span><button class="tool" data-asked-shut ${tip('Hide this list', 'K')}>${ICONS.close}</button></h2><ol>${asked.rows.map(row).join('')}</ol>${held ? `<p class="ask-held">${held} more you ticked fixed before. Each is flagged here if the picture changes there again.</p>` : ''}`)
+  // What to do next, in a line: a "came back?" first, since it is never decided for the person.
+  const open = unansweredBack(s).length
+  const hint = open ? `${open} came back? Say Still fixed or Came back.` : !verdictOf(s) && allChecked(s) ? 'All checked. Press Looks good.' : ''
+  const head = narrow ? `<span class="asked-count${count.done ? ' done' : ''}">${esc(count.words)}</span>` : `<button class="tool" data-asked-shut ${tip('Hide this list', 'K')}>${ICONS.close}</button>`
+  setHtml(box, `<h2><span>You asked for these last time</span>${head}</h2>${hint ? `<p class="ask-hint">${esc(hint)}</p>` : ''}<ol>${asked.rows.map(row).join('')}</ol>${held ? `<p class="ask-held">${held} more you ticked fixed before. Each is flagged here if the picture changes there again.</p>` : ''}`)
+  keepApart()
+}
+
+/** The listening notice drops over the right of the page, where the list stands: the list moves down while both show. */
+function keepApart() {
+  const col = $('sideCol')
+  col.style.marginTop = ''
+  const card = $('heard')
+  if (card.hidden || col.hidden || $('pair').classList.contains('asked-below')) return
+  const over = card.getBoundingClientRect().bottom + 8 - col.getBoundingClientRect().top
+  const across = card.getBoundingClientRect().left < col.getBoundingClientRect().right
+  if (over > 0 && across) col.style.marginTop = `${Math.ceil(over)}px`
 }
 
 /** Fixed or still stands. Pressed again, it is taken back. */
@@ -2017,7 +2047,7 @@ function closeTextEntry(keep) {
  * Sends one screen: the marks burned into a PNG plus the shapes as numbers, or an
  * approval with neither. Every path writes the same inbox entries.
  */
-async function sendOne(s, verdict, { noComment = false } = {}) {
+async function sendOne(s, verdict, { noComment = false, back = [] } = {}) {
   const key = keyOf(s)
   const d = draftOf(s)
   // A picture that will not load must not hold back what is said about it: the marks go as numbers.
@@ -2044,8 +2074,9 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
     shapes: marks.map(m => (isWords(m) ? wordsShape(m) : isPin(m) ? pinShape(m, wide) : shapeOf(m, ctx))),
     imageSize: size,
     png,
-    // A Looks good ticks every earlier mark fixed, which the server says for it; a held one ticked still fixed is told too.
-    said,
+    // The ticks ride along with the answer. Sent with the rest, unseen, a screen says nothing of them.
+    said: noComment ? {} : said,
+    ...(back.length ? { unanswered: back } : {}),
   }
   if (noComment) body.noComment = true
   const res = await fetch('/api/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {
@@ -2108,7 +2139,9 @@ function queueAnswer(s, verdict, { noComment = false, wait = UNDO_MS, resumed = 
   d.pending = true
   if (!resumed || !d.pendingAt) d.pendingAt = Date.now()
   saveDraft(s)
-  const job = { s, verdict, noComment, resumed, timer: setTimeout(() => goOut(key), wait) }
+  // The "came back?" marks left unanswered are seen at the press, on the screen in view: the record says so, never fixed.
+  const back = screen() && keyOf(screen()) === key && !noComment ? unansweredBack(s).map(a => a.n) : []
+  const job = { s, verdict, noComment, resumed, back, timer: setTimeout(() => goOut(key), wait) }
   queued.set(key, job)
   lastQueued = job
   return job
@@ -2132,7 +2165,7 @@ function goOut(key) {
   job.going = true
   sending = sending.then(async () => {
     try {
-      await sendOne(job.s, job.verdict, { noComment: job.noComment })
+      await sendOne(job.s, job.verdict, { noComment: job.noComment, back: job.back })
       queued.delete(key)
     } catch (error) {
       queued.delete(key)
@@ -2312,11 +2345,15 @@ async function looksGood(byKey = false) {
   const dropping = d.marks.some(isReal) || !!d.notes.trim() || stands(d)
   // Already said, by a press: there is nothing to add, only somewhere to go.
   if (!dropping && !verdictOf(s) && s.status === 'approved' && !standingAnswer(histories.get(historyKey(s)), s.round)?.noComment) return moveOn(false)
+  // A "came back?" is never decided for the person: asked first, and sent as not answered if they go on.
+  const open = unansweredBack(s).length
+  if (open && !(await ask(`${open} came back? not answered`, `${open === 1 ? 'A mark you ticked fixed before has' : `${open} marks you ticked fixed before have`} changed again. Say Still fixed or Came back, or send it as not answered.`, 'Send as not answered', 'Go back and say'))) return
   // Changes sent are the person's real answer. One key must not swap them for an approval as they go past.
   const replacing = s.status === 'sent'
   if (dropping || replacing) {
+    const sent = marksSentNow(s)
     const yes = replacing
-      ? await ask('Replace your changes with Looks good?', `You sent changes on this screen. They go under Earlier answers, and it counts as looking good.${dropping ? ' What you have drawn or written since is dropped.' : ''}`, 'Replace with Looks good')
+      ? await ask('Replace your changes with Looks good?', `You sent changes on this screen. This drops the ${sent} mark${sent === 1 ? '' : 's'} you sent on this picture: they go under Earlier answers, and it counts as looking good.${dropping ? ' What you have drawn or written since is dropped too.' : ''}`, 'Replace with Looks good')
       : await ask('Mark as looking good?', stands(d) ? 'Your marks and notes on this screen are dropped, and every earlier mark counts as fixed.' : 'Your marks and notes on this screen are dropped.', 'Mark as looking good')
     if (!yes) return
   }
@@ -2367,7 +2404,7 @@ async function runSubmit() {
   const a = app()
   if (!a || submitting) return
   // One already in the air has said what it says: its draft is about to be emptied.
-  const jobs = submitJobs(setOf(a), verdictOf).filter(job => !queued.get(keyOf(job.s))?.going)
+  const jobs = submitJobs(setOf(a), goesOf).filter(job => !queued.get(keyOf(job.s))?.going)
   if (!jobs.length) return
   for (const job of jobs) takeBack(job.s)
   submitting = true
@@ -2377,7 +2414,7 @@ async function runSubmit() {
     await sending
     for (const job of jobs) {
       $('submitStatus').textContent = `Sending ${done + 1} of ${jobs.length}…`
-      await sendOne(job.s, job.verdict, { noComment: job.noComment })
+      await sendOne(job.s, job.verdict, { noComment: job.noComment, back: job.back })
       done++
     }
     $('submitModal').hidden = true

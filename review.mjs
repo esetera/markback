@@ -130,7 +130,7 @@ function describe(r) {
     lines.push(`  Earlier marks: ${asked.length - open} of ${asked.length} ticked fixed${open ? `, ${open} still to do` : ''}${r.noComment && open ? ' (sent with the rest, not looked at)' : ''}`)
     // Sent unseen, an unticked mark was not looked at: not the same as left unticked. `n` is its number here, not a pin's.
     const unticked = r.noComment ? 'not looked at, so still to do' : 'not ticked, so still to do'
-    for (const a of asked) lines.push(`    ${a.n}. ${a.said === 'fixed' ? (a.fixedIn ? `still fixed (fixed in round ${a.fixedIn})` : 'fixed') : a.cameBack ? 'came back' : a.said === 'stands' ? 'still stands' : unticked}, from round ${a.round}: ${a.type === 'notes' ? `notes "${printable(a.text)}"` : markLine({ ...a, n: undefined })}`)
+    for (const a of asked) lines.push(`    ${a.n}. ${a.said === 'fixed' ? (a.fixedIn ? `still fixed (fixed in round ${a.fixedIn})` : 'fixed') : a.cameBack ? (a.said === 'stands' ? 'came back' : 'came back? not answered, so look again') : a.said === 'stands' ? 'still stands' : unticked}, from round ${a.round}: ${a.type === 'notes' ? `notes "${printable(a.text)}"` : markLine({ ...a, n: undefined })}`)
   }
   if (r.notes) lines.push(`  Notes: ${r.notes.replace(/\n/g, '\n         ')}`)
   for (const [i, s] of r.shapes.entries()) lines.push(`  ${i + 1}. ${markLine(s)}`)
