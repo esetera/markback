@@ -74,7 +74,7 @@ async function rig() {
   const read = app => JSON.parse(execFileSync('node', [join(ROOT, 'review.mjs'), 'read', '--app', app, '--json'], { env, encoding: 'utf8' }))
   const queue = async slug => (await (await fetch(`http://127.0.0.1:${port}/api/queue`)).json()).apps.find(a => a.slug === slug)
   /** `undo` is how long an answer can be taken back. Long: it stays here. Short: it goes at once. */
-  const open = async (app, { undo = 40, width = 1500, height = 960, colorScheme = 'light', seed = null } = {}) => {
+  const open = async (app, { undo = 40, width = 1500, height = 960, colorScheme = 'light', seed = null, film = 0 } = {}) => {
     const context = await browser.newContext({ viewport: { width, height }, colorScheme })
     const page = await context.newPage()
     const errors = []
@@ -84,7 +84,8 @@ async function rig() {
     if (seed) await page.addInitScript(values => {
       for (const [key, value] of Object.entries(values)) if (localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify(value))
     }, seed)
-    await page.goto(`http://127.0.0.1:${port}/?undo=${undo}#${app}`)
+    // `film` is how long a step of the film stays, so a test need not wait out the real seconds.
+    await page.goto(`http://127.0.0.1:${port}/?undo=${undo}${film ? `&film=${film}` : ''}#${app}`)
     await page.locator('#canvas').waitFor()
     await page.waitForFunction(() => document.getElementById('canvas').width > 300)
     return { page, errors, url: page.url() }
@@ -2580,6 +2581,297 @@ test('select the words themselves: where a picture has a word list, the words to
   await page.mouse.up()
   await settled(page)
   assert.equal((await saved(page, 'words', 'without')).marks[0].tool, 'box')
+  assert.deepEqual(errors, [])
+})
+
+/* ---------- the film of one screen ---------- */
+
+/** An answer as the page sends it, for rounds a test does not need to draw by hand. */
+const answerAs = async (r, appSlug, id, { marks = 0, verdict = 'changes', notes = '' } = {}) => {
+  const { readFileSync } = await import('node:fs')
+  const entry = (await r.queue(appSlug)).screens.find(s => s.id === id)
+  const shapes = Array.from({ length: marks }, () => ({ type: 'box', colour: 'red', box: { x: 10, y: 10, w: 40, h: 30 } }))
+  const png = verdict === 'approved' ? null : `data:image/png;base64,${readFileSync(join(r.home, 'p.png')).toString('base64')}`
+  const res = await fetch(`http://127.0.0.1:${r.port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug, id, after: entry.after, round: entry.round, verdict, notes, shapes, imageSize: { w: 1600, h: 900 }, png }) })
+  assert.equal(res.ok, true)
+}
+/** Three rounds of Home: marks on the first two, then Looks good. Other is there to be the screen behind. */
+const threeRounds = async (r, app) => {
+  r.push(app, ['Home', 'Other'], null)
+  await answerAs(r, app.toLowerCase(), 'home', { marks: 2, notes: 'Move it up' })
+  r.push(app, ['Home'], null)
+  await answerAs(r, app.toLowerCase(), 'home', { marks: 1 })
+  r.push(app, ['Home'], null)
+  await answerAs(r, app.toLowerCase(), 'home', { verdict: 'approved' })
+}
+const filmShows = page => page.locator('#filmImg').getAttribute('alt')
+
+test('the film of a screen: R opens it over the page, and Play shows every round in order, its picture and then its marks, to the finished screen', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Film')
+  const { page, errors } = await r.open('film/home', { film: 150 })
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  assert.equal(await page.locator('#filmTitle').innerText(), 'Home: from first mark to finished')
+  assert.equal(await page.locator('#filmLength').innerText(), '3 rounds · 7 seconds')
+  assert.deepEqual(await page.locator('.film-round').allInnerTexts(), ['Round 1', 'Round 2', 'Finished'])
+  assert.equal(await page.locator('.film-round').first().getAttribute('title'), 'Round 1: Changes, 2 marks. Move it up')
+  // It opens on the first marks, and waits for a press.
+  assert.equal(await filmShows(page), 'Round 1, as marked')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Play')
+  assert.equal(await page.locator('.film-round.current').innerText(), 'Round 1')
+  await page.waitForTimeout(400)
+  assert.equal(await filmShows(page), 'Round 1, as marked', 'it does not play by itself')
+  // Each step as it comes: what it is, and whether the picture is the pushed one or the marked one from the inbox.
+  await page.evaluate(() => {
+    window.SEEN = []
+    const img = document.getElementById('filmImg')
+    new MutationObserver(() => {
+      const now = `${img.alt}: ${new URL(img.src).pathname.split('/')[1]}`
+      if (window.SEEN.at(-1) !== now) window.SEEN.push(now)
+    }).observe(img, { attributes: true, attributeFilter: ['alt'] })
+  })
+  await page.locator('#filmPlay').click()
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Pause')
+  await page.waitForFunction(() => document.getElementById('filmPlay').textContent === 'Play')
+  assert.deepEqual(await page.evaluate(() => window.SEEN), ['Round 1: images', 'Round 1, as marked: inbox', 'Round 2: images', 'Round 2, as marked: inbox', 'Finished: images'])
+  assert.equal(await page.locator('.film-round.current').innerText(), 'Finished')
+  assert.equal(await page.locator('#filmImg').evaluate(img => img.complete && img.naturalWidth), 1600)
+  // Space plays again from the first picture, and Space again pauses: one press is never two.
+  await page.keyboard.press('Space')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Pause')
+  assert.equal(await filmShows(page), 'Round 1')
+  await page.keyboard.press('Space')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Play')
+  const stopped = await filmShows(page)
+  await page.waitForTimeout(400)
+  assert.equal(await filmShows(page), stopped, 'paused, it stays')
+  assert.deepEqual(errors, [])
+})
+
+test('the film steps: the arrows go one step at a time, a round in the strip shows as it was left, and Play goes on from there', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Steps')
+  // A step that stays long: nothing moves here unless a key or a press moves it.
+  const { page, errors } = await r.open('steps/home', { film: 60000 })
+  await page.locator('#menuOpen').click()
+  await page.locator('#menu [data-menu=film]').click()
+  await page.locator('#film').waitFor()
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'filmPlay')
+  await page.keyboard.press('ArrowRight')
+  assert.equal(await filmShows(page), 'Round 2')
+  assert.equal(await page.locator('.film-round.current').innerText(), 'Round 2')
+  await page.keyboard.press('ArrowRight')
+  assert.equal(await filmShows(page), 'Round 2, as marked')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft')
+  assert.equal(await filmShows(page), 'Round 1')
+  await page.keyboard.press('ArrowLeft')
+  assert.equal(await filmShows(page), 'Round 1', 'the first step is the first')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Play', 'stepping does not play')
+  for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowRight')
+  assert.equal(await filmShows(page), 'Finished', 'the last step is the last')
+  // A round from the strip: as it was left, with its marks. Play then starts at that round's own picture.
+  await page.locator('.film-round').nth(1).click()
+  assert.equal(await filmShows(page), 'Round 2, as marked')
+  assert.match(await page.locator('#filmImg').getAttribute('src'), /^\/inbox\/steps\/home-/)
+  // The round has the focus now, and Space is still Play: not a press of the round.
+  await page.keyboard.press('Space')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Pause')
+  assert.equal(await filmShows(page), 'Round 2')
+  assert.match(await page.locator('#filmImg').getAttribute('src'), /^\/images\/steps\/home-after-/)
+  // An arrow while it plays stops it on the step it goes to.
+  await page.keyboard.press('ArrowRight')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Play')
+  assert.equal(await filmShows(page), 'Round 2, as marked')
+  assert.deepEqual(errors, [])
+})
+
+test('the film takes the keys: none reaches the screen behind it, the focus stays in it, and Esc, R and the cross close it', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Behind')
+  // The screen behind is one that still waits: a G there would answer it.
+  const { page, errors } = await r.open('behind/other', { film: 60000 })
+  assert.equal(await at(page), 2)
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  assert.equal(await page.locator('#filmTitle').innerText(), 'Other: from first mark to now', 'not finished: it says so')
+  assert.equal(await page.locator('#filmLength').innerText(), '1 round · 2 seconds')
+  assert.deepEqual(await page.locator('.film-round').allInnerTexts(), ['Round 1'])
+  for (const key of ['g', 'ArrowLeft', 'n', 's', '[', 'o', 'l', 'q', 'b', '?', 'x', 'Meta+Enter']) await page.keyboard.press(key)
+  await settled(page)
+  assert.equal(await at(page), 2, 'the screen behind did not move')
+  assert.equal((await r.queue('behind')).screens.find(s => s.id === 'other').status, 'waiting', 'and was not answered')
+  assert.equal(await saved(page, 'behind', 'other'), null, 'nothing was said on it')
+  for (const id of ['sheetModal', 'helpModal', 'drawer', 'stateCard', 'toast']) assert.equal(await page.locator(`#${id}`).isHidden(), true, `${id} stayed shut`)
+  assert.equal(await page.evaluate(() => document.body.classList.contains('panels')), false)
+  assert.equal(await page.evaluate(() => document.getElementById('bar').inert && document.getElementById('workspace').inert), true)
+  for (let i = 0; i < 8; i++) await page.keyboard.press('Shift+Tab')
+  assert.equal(await page.evaluate(() => !!document.activeElement?.closest('#film')), true, 'the focus stays in the film')
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('#film').isHidden(), true)
+  assert.equal(await page.evaluate(() => document.getElementById('bar').inert || document.getElementById('workspace').inert), false)
+  // R opens and R closes. Closed, the keys are the page's again.
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  await page.keyboard.press('r')
+  assert.equal(await page.locator('#film').isHidden(), true)
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  await page.locator('#filmClose').click()
+  assert.equal(await page.locator('#film').isHidden(), true)
+  await page.keyboard.press('ArrowLeft')
+  assert.equal(await at(page), 1)
+  assert.deepEqual(errors, [])
+})
+
+test('Save the film: the server makes a video with ffmpeg, and without ffmpeg the page says so in plain words', { skip }, async () => {
+  const { chmodSync, writeFileSync } = await import('node:fs')
+  const r = await rig()
+  await threeRounds(r, 'Saving')
+  // No ffmpeg on this computer.
+  r.env.REVIEW_FFMPEG = join(r.home, 'no-such-ffmpeg')
+  await r.stop()
+  await r.start()
+  const first = await r.open('saving/home', { film: 60000 })
+  await first.page.keyboard.press('r')
+  await first.page.locator('#filmSave').click()
+  await first.page.locator('#toast').getByText('The film was not saved').waitFor()
+  assert.match(await first.page.locator('#toast').innerText(), /Saving a film needs ffmpeg on this computer\. The film still plays in the review page\./)
+  assert.equal(await first.page.locator('#film').isVisible(), true, 'the film stays up, and still plays')
+  assert.equal(await first.page.locator('#filmSave').isEnabled(), true)
+  await first.page.close()
+  // A stand-in for ffmpeg: it writes what it was asked for where the film should go, with the list of steps it was given.
+  const tool = join(r.home, 'ffmpeg-stand-in.cjs')
+  writeFileSync(tool, '#!/usr/bin/env node\nconst fs = require(\'node:fs\')\nconst words = process.argv.slice(2)\nfs.writeFileSync(words.at(-1), words.includes(\'concat\') ? fs.readFileSync(words[words.indexOf(\'-i\') + 1], \'utf8\') : \'\')\n')
+  chmodSync(tool, 0o755)
+  r.env.REVIEW_FFMPEG = tool
+  await r.stop()
+  await r.start()
+  const res = await fetch(`http://127.0.0.1:${r.port}/api/film/file?app=saving&id=home`)
+  assert.equal(res.headers.get('content-type'), 'video/mp4')
+  assert.equal(res.headers.get('content-disposition'), 'attachment; filename="saving-home-film.mp4"')
+  const list = await res.text()
+  assert.equal(list.match(/^duration /gm).length, 5, 'five steps: two rounds with marks, and the finished one')
+  assert.equal((await fetch(`http://127.0.0.1:${r.port}/api/film/file?app=saving&id=nothing`)).status, 404)
+  const { page, errors } = await r.open('saving/home', { film: 60000 })
+  // The file is not kept by the test: the page hands it over under this name.
+  await page.evaluate(() => {
+    HTMLAnchorElement.prototype.click = function () {
+      window.SAVED = this.download
+    }
+  })
+  await page.keyboard.press('r')
+  await page.locator('#filmSave').click()
+  await page.locator('#toast').getByText('Film saved').waitFor()
+  assert.equal(await page.evaluate(() => window.SAVED), 'saving-home-film.mp4')
+  assert.deepEqual(errors, [])
+})
+
+test('a narrow window: the film\'s head fits, its title keeps room and is cut short, the cross stays inside, and nothing goes sideways', { skip }, async () => {
+  const r = await rig()
+  r.push('Narrow', ['The home page with a rather long name that cannot fit'])
+  const { page, errors } = await r.open('narrow', { width: 375, height: 700, colorScheme: 'dark' })
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  const head = await page.evaluate(() => {
+    const parts = [...document.querySelector('.film-head').children].filter(el => el.checkVisibility())
+    const title = document.getElementById('filmTitle')
+    return {
+      outside: parts.filter(el => el.getBoundingClientRect().left < 0 || el.getBoundingClientRect().right > innerWidth).map(el => el.id),
+      title: title.getBoundingClientRect().width,
+      cut: title.scrollWidth > title.clientWidth && getComputedStyle(title).textOverflow === 'ellipsis',
+      close: document.getElementById('filmClose').getBoundingClientRect().right,
+      film: document.getElementById('film').getBoundingClientRect().width,
+      width: innerWidth,
+    }
+  })
+  assert.deepEqual(head.outside, [], 'every part of the head is inside the window')
+  assert.ok(head.title > 200, `the title has room: ${head.title}px`)
+  assert.equal(head.cut, true, 'and a long one ends in an ellipsis')
+  assert.ok(head.close <= head.width - 8, 'the cross is inside, with a margin')
+  assert.equal(head.film, head.width)
+  await page.mouse.move(200, 300)
+  await page.mouse.wheel(400, 0)
+  await page.mouse.move(200, 30)
+  await page.mouse.wheel(400, 0)
+  await settled(page)
+  assert.deepEqual(await page.evaluate(() => [scrollX, document.documentElement.scrollLeft, document.querySelector('.film-head').scrollLeft]), [0, 0, 0], 'nothing scrolls sideways')
+  assert.deepEqual(errors, [])
+})
+
+test('the film shuts the page from the press on: R then G at once answers nothing, Esc while it loads gives up, and another screen by then drops it', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Quick')
+  const { page, errors } = await r.open('quick/other', { film: 60000 })
+  // The film is slow to come, as on a busy computer.
+  await page.route('**/api/film?*', async route => {
+    await new Promise(resolve => setTimeout(resolve, 400))
+    await route.continue()
+  })
+  await page.keyboard.press('r')
+  for (const key of ['g', 'ArrowLeft', 'b', 'Meta+Enter']) await page.keyboard.press(key)
+  await page.locator('#film').waitFor()
+  assert.equal(await page.locator('#filmTitle').innerText(), 'Other: from first mark to now', 'the film of the screen R was pressed on')
+  assert.equal(await at(page), 2, 'the screen behind did not move')
+  assert.equal((await r.queue('quick')).screens.find(s => s.id === 'other').status, 'waiting', 'and was not answered')
+  await page.keyboard.press('Escape')
+  // Esc while it loads: it never opens, and the page is the page's again.
+  await page.keyboard.press('r')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(600)
+  assert.equal(await page.locator('#film').isHidden(), true)
+  assert.equal(await page.evaluate(() => document.getElementById('bar').inert || document.getElementById('workspace').inert), false)
+  // Another screen before the film came: it is not opened over a screen it is not the film of.
+  await page.keyboard.press('r')
+  await page.evaluate(() => document.getElementById('back').click())
+  await page.waitForTimeout(600)
+  assert.equal(await at(page), 1)
+  assert.equal(await page.locator('#film').isHidden(), true)
+  assert.equal(await page.evaluate(() => document.getElementById('bar').inert || document.getElementById('workspace').inert), false)
+  await page.keyboard.press('ArrowRight')
+  assert.equal(await at(page), 2, 'the keys are the page\'s again')
+  assert.deepEqual(errors, [])
+})
+
+test('closed, the film gives the focus back where it was: to the menu\'s button from the menu, and to a button that had it', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Focus')
+  const { page, errors } = await r.open('focus/home', { film: 60000 })
+  await page.locator('#menuOpen').click()
+  await page.locator('#menu [data-menu=film]').click()
+  await page.locator('#film').waitFor()
+  await page.keyboard.press('Escape')
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'menuOpen')
+  await page.locator('#next').focus()
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'filmPlay')
+  await page.locator('#filmClose').click()
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'next')
+  // With nowhere to go back to, the focus does not stay on a button nobody sees.
+  await page.evaluate(() => document.activeElement.blur())
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  await page.keyboard.press('Escape')
+  assert.equal(await page.evaluate(() => !!document.activeElement?.closest('#film')), false)
+  assert.deepEqual(errors, [])
+})
+
+test('the film of a sketch plays, and says in place of Save that it cannot be saved as a file', { skip }, async () => {
+  const { writeFileSync } = await import('node:fs')
+  const r = await rig()
+  const sheet = join(r.home, 'sheet.svg')
+  writeFileSync(sheet, '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><rect width="1600" height="900" fill="#eee"/></svg>')
+  r.push('Sketch', ['Flow'], null, [], sheet)
+  r.push('Sketch', ['Flow'], null, [], sheet)
+  const { page, errors } = await r.open('sketch/flow', { film: 60000 })
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  assert.deepEqual(await page.locator('.film-round').allInnerTexts(), ['Round 1', 'Round 2'])
+  assert.equal(await page.locator('#filmSave').isHidden(), true)
+  assert.match(await page.locator('#filmLength').innerText(), /Plays here only: a film of a sketch cannot be saved as a file$/)
   assert.deepEqual(errors, [])
 })
 
