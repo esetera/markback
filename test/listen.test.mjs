@@ -844,3 +844,33 @@ test('a run whose pid now belongs to another process is not running: the pid was
   clearWake(folder)
   settle()
 })
+
+test('a run stays the same run whatever the locale, the time zone and the search path of the server that asks; an unread start time does not end it', async () => {
+  const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+  children.push(other)
+  await until(() => processStart(other.pid))
+  const first = processStart(other.pid)
+  const kept = { TZ: process.env.TZ, LC_ALL: process.env.LC_ALL, PATH: process.env.PATH }
+  try {
+    Object.assign(process.env, { TZ: 'Asia/Tokyo', LC_ALL: 'de_DE.UTF-8', PATH: '/nowhere' })
+    assert.equal(processStart(other.pid), first, 'the same words for the same process')
+  } finally {
+    for (const [key, value] of Object.entries(kept)) value === undefined ? delete process.env[key] : (process.env[key] = value)
+  }
+  // A server that cannot read the start time at all goes by the pid alone: the run is not taken as ended.
+  settle()
+  rmSync(join(home, 'work', 'wake'), { recursive: true, force: true })
+  const folder = join(home, 'proj-unread')
+  mkdirSync(folder)
+  const agent = standIn('unread')
+  setWake({ run: agent.run, folder, by: 'U', app: 'Unread' })
+  const wake = readWake(folder)
+  queuedIdea('Unread', 'Build it')
+  writeFileSync(join(home, 'work', 'wake', `${wake.key}.last.json`), JSON.stringify({ at: Date.now() - 1000, startedAt: 'earlier', for: 'older work', running: true, pid: other.pid, started: first }))
+  const waker = createWaker({ quiet: 0, backoff: 0, gap: 0, identify: () => '' })
+  assert.equal(waker.check()[wake.key], 'running', 'still the live run')
+  assert.equal(agent.runs(), 0)
+  other.kill()
+  clearWake(folder)
+  settle()
+})
