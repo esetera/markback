@@ -110,6 +110,8 @@ export function createListener({ box, local, lang, onCommand, onState, onProblem
     // Each recogniser answers only while it is the one in use: one that is still ending must not hear, or start another.
     const mine = new (Recognition())()
     rec = mine
+    // A new recogniser hears a new phrase: nothing is left over to let go.
+    skipping = false
     mine.lang = lang
     mine.continuous = true
     mine.interimResults = true
@@ -144,7 +146,9 @@ export function createListener({ box, local, lang, onCommand, onState, onProblem
     const ending = rec
     rec = null
     ending?.stop()
-    dropHearing()
+    // Words half heard when it is turned off stay where they are, as heard so far. Nothing more of the phrase is taken.
+    hearing = ''
+    hearingIn = null
     onState(false)
   }
   /** The box the phrase was going to has gone: keep what was heard so far there, and let the rest of the phrase go. */
