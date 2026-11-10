@@ -200,10 +200,14 @@ test('only pictures of the review as it is now: a picture from before a clear ne
   assert.ok(film.steps.every(step => !step.marked), 'the old review\'s marks are not in it')
 })
 
-test('a screen queued before the push kept its pictures\' rounds: each answered picture still has its true round from its answer', async () => {
+test('a screen queued before the push kept its pictures\' rounds: its kept pictures are found, and only a missing file is gone', async () => {
+  const old = await round('Before')
+  answer(old, { shapes: [box] })
+  clearApp('Before')
   const one = await round('Before')
   answer(one, { shapes: [box] })
-  await round('Before')
+  // Pushed over with no answer: its picture is still kept.
+  const two = await round('Before')
   const three = await round('Before')
   answer(three, { shapes: [box] })
   // As an older Markback wrote it: no list of pictures in the queue.
@@ -211,8 +215,18 @@ test('a screen queued before the push kept its pictures\' rounds: each answered 
   const entry = JSON.parse(readFileSync(path, 'utf8'))
   delete entry.pictures
   writeFileSync(path, JSON.stringify(entry))
-  const film = filmOf('Before', 'home')
-  assert.deepEqual(film.rounds.map(r => [r.round, basename(r.picture), r.marked.length]), [[1, basename(one.after), 1], [3, basename(three.after), 1]])
+  let film = filmOf('Before', 'home')
+  assert.deepEqual(film.rounds.map(r => [r.round, basename(r.picture), r.marked.length]), [[1, basename(one.after), 1], [2, basename(two.after), 0], [3, basename(three.after), 1]])
+  assert.equal(film.missing, 0, 'the picture of the review before the clear is not counted in')
+  // Pushed again by this Markback: the list starts at round 4, and the older rounds are still found.
+  const four = await round('Before')
+  film = filmOf('Before', 'home')
+  assert.deepEqual(film.rounds.map(r => r.round), [1, 2, 3, 4])
+  assert.equal(basename(film.rounds.at(-1).picture), basename(four.after))
+  // A file really gone is gone. Round 1 keeps its label: the answer on it says its round.
+  rmSync(join(home, 'images', two.after))
+  film = filmOf('Before', 'home')
+  assert.deepEqual(film.rounds.map(r => [r.round, basename(r.picture)]), [[1, basename(one.after)], [3, basename(three.after)], [4, basename(four.after)]])
   assert.equal(film.missing, 1)
 })
 
@@ -367,5 +381,56 @@ test('the server makes one film at a time: a second ask while one is made gets a
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/film/file?app=sketch&id=flow`)).status, 400)
   } finally {
     server.kill()
+    await new Promise(resolve => (server.exitCode === null ? server.once('exit', resolve) : resolve()))
+  }
+})
+
+test('a picture ffmpeg cannot read stops the film cleanly and says which round, in plain words', { skip: hasFfmpeg ? false : 'ffmpeg is not on this computer' }, async () => {
+  await round('Broken')
+  const cut = join(home, 'cut.png')
+  writeFileSync(cut, readFileSync(picture).subarray(0, 40))
+  await round('Broken', 'Home', '', cut)
+  const out = join(home, 'broken.mp4')
+  await assert.rejects(saveFilm(filmOf('Broken', 'home'), out), { message: 'The picture of round 2 could not be read, so the film was not saved. It still plays in the review page.' })
+  assert.equal(existsSync(out), false)
+})
+
+test('when ffmpeg fails or takes too long, the line says so in plain words, with no command line or folder, and an ffmpeg deaf to a stop is killed', async () => {
+  const tool = (name, body) => {
+    const file = join(home, name)
+    writeFileSync(file, `#!/bin/bash\n${body}\n`)
+    chmodSync(file, 0o755)
+    return file
+  }
+  // Fitting works, joining fails, with a path in what ffmpeg says.
+  const failing = tool('ffmpeg-fails', `for a in "$@"; do last="$a"; done; case "$last" in *.mp4) echo "[out#0/mp4 @ 0x1234] Could not open ${home}/x/film.mp4: No such file" >&2; exit 1;; esac; : > "$last"`)
+  const deaf = tool('ffmpeg-deaf', "trap '' TERM; while true; do sleep 1; done")
+  const film = filmOf('Story', 'home')
+  process.env.REVIEW_FFMPEG = failing
+  try {
+    const failed = await saveFilm(film, join(home, 'f.mp4')).catch(error => error)
+    assert.equal(failed.message, 'ffmpeg could not make the film: Could not open …: No such file')
+  } finally {
+    delete process.env.REVIEW_FFMPEG
+  }
+  const port = await freePort()
+  const server = spawn('node', [join(dirname(CLI), 'server.mjs')], { env: { ...process.env, REVIEW_HOME: home, REVIEW_PORT: String(port), REVIEW_FFMPEG: deaf, REVIEW_FILM_TIMEOUT: '600' }, stdio: 'ignore' })
+  try {
+    for (let i = 0; i < 100; i++) {
+      if (await fetch(`http://127.0.0.1:${port}/api/queue`).then(r => r.ok, () => false)) break
+      await new Promise(r => setTimeout(r, 100))
+    }
+    const address = `http://127.0.0.1:${port}/api/film/file?app=story&id=home`
+    const started = Date.now()
+    const slow = await fetch(address)
+    assert.equal(slow.status, 400)
+    const { error } = await slow.json()
+    assert.equal(error, 'Making the film took too long. Try a film of fewer rounds.')
+    assert.ok(Date.now() - started < 15000, 'it did not wait on the deaf ffmpeg')
+    // The one-at-a-time hold is free again: the next ask is made, not told to wait.
+    assert.notEqual((await fetch(address)).status, 409)
+  } finally {
+    server.kill()
+    await new Promise(resolve => (server.exitCode === null ? server.once('exit', resolve) : resolve()))
   }
 })

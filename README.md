@@ -274,7 +274,7 @@ The film is made from files Markback already keeps. Every push keeps its picture
 
 The video needs [ffmpeg](https://ffmpeg.org) on this computer. Markback does not install it, and says so in one line when it is missing. The film in the page needs nothing.
 
-A file holds at most 40 steps: the newest rounds that fit, and a line says how many older rounds it leaves out. It is no bigger than 1920 by 1920; a bigger picture is made smaller to fit. A sketch is an SVG, which ffmpeg does not read, so the film of a sketch plays in the page and is not saved as a file. The review page's server makes one film at a time: a second ask while one is being made is told so.
+A file holds the newest rounds that fit in 40 steps, and a line says how many older rounds it leaves out. The newest round always goes in whole, so a round marked more than 40 times makes a longer file. It is no bigger than 1920 by 1920; a bigger picture is made smaller to fit. A sketch is an SVG, which ffmpeg does not read, so the film of a sketch plays in the page and is not saved as a file. The review page's server makes one film at a time: a second ask while one is being made is told so.
 
 Inbox: `~/.review-wizard/inbox/<app>/<screen>-<mode>-<time>.{png,json}`. The JSON:
 
