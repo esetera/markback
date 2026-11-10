@@ -312,9 +312,9 @@ A Yes becomes a proposal: an agent develops the UX and pushes it, shown loudly a
 
 ### When nobody is listening
 
-Approved work must not wait unseen. An agent says that it listens while it waits (`review work wait`, `review wait`), and the page shows it: a small sign in the bar, with the agent's name when you point at it.
+Approved work must not wait unseen. An agent says that it listens while it waits (`review work wait`, `review wait`): it checks in every few seconds, and the server knows when it last did. While an agent listens, or nothing waits, the page shows nothing about it: there is nothing for you to do.
 
-When you approve a proposal, or send marks, and no agent listens, the page says so at once: "Approved. No agent is listening, so nothing will be built yet." The notice stays until you close it or an agent listens. The sign in the bar turns to a warning, and the tab's title starts with `!`. The queue shows how long each item has waited. When an agent does listen, you see one quiet line: "Claude is listening and will take this."
+When you approve a proposal, or send marks, and no agent listens, the page says so at once: "Approved. No agent is listening, so nothing will be built yet." The notice stays until you close it or an agent listens. While work waits and no agent has checked in for 15 seconds, the bar of the review page and of the queue says **No agent is listening** (or **Not heard yet**, when an agent listens for something else), and the review page's tab title starts with `!`. Point at it to see how to start one. While Markback starts your agent for you, it says **Waking your agent…**. The queue shows how long each item has waited. When an agent does listen, you see one quiet line: "Claude is listening and will take this."
 
 The notice gives one line to copy for your agent:
 
