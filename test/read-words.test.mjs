@@ -356,41 +356,53 @@ test('reading order in dense tables (rows 22, 24 and 28 pixels apart) is a row a
   for (const name of ['form1x', 'form2x']) assert.equal(say(readingOrder(shuffled(name))), form, name)
 })
 
-test('a read that finds few words is read again in halves, then by tesseract if it is here, and the most words win', async () => {
+test('the Mac read whole and in halves is joined: each place once, the whole read believed, and tesseract only when it is clearly better', async () => {
   const picture = join(work, 'few.png')
   writePicture(picture, 800, 600)
-  const log = join(work, 'mac.log')
-  // A stand-in for the Mac's script runner: one word read whole, `halves` words read in halves.
-  const mac = halves => {
-    const path = join(work, `mac-${halves}.mjs`)
-    const words = n => JSON.stringify(Array.from({ length: n }, (_, i) => ({ t: `w${i}`, x: 10 + (i % 10) * 70, y: 10 + Math.floor(i / 10) * 40, w: 60, h: 20 })))
-    writeFileSync(path, `#!/usr/bin/env node\nimport { appendFileSync } from 'node:fs'\nconst mode = process.argv.at(-1)\nappendFileSync(${JSON.stringify(log)}, mode + '\\n')\nprocess.stdout.write('{"size":{"w":800,"h":600},"words":' + (mode === 'halves' ? ${JSON.stringify(words(halves))} : ${JSON.stringify(words(1))}) + '}')\n`, { mode: 0o755 })
+  const words = (n, prefix = 'w') => Array.from({ length: n }, (_, i) => ({ t: `${prefix}${i}`, x: 10 + (i % 10) * 70, y: 10 + Math.floor(i / 10) * 40, w: 60, h: 20 }))
+  // A stand-in for the Mac's script runner, printing what the real script prints: the whole read and the read in halves.
+  const mac = (whole, halves) => {
+    const path = join(work, `mac-${whole.length}-${halves.length}-${halves[0]?.t ?? 'none'}.mjs`)
+    writeFileSync(path, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify({ size: { w: 800, h: 600 }, words: whole, halves }))})\n`, { mode: 0o755 })
     return path
   }
-  const tesseract = writeReader(join(work, 'many-reader.mjs'), { w: 800, h: 600 }, Array.from({ length: 12 }, (_, i) => ({ t: `t${i}`, x: 10 + i * 60, y: 300, w: 50, h: 20 })))
-  const runs = () => readFileSync(log, 'utf8').trim().split('\n')
+  const tesseractLog = join(work, 'tesseract.log')
+  const counted = n => {
+    const path = join(work, `counted-${n}.mjs`)
+    const rows = ['level\tp\tb\tpa\tl\tw\tleft\ttop\twidth\theight\tconf\ttext', '1\t1\t0\t0\t0\t0\t0\t0\t800\t600\t-1\t', ...Array.from({ length: n }, (_, i) => `5\t1\t1\t1\t1\t${i}\t${10 + i * 60}\t300\t50\t20\t96\tt${i}`)]
+    writeFileSync(path, `#!/usr/bin/env node\nimport { appendFileSync } from 'node:fs'\nappendFileSync(${JSON.stringify(tesseractLog)}, 'read\\n')\nprocess.stdout.write(${JSON.stringify(rows.join('\n') + '\n')})\n`, { mode: 0o755 })
+    return path
+  }
+  const asked = () => (existsSync(tesseractLog) ? readFileSync(tesseractLog, 'utf8').trim().split('\n').filter(Boolean).length : 0)
   try {
-    // Halves find plenty: they win, and tesseract is not asked.
-    process.env.REVIEW_TESSERACT = tesseract
-    writeFileSync(log, '')
-    assert.equal((await readPicture(picture, { mac: mac(40) })).words.length, 40)
-    assert.deepEqual(runs(), ['whole', 'halves'])
-    // Halves find little too: tesseract reads it, and its twelve words win over three.
-    writeFileSync(log, '')
-    assert.equal(say((await readPicture(picture, { mac: mac(3) })).words), Array.from({ length: 12 }, (_, i) => `t${i}`).join(' '))
-    assert.deepEqual(runs(), ['whole', 'halves'])
-    // tesseract finds a little more, not half as many again: the Mac's words are kept, since tesseract reads icons as letters.
-    process.env.REVIEW_TESSERACT = writeReader(join(work, 'four-reader.mjs'), { w: 800, h: 600 }, Array.from({ length: 4 }, (_, i) => ({ t: `t${i}`, x: 10 + i * 60, y: 300, w: 50, h: 20 })))
-    assert.equal(say((await readPicture(picture, { mac: mac(3) })).words), 'w0 w1 w2')
-    // No tesseract: the most the Mac found.
+    process.env.REVIEW_TESSERACT = counted(12)
+    // The whole read missed most of the screen; the halves found it. Joined, each place once, and tesseract is not asked.
+    writeFileSync(tesseractLog, '')
+    assert.equal((await readPicture(picture, { mac: mac(words(1), words(40)) })).words.length, 40)
+    assert.equal(asked(), 0)
+    // The same place read two ways: the whole read's word is kept, and the misread in a half adds nothing. (No tesseract
+    // here: two words on a screen this size is almost nothing, and it would be asked.)
     process.env.REVIEW_TESSERACT = join(work, 'no-tesseract')
-    assert.equal((await readPicture(picture, { mac: mac(3) })).words.length, 3)
+    const whole = [{ t: 'Lopez', x: 100, y: 100, w: 60, h: 20 }]
+    const halves = [{ t: 'L0pez', x: 101, y: 101, w: 58, h: 20 }, { t: 'Role', x: 400, y: 100, w: 50, h: 20 }]
+    assert.equal(say((await readPicture(picture, { mac: mac(whole, halves) })).words), 'Lopez Role')
+    process.env.REVIEW_TESSERACT = counted(12)
+    // Almost nothing even joined: tesseract reads it, and its twelve words win over three.
+    writeFileSync(tesseractLog, '')
+    assert.equal(say((await readPicture(picture, { mac: mac([], words(3)) })).words), Array.from({ length: 12 }, (_, i) => `t${i}`).join(' '))
+    assert.equal(asked(), 1)
+    // tesseract finds a little more, not half as many again: the Mac's words are kept, since tesseract reads icons as letters.
+    process.env.REVIEW_TESSERACT = counted(4)
+    assert.equal(say((await readPicture(picture, { mac: mac([], words(3)) })).words), 'w0 w1 w2')
+    // No tesseract: what the Mac found.
+    process.env.REVIEW_TESSERACT = join(work, 'no-tesseract')
+    assert.equal((await readPicture(picture, { mac: mac([], words(3)) })).words.length, 3)
   } finally {
     delete process.env.REVIEW_TESSERACT
   }
 })
 
-test('the Mac\'s reader, reading in halves, keeps each word once and in the whole picture\'s pixels', { skip: process.platform === 'darwin' ? false : 'only on a Mac' }, async () => {
+test('the Mac\'s reader in halves finds each word once, in the whole picture\'s pixels, and the joined list has no doubles', { skip: process.platform === 'darwin' ? false : 'only on a Mac' }, async () => {
   // A short picture with a word in each quarter and one across the middle, read with the halves the retry uses.
   const picture = join(work, 'quarters.png')
   execFileSync('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit')
@@ -410,15 +422,17 @@ function run(argv) {
   $.NSGraphicsContext.restoreGraphicsState
   rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $.NSDictionary.dictionary).writeToFileAtomically(argv[0], true)
 }`, picture])
-  // The script itself, asked for halves, as the retry asks it.
+  // The script itself, which reads the picture whole and then in halves.
   const source = readFileSync(join(here, '..', 'lib', 'read-words.mjs'), 'utf8')
   const script = /const MAC_SCRIPT = `([\s\S]*?)`\n/.exec(source)[1].replace(/\\\\/g, '\\')
-  const said = JSON.parse(execFileSync('osascript', ['-l', 'JavaScript', '-e', script, picture, '1600', '200', 'halves'], { encoding: 'utf8' }))
-  const list = readingOrder((await import('../lib/read-words.mjs')).withoutDoubles(said.words))
-  // The reader may run two short words together ("Lowerleft"): that is its reading, not the halves'. Each is there once.
-  assert.equal(say(list).replace(/ /g, ''), 'UpperleftUpperrightAcrossthemiddleofthepageLowerleftLowerright')
-  const across = list.find(word => word.t === 'Across')
-  assert.ok(Math.abs(across.x - 520) < 12 && Math.abs(across.y - 352) < 14, JSON.stringify(across))
+  const said = JSON.parse(execFileSync('osascript', ['-l', 'JavaScript', '-e', script, picture, '1600', '200'], { encoding: 'utf8' }))
+  const { joinReads, withoutDoubles } = await import('../lib/read-words.mjs')
+  // The halves alone find a word at each place drawn, in the whole picture's pixels, each place once.
+  const halves = withoutDoubles(said.halves)
+  for (const [x, y] of [[80, 112], [900, 112], [520, 352], [80, 610], [900, 610]]) assert.equal(halves.filter(word => Math.abs(word.x - x) < 14 && Math.abs(word.y - y) < 16).length, 1, `${x},${y} in ${JSON.stringify(halves)}`)
+  // Joined with the whole read, no place has two words.
+  const joined = joinReads(said.words, said.halves)
+  for (const [n, word] of joined.entries()) for (const other of joined.slice(n + 1)) assert.ok(!(Math.abs(word.x - other.x) < 6 && Math.abs(word.y - other.y) < 6), `${word.t} and ${other.t} at one place`)
 })
 
 test('almost nothing is judged by the size of the words, so a sharp screenshot is judged as its plain one, and an ordinary screen is not read twice', () => {
@@ -428,4 +442,37 @@ test('almost nothing is judged by the size of the words, so a sharp screenshot i
   assert.equal(foundLittle(words(1, 24), { w: 1280, h: 720 }), true, 'one heading on a whole screen')
   assert.equal(foundLittle(words(28, 18), { w: 1280, h: 720 }), false, 'a short settings page')
   assert.equal(foundLittle(words(2, 16), { w: 300, h: 200 }), false, 'a small picture may hold little')
+})
+
+test('the Mac\'s reader on real screens: a dense table with all its columns, and no word twice', { skip: process.platform === 'darwin' ? false : 'only on a Mac' }, async () => {
+  // A dense table drawn here: rows 22 pixels apart, 13 point type, four columns, eight rows, beside a side list.
+  const picture = join(work, 'dense-table.png')
+  const rows = [['Ana Lopez', 'Editor', 'Active', '12 Mar 2026'], ['Ben Okafor', 'Author', 'Invited', '3 Apr 2026'], ['Chen Wei', 'Reviewer', 'Active', '19 May 2026'], ['Dara Singh', 'Author', 'Paused', '2 Jun 2026'], ['Eli Moss', 'Admin', 'Active', '27 Jul 2026'], ['Fay Grant', 'Reviewer', 'Invited', '8 Aug 2026'], ['Gus Hale', 'Author', 'Active', '9 Sep 2026'], ['Hana Ito', 'Editor', 'Paused', '1 Oct 2026']]
+  execFileSync('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit')
+function run(argv) {
+  const W = 1280, H = 720
+  const rows = JSON.parse(argv[1])
+  const rep = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(null, W, H, 8, 4, true, false, $.NSCalibratedRGBColorSpace, 0, 0)
+  $.NSGraphicsContext.saveGraphicsState
+  $.NSGraphicsContext.setCurrentContext($.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep))
+  $.NSColor.whiteColor.set
+  $.NSRectFill($.NSMakeRect(0, 0, W, H))
+  const style = $.NSDictionary.dictionaryWithObjectForKey($.NSFont.systemFontOfSize(13), $.NSFontAttributeName)
+  for (const [n, item] of ['Acme Journal', 'Dashboard', 'People'].entries()) $(item).drawAtPointWithAttributes($.NSMakePoint(20, H - 40 - n * 30), style)
+  for (const [r, row] of rows.entries()) for (const [c, cell] of row.entries()) $(cell).drawAtPointWithAttributes($.NSMakePoint(230 + c * 250, H - 100 - r * 22), style)
+  $.NSGraphicsContext.restoreGraphicsState
+  rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $.NSDictionary.dictionary).writeToFileAtomically(argv[0], true)
+}`, picture, JSON.stringify(rows)])
+  const once = list => {
+    for (const [n, word] of list.words.entries()) for (const other of list.words.slice(n + 1)) assert.ok(!(word.t === other.t && Math.abs(word.x - other.x) < 8 && Math.abs(word.y - other.y) < 8), `${word.t} twice`)
+  }
+  const started = Date.now()
+  const table = await readPicture(picture)
+  const took = Date.now() - started
+  once(table)
+  // Every cell of every column, a row at a time.
+  for (const column of [0, 1, 2, 3]) for (const row of rows) assert.ok(say(table.words).includes(row[column]), `${row[column]} in: ${say(table.words)}`)
+  assert.ok(say(table.words).includes('Chen Wei Reviewer Active 19 May 2026'), say(table.words))
+  assert.ok(took < 5000, `read in ${took} ms`)
+  for (const name of ['screen', 'picture']) once(await readPicture(join(here, '..', 'docs', `${name}.png`)))
 })
