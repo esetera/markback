@@ -10,6 +10,7 @@ import { extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
+import { hasReader, wordsForPicture } from './lib/read-words.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
@@ -96,7 +97,13 @@ const server = createServer(async (req, res) => {
   // Only this computer's own pages: another site open in the browser must not write here, or read by renaming itself.
   if (!isLocal(req)) return json(res, 403, { error: 'Only this computer can use this.' })
   try {
-    if (req.method === 'GET' && url.pathname === '/api/queue') return json(res, 200, { apps: listApps() })
+    // `reader`: whether this computer can read words off a picture, so the page shows the words tool only where it can work.
+    if (req.method === 'GET' && url.pathname === '/api/queue') return json(res, 200, { apps: listApps(), reader: hasReader() })
+    if (req.method === 'POST' && url.pathname === '/api/read-words') {
+      // A picture pushed with no word list: its words are read here, once, and the list is kept beside it.
+      const input = JSON.parse(await body(req))
+      return json(res, 200, await wordsForPicture(String(input.after ?? '')))
+    }
     if (req.method === 'GET' && url.pathname.startsWith('/images/')) {
       const path = inside(IMAGES, decodeURIComponent(url.pathname.slice('/images/'.length)))
       // Pushed pictures are never changed in place (a new push makes a new name), so they can be kept.

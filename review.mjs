@@ -95,6 +95,7 @@ function describe(r) {
     // A mark's words came from a page or a file. Printed with no new lines and no codes, they cannot pass for a line of this report.
     lines.push(`  ${i + 1}. ${printable(`${what} (${s.colour ?? s.color}) at ${box}${sayWords(s)}`)}`)
   }
+  if (r.wordsRead && r.shapes.some(s => s.words)) lines.push('  The words on the marks were read off the picture, so a few may be wrong.')
   if (r.annotatedImage) lines.push(`  Marked picture: ${r.annotatedImage}`)
   lines.push(`  After: ${r.afterImage}${r.beforeImage ? `\n  Before: ${r.beforeImage}` : ''}`)
   lines.push(`  File: ${r.file}`)

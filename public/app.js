@@ -236,7 +236,9 @@ const liveScreen = s => state.apps.find(a => a.slug === s.appSlug)?.screens.find
 
 async function loadQueue() {
   const res = await fetch('/api/queue', { cache: 'no-store' })
-  const { apps } = await res.json()
+  const { apps, reader } = await res.json()
+  // Whether this computer can read words off a picture. It does not change while the server runs.
+  state.reader = reader === true
   const text = JSON.stringify(apps)
   state.loaded = true
   document.body.classList.remove('loading')
@@ -1160,13 +1162,16 @@ function render() {
   }
   // Not while the opening page is up: a reload there is still an opening.
   if (!state.arriving) history.replaceState(null, '', `#${a.slug}/${s.id}`)
-  setHtml($('toolButtons'), TOOLS.map(t => `<button class="tool${state.tool === t.id ? ' on' : ''}${t.id === 'words' && !wordsNow() ? ' unlit' : ''}" data-tool="${t.id}" ${tip(t.id === 'words' && !wordsNow() ? 'This picture has no word list: this draws a box' : t.tip, t.key)}>${ICONS[t.id]}</button>`).join(''))
+  // The words tool where it can work, unlit with why while it cannot yet. Hidden where it never can: then a box stands in.
+  const wordsTip = wordsNow() ? '' : wordsWhy(s)
+  const shownTool = toolNow()
+  setHtml($('toolButtons'), TOOLS.filter(t => t.id !== 'words' || wordsTip !== null).map(t => `<button class="tool${shownTool === t.id ? ' on' : ''}${t.id === 'words' && wordsTip ? ' unlit' : ''}" data-tool="${t.id}" ${tip(t.id === 'words' && wordsTip ? wordsTip : t.tip, t.key)}>${ICONS[t.id]}</button>`).join(''))
   setHtml($('colours'), COLOURS.map((c, i) => `<button class="tool swatch${state.colour === c.value ? ' on' : ''}" data-colour="${c.value}" style="--c:${c.value}" ${tip(c.label, String(i + 1))}><i></i></button>`).join(''))
   const views = s.before ? VIEWS : VIEWS.filter(v => v.id === 'after')
   if (!s.before) state.view = 'after'
   setHtml($('views'), views.length > 1 ? views.map(v => `<button class="btn${state.view === v.id ? ' on' : ''}" data-view="${v.id}" ${tip(`Show ${v.label.toLowerCase()}`, 'V')}>${v.label}</button>`).join('') : '')
   $('pair').className = `pair view-${state.view}`
-  $('scroller').className = `scroller tool-${state.tool}`
+  $('scroller').className = `scroller tool-${toolNow()}`
   $('afterCaption').textContent = state.view === 'side' ? 'After (draw here)' : 'After'
 
   if (state.shownKey !== keyOf(s) + s.after) showPicture(s)
@@ -1257,7 +1262,8 @@ function showPicture(s) {
     $('scroller').scrollTop = 0
     paint()
   }
-  loadWords(s)
+  loadWords(s.words)
+  readWordsOf(s)
   const url = `/images/${s.after}`
   const held = pictures.get(url)
   $('beforeImg').src = s.before ? `/images/${s.before}` : ''
@@ -1279,26 +1285,68 @@ function showPicture(s) {
 /* ---------- the words in a picture: a list saved with it, so the words themselves can be marked ---------- */
 
 const wordLists = new Map()
+/**
+ * Lists read off bare pictures by the server, as each picture's name has them: { state: 'reading' | 'done' | 'none' | 'failed'
+ * | 'not-readable', words }. Each picture is asked about once, when it is first on show, and never all at once.
+ */
+const readLists = new Map()
+/** The name of the list for a screen: given with the push, or read off its picture. '' while there is none. */
+const listOf = s => s?.words || readLists.get(s?.after)?.words || ''
 /** The list for the picture on show, in the picture's own pixels, or null: none came with it, or it has not arrived yet. */
 const wordsNow = () => {
   const s = screen()
-  const held = s?.words && wordLists.get(s.words)
-  if (!held || !state.size) return null
+  const held = listOf(s) && wordLists.get(listOf(s))
+  if (!held?.words || !state.size) return null
   // A list made at another scale, a sharper screenshot say, is fitted to the picture. Worked out once for each size.
   const k = held.wide ? state.size.w / held.wide : 1
   if (held.fitted?.k !== k) held.fitted = { k, words: k === 1 ? held.words : held.words.map(w => ({ ...w, x: w.x * k, y: w.y * k, w: w.w * k, h: w.h * k })) }
   return held.fitted.words
 }
-function loadWords(s) {
-  if (!s.words || wordLists.has(s.words)) return
-  wordLists.set(s.words, null)
-  fetch(`/images/${s.words}`).then(res => (res.ok ? res.json() : null)).then(list => {
+/**
+ * Why the words tool cannot mark words on this screen yet, as its tip, or null when it never can: the picture has no list and
+ * this computer has nothing to read one with. Then the tool is not shown at all.
+ */
+function wordsWhy(s) {
+  if (!s || (!listOf(s) && !state.reader)) return null
+  const held = wordLists.get(listOf(s))
+  if (held?.empty) return 'No words were found in this picture: this draws a box'
+  if (held?.gone) return 'This picture has no word list: this draws a box'
+  if (listOf(s)) return 'Loading the words in this picture. Until then this draws a box'
+  const read = readLists.get(s.after)
+  if (!read || read.state === 'reading') return 'Reading the words in this picture. Until then this draws a box'
+  return 'This picture has no word list: this draws a box'
+}
+/** The tool in use here: the words tool, where it is not shown, draws boxes, and comes back on a screen where it is. */
+const toolNow = () => (state.tool === 'words' && wordsWhy(screen()) === null && !wordsNow() ? 'box' : state.tool)
+function loadWords(name) {
+  if (!name || wordLists.has(name)) return
+  wordLists.set(name, null)
+  fetch(`/images/${name}`).then(res => (res.ok ? res.json() : null)).then(list => {
     const words = Array.isArray(list?.words) ? list.words.filter(w => typeof w?.t === 'string' && [w.x, w.y, w.w, w.h].every(Number.isFinite)) : []
-    wordLists.set(s.words, words.length ? { words, wide: Number(list.size?.w) || 0 } : null)
-    if (screen()?.words === s.words) render()
+    wordLists.set(name, words.length ? { words, wide: Number(list.size?.w) || 0 } : list ? { empty: true } : { gone: true })
+    if (listOf(screen()) === name) render()
   }).catch(() => {
     // No list after all: the tool draws a box, as it does for any picture without one.
+    wordLists.set(name, { gone: true })
+    if (listOf(screen()) === name) render()
   })
+}
+/** A picture pushed with no list: the server reads its words, here on this computer, and the list lands when it is ready. */
+function readWordsOf(s) {
+  if (s.words || !state.reader || readLists.has(s.after)) return
+  readLists.set(s.after, { state: 'reading' })
+  fetch('/api/read-words', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ after: s.after }) })
+    .then(res => res.json())
+    .then(out => {
+      readLists.set(s.after, out.words ? { state: 'done', words: out.words } : { state: out.why || 'failed' })
+      loadWords(out.words)
+      if (screen()?.after === s.after) render()
+    })
+    .catch(() => {
+      // The server away: asked again when the picture is next on show.
+      readLists.delete(s.after)
+      if (screen()?.after === s.after) render()
+    })
 }
 /** The word a point is on, or the nearest one. Words are in reading order, so two of them name everything between. */
 function wordAt(words, [x, y], { near = false } = {}) {
@@ -1572,7 +1620,7 @@ $('canvas').addEventListener('pointerdown', event => {
   const p = at(event)
   if (state.tool === 'speak') return void startPin(p)
   const w = strokeFor(markWidth())
-  const words = state.tool === 'words' ? wordsNow() : null
+  const words = toolNow() === 'words' ? wordsNow() : null
   if (words) {
     const on = wordAt(words, p, { near: true })
     if (on >= 0) draft = { ...wordsMark(words, on, on, state.colour), start: on }
@@ -2552,7 +2600,8 @@ document.addEventListener('keydown', event => {
   else if (/^[1-4]$/.test(key)) setColour(COLOURS[Number(key) - 1].value)
   else {
     const tool = { b: 'box', a: 'arrow', p: 'pen', t: 'text', m: 'pan', e: 'words', d: 'speak' }[key.toLowerCase()]
-    if (tool) setTool(tool)
+    // Where the words tool is not shown, E does nothing: there is no list, and no way to make one here.
+    if (tool && !(tool === 'words' && wordsWhy(screen()) === null)) setTool(tool)
   }
 })
 
