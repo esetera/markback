@@ -81,8 +81,10 @@ export function unheardWords(listening, made = null) {
   const stays = made === 'build' || (!made && unheard.queue) ? 'nothing will be built yet' : !made && !unheard.marks && unheard.ideas ? 'no ideas will come yet' : 'nothing will change yet'
   const line = made === 'marks' ? MARKS_LINE : made ? QUEUE_LINE : lineFor(unheard)
   if (wake?.status === 'waking') return { state: 'waking', head: `${done}Waking your agent…`, sub: `${wake.by} starts by itself. This takes a minute or two.`, log: '', line: '', setup: false }
-  if (wake?.status === 'failed' || wake?.status === 'late') {
-    return { state: 'warn', head: `${done}${wake.status === 'failed' ? 'Your agent did not start.' : 'Your agent was started, but it does not listen yet.'}`, sub: `${wake.status === 'failed' ? 'The wake command ended, and the work still waits.' : 'It can be slow. If nothing happens, start it yourself.'} Open your agent and give it this line:`, log: wake.lastLine ?? '', line, setup: false }
+  if (wake?.status === 'failed' || wake?.status === 'late' || wake?.status === 'stuck') {
+    const head = { failed: 'Your agent did not start.', late: 'Your agent was started, but it does not listen yet.', stuck: 'Your agent has run for over 30 minutes and does not listen.' }[wake.status]
+    const sub = { failed: 'The wake command ended, and the work still waits.', late: 'It can be slow. If nothing happens, start it yourself.', stuck: 'Markback no longer waits for it, and starts it again for new work.' }[wake.status]
+    return { state: 'warn', head: `${done}${head}`, sub: `${sub} Open your agent and give it this line:`, log: wake.lastLine ?? '', line, setup: false }
   }
   const nobody = agents.length ? `${agentsWords(agents)}, but not for this, so ${stays}.` : `No agent is listening, so ${stays}.`
   return { state: 'warn', head: `${done}${nobody}`, sub: wake ? 'Wake is off. Turn it on in the menu, or give your agent this line:' : 'Give your agent this line:', log: '', line, setup: !wake }
