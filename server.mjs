@@ -10,7 +10,7 @@ import { extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
-import { hasReader, wordsForPicture } from './lib/read-words.mjs'
+import { hasReader, stopReading, wordsForPicture } from './lib/read-words.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
@@ -181,5 +181,7 @@ server.on('error', error => {
   console.error(`Port ${PORT} is taken. Choose another: review start --port ${PORT + 1}`)
   process.exit(1)
 })
+// Stopped (review stop, or Ctrl-C): a reader still at work stops too, rather than go on after the server.
+for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => void stopReading().finally(() => process.exit(0)))
 // This computer only: nothing here is reachable from another machine.
 server.listen(PORT, '127.0.0.1', () => console.log(`Markback on http://localhost:${PORT}`))

@@ -3,8 +3,9 @@
  * and the Mac's own reader on a picture made here (on a Mac only).
  */
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
@@ -183,7 +184,10 @@ test('a turned JPEG is not given to tesseract, whose boxes would be for the pixe
   }
 })
 
-/** The words two real screenshots in docs/ were read as, in no order: the order comes only from readingOrder. */
+/**
+ * The words real screenshots were read as by the Mac's reader, in no order: the order comes only from readingOrder. Two are in
+ * docs/; two are pages made for the test: a people table beside a side list, and three plan cards with a line under them.
+ */
 const shapes = JSON.parse(readFileSync(join(here, 'read-words-shapes.json'), 'utf8'))
 const shuffled = name => shapes[name].words.map(([t, x, y, w, h]) => ({ t, x, y, w, h }))
 
@@ -224,4 +228,123 @@ function run(argv) {
   const numbers = list.words.filter((word, n) => list.words[n - 1]?.t === 'Line')
   assert.deepEqual(numbers.map(word => word.t), Array.from({ length: 30 }, (_, n) => String(n + 1)))
   for (const [n, word] of numbers.entries()) assert.ok(Math.abs(word.y - ((n + 1) * 296 - 20)) < 30, `line ${n + 1} at ${word.y}`)
+})
+
+test('reading order in a table: a row at a time however close the rows, beside a side list, and a form row by row', () => {
+  // The people table: the side list first, then the table a row at a time, so a drag along one row takes that row.
+  assert.equal(say(readingOrder(shuffled('table'))), 'Acme Journal Dashboard Submissions People Settings People Name Role Status Joined Ana Lopez Editor Active 12 Mar 2026 Ben Okafor Author Invited 3 Apr 2026 Chen Wei Reviewer Active 19 May 2026 Dara Singh Author Paused 2 Jun 2026 Eli Moss Admin Active 27 Jul 2026 Fay Grant Reviewer Invited 8 Aug 2026')
+  // A dense table: rows 24 pixels apart, 14 pixel type, so no gap between rows is as high as a line.
+  const cell = (x, y, text) => text.split(' ').map((t, n) => ({ t, x: x + n * 45, y, w: 40, h: 14 }))
+  const dense = [['Name', 'Role', 'Joined'], ['Ana Lopez', 'Editor', 'March'], ['Ben Okafor', 'Author', 'April'], ['Chen Wei', 'Admin', 'May']].flatMap((row, r) => row.flatMap((text, c) => cell(20 + c * 300, 40 + r * 24, text)))
+  assert.equal(say(readingOrder([...dense].reverse())), 'Name Role Joined Ana Lopez Editor March Ben Okafor Author April Chen Wei Admin May')
+  // A form with its labels on the left and its fields on the right: each label with its field.
+  const form = [['Name', 'Ana Lopez'], ['Email', 'ana@example.org'], ['Role', 'Editor']].flatMap(([label, field], r) => [...cell(20, 30 + r * 40, label), ...cell(240, 30 + r * 40, field)])
+  assert.equal(say(readingOrder([...form].reverse())), 'Name Ana Lopez Email ana@example.org Role Editor')
+})
+
+test('reading order in cards: each card through, and a line under them after them all', () => {
+  assert.equal(say(readingOrder(shuffled('cards'))), 'Choose a plan Starter Free for one person Up to 3 projects Team $12 a person a month Unlimited projects Business $30 a person a month Single sign-on Prices do not include tax. You can change plan at any time.')
+})
+
+test('doubles from overlapping bands are taken out; the same word elsewhere is kept', async () => {
+  const { withoutDoubles } = await import('../lib/read-words.mjs')
+  const word = (t, x, y) => ({ t, x, y, w: 40, h: 14 })
+  assert.deepEqual(withoutDoubles([word('Line', 10, 100), word('Line', 11, 101), word('Line', 10, 300), word('Lane', 10, 100)]), [word('Line', 10, 100), word('Line', 10, 300), word('Lane', 10, 100)])
+})
+
+test('the Mac\'s reader keeps a line that sits where two bands meet', { skip: process.platform === 'darwin' ? false : 'only on a Mac' }, async () => {
+  // The first band is 0 to 1600 and the second starts at 1400. Lines centred on 1500, where the two meet half way, a pixel either
+  // side of it, and on each band's cut edge: each picture holds one, and each must be found once.
+  const centres = [1499, 1500, 1501, 1400, 1600]
+  const pictures = centres.map(c => join(work, `edge-${c}.png`))
+  execFileSync('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit')
+function run(argv) {
+  const W = 1440, H = 4000
+  for (let i = 0; i < argv.length; i += 2) {
+    const centre = Number(argv[i + 1])
+    const rep = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(null, W, H, 8, 4, true, false, $.NSCalibratedRGBColorSpace, 0, 0)
+    $.NSGraphicsContext.saveGraphicsState
+    $.NSGraphicsContext.setCurrentContext($.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep))
+    $.NSColor.whiteColor.set
+    $.NSRectFill($.NSMakeRect(0, 0, W, H))
+    const font = $.NSFont.systemFontOfSize(15)
+    const style = $.NSDictionary.dictionaryWithObjectForKey(font, $.NSFontAttributeName)
+    // The line's middle is half its height above where it is drawn from, counted from the foot of the picture.
+    const text = $('Edge line at ' + centre)
+    const high = text.sizeWithAttributes(style).height
+    text.drawAtPointWithAttributes($.NSMakePoint(60, H - centre - high / 2), style)
+    $('Top line').drawAtPointWithAttributes($.NSMakePoint(60, H - 300), style)
+    $('Foot line').drawAtPointWithAttributes($.NSMakePoint(60, 300), style)
+    $.NSGraphicsContext.restoreGraphicsState
+    rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $.NSDictionary.dictionary).writeToFileAtomically(argv[i], true)
+  }
+}`, ...pictures.flatMap((p, n) => [p, String(centres[n])])])
+  for (const [n, picture] of pictures.entries()) {
+    const list = await readPicture(picture)
+    assert.equal(say(list.words), `Top line Edge line at ${centres[n]} Foot line`, `centred on ${centres[n]}`)
+  }
+})
+
+test('the Mac\'s reader loses no line of a real screen set down a tall page, wherever its lines fall on the bands', { skip: process.platform === 'darwin' ? false : 'only on a Mac' }, async () => {
+  // docs/screen.png in the middle of a white page, so that its lines fall across where two bands meet, a pixel apart.
+  const flat = await readPicture(join(here, '..', 'docs', 'screen.png'))
+  const count = (list, text) => list.words.filter(word => word.t === text).length
+  for (const top of [1149, 1150, 1151]) {
+    const tall = join(work, `screen-down-${top}.png`)
+    execFileSync('sips', ['--padToHeightWidth', String(top * 2 + 900), '1440', '--padColor', 'FFFFFF', join(here, '..', 'docs', 'screen.png'), '--out', tall], { stdio: 'ignore' })
+    const list = await readPicture(tall)
+    // The panel's last rows fall where the bands meet: every word there is read, and none twice.
+    for (const text of ['Tools', 'shed', 'Shared', 'Work', 'days', 'Two', 'season']) assert.equal(count(list, text), count(flat, text), `${text} with the screen ${top} down`)
+  }
+})
+
+test('a server that stops stops the reader it was running, even one that will not stop when asked', async () => {
+  const home = mkdtempSync(join(work, 'serve-'))
+  const pidFile = join(home, 'reader.pid')
+  const stuck = join(home, 'stuck.mjs')
+  writeFileSync(stuck, `#!/usr/bin/env node\nimport { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(pidFile)}, String(process.pid))\nprocess.on('SIGTERM', () => {})\nsetInterval(() => {}, 1000)\n`, { mode: 0o755 })
+  const port = await new Promise(resolve => {
+    const probe = createServer().listen(0, '127.0.0.1', () => {
+      const { port } = probe.address()
+      probe.close(() => resolve(port))
+    })
+  })
+  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: String(port), REVIEW_TESSERACT: stuck }
+  const picture = join(home, 'p.png')
+  writePicture(picture, 60, 40)
+  const pushed = JSON.parse(execFileSync('node', ['--input-type=module', '-e', `import { push } from ${JSON.stringify(join(here, '..', 'lib', 'store.mjs'))}; console.log(JSON.stringify(push({ app: 'Serve', screen: 'One', after: ${JSON.stringify(picture)} })))`], { env, encoding: 'utf8' }))
+  const server = spawn('node', [join(here, '..', 'server.mjs')], { env, stdio: 'ignore' })
+  const until = async (check, what) => {
+    for (let i = 0; i < 100; i++) {
+      if (await check()) return
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    throw new Error(`${what} did not happen`)
+  }
+  try {
+    await until(() => fetch(`http://127.0.0.1:${port}/api/queue`).then(r => r.ok, () => false), 'the server starting')
+    const asked = await (await fetch(`http://127.0.0.1:${port}/api/read-words`, { method: 'POST', body: JSON.stringify({ after: pushed.after }) })).json()
+    assert.equal(asked.reading, true)
+    await until(() => existsSync(pidFile), 'the reader starting')
+    const pid = Number(readFileSync(pidFile, 'utf8'))
+    const exited = new Promise(resolve => server.once('exit', resolve))
+    server.kill('SIGTERM')
+    await exited
+    const alive = () => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    await until(() => !alive(), 'the reader stopping')
+  } finally {
+    server.kill('SIGKILL')
+    try {
+      process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL')
+    } catch {
+      // Already gone, as it should be.
+    }
+  }
 })
