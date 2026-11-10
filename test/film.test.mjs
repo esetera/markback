@@ -11,7 +11,7 @@ import { writePicture } from './helpers.mjs'
 const home = mkdtempSync(join(tmpdir(), 'review-film-'))
 process.env.REVIEW_HOME = home
 const { QUEUE, clearApp, push, receive } = await import('../lib/store.mjs')
-const { MOST_STEPS, STEP_SECONDS, filmOf, filmScreen, saveFilm, savedPart } = await import('../lib/film.mjs')
+const { MOST_STEPS, STEP_SECONDS, filmOf, filmScreen, madeAt, saveFilm, savedPart } = await import('../lib/film.mjs')
 const { pictureSize } = await import('../lib/words.mjs')
 after(() => rmSync(home, { recursive: true, force: true }))
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'review.mjs')
@@ -246,6 +246,13 @@ test('a screen queued before the list, with a file gone after a clear: the old r
   // One file left for rounds 1 and 2 cannot say which it is: it is not guessed at, and no older file stands in.
   assert.deepEqual(film.rounds.map(r => [r.round, basename(r.picture)]), [[3, basename(fresh[2].after)]])
   assert.equal(film.missing, 2)
+})
+
+test('where the file system does not say when a folder was made, no start is taken: 0, or the time it last changed, are not a start', () => {
+  assert.equal(madeAt('x', () => ({ birthtimeMs: 1000.4, ctimeMs: 5000 })), 1000)
+  assert.equal(madeAt('x', () => ({ birthtimeMs: 0, ctimeMs: 5000 })), null, 'no time of making')
+  assert.equal(madeAt('x', () => ({ birthtimeMs: 5000.2, ctimeMs: 5000.9 })), null, 'the last change, given in its place')
+  assert.equal(madeAt('x', () => { throw new Error('gone') }), null)
 })
 
 /** The first bytes of a picture of each kind, which are all that is read for its size. */
