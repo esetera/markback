@@ -1,3 +1,5 @@
+import './own-home.mjs'
+import { folderKey } from '../lib/home.mjs'
 /**
  * Approved work must not wait unseen: agents say when they listen, `review work` says all that waits for one, the server wakes
  * an agent when none listens, and Claude Code's hooks keep a session from going idle. All on a store of its own.
@@ -14,7 +16,9 @@ import { writePicture } from './helpers.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const CLI = join(ROOT, 'review.mjs')
-const home = realpathSync(mkdtempSync(join(tmpdir(), 'review-listen-')))
+// The person's own store, in this test file's own home folder (see own-home.mjs): what it holds is theirs.
+const home = join(realpathSync(process.env.HOME), '.review-wizard')
+mkdirSync(home, { recursive: true })
 process.env.REVIEW_HOME = home
 const children = []
 after(() => {
@@ -398,8 +402,10 @@ test('the running server is the heartbeat, and the HTTP API can turn wake on and
     // Not set up: nothing to show, nothing to turn on, and the API makes none.
     assert.equal((await (await fetch(`${at}/api/queue`)).json()).listening.wake, null)
     assert.equal((await post('/api/wake', { on: true, run: 'touch made-by-a-page' })).status, 404)
-    const wakeFile = () => join(store, 'work', 'wake', readdirSync(join(store, 'work', 'wake')).find(f => f.endsWith('.json') && !f.endsWith('.last.json')))
-    assert.equal(existsSync(join(store, 'work', 'wake')), false, 'a page cannot make a wake command')
+    // A store other than the person's own keeps its wake command in the person's own folder, never in the store (wake.mjs).
+    const wakes = join(realpathSync(process.env.HOME), '.review-wizard', 'store-wakes', folderKey(store))
+    const wakeFile = () => join(wakes, readdirSync(wakes).find(f => f.endsWith('.json') && !f.endsWith('.last.json')))
+    assert.equal(existsSync(wakes), false, 'a page cannot make a wake command')
     execFileSync('node', [CLI, 'wake', 'set', '--run', `node ${script} '{prompt}'`, '--by', 'Stand-in', '--in', store, '--app', 'App'], { env: its })
     execFileSync('node', ['-e', `import(${JSON.stringify(join(ROOT, 'lib/work.mjs'))}).then(w => { const a = w.askForIdeas({ target: 'App', count: 1 }); const i = w.postIdea({ request: a.id, what: 'Build me', why: 'Why', size: 'S' }); w.decide(i.id, 'yes') })`], { env: its })
     await until(() => existsSync(told), 'the server did not wake the stand-in')

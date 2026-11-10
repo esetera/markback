@@ -12,7 +12,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --import ./test/own-home.mjs --test test/*.test.mjs"
   },
   "author": "Pure Science Inc. <adam@pure.science>",
   "homepage": "https://github.com/esetera/markback",

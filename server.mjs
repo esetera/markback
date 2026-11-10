@@ -9,10 +9,11 @@ import { readFileSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HOME, IMAGES, INBOX, PORT, STORE_ID, WHERE, listApps, readInbox, receive, setAside } from './lib/store.mjs'
+import { HOME, IMAGES, INBOX, PORT, WHERE, storeIdNow, listApps, readInbox, receive, setAside } from './lib/store.mjs'
 import { filmOf, leftOutLine, saveFilm, savedPart } from './lib/film.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { linkIn, LINK_OUT } from './lib/home.mjs'
+import { makeSecret } from './lib/trust.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
 import { appsOf, madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
 // Only what reads the wake command and turns it on and off. What sets the command is not imported here, on purpose:
@@ -155,10 +156,10 @@ const server = createServer(async (req, res) => {
     // Which store this page shows: a command on the same port can then tell whether its pushes are here.
     if (req.method === 'GET' && url.pathname === '/api/queue') {
       const apps = listApps()
-      return json(res, 200, { apps, listening: listening(apps), store: STORE_ID, pid: process.pid })
+      return json(res, 200, { apps, listening: listening(apps), store: storeIdNow(), pid: process.pid })
     }
     // A store a project's .markback named may hold no link: one added while the page runs would send this write anywhere.
-    if (req.method === 'POST' && WHERE.from === 'file' && linkIn(HOME)) return json(res, 409, { error: `Not saved: ${LINK_OUT}.` })
+    if (req.method === 'POST' && WHERE.project && linkIn(HOME)) return json(res, 409, { error: `Not saved: ${LINK_OUT}.` })
     if (req.method === 'GET' && url.pathname.startsWith('/images/')) {
       const path = inside(IMAGES, decodeURIComponent(url.pathname.slice('/images/'.length)))
       // Pushed pictures are never changed in place (a new push makes a new name), so they can be kept.
@@ -213,7 +214,7 @@ const server = createServer(async (req, res) => {
       const action = url.pathname.slice('/api/work/'.length)
       if (action === 'ask') return json(res, 200, { request: askForIdeas({ target: input.target, count: input.count }) })
       if (action === 'decide') return json(res, 200, { item: decide(String(input.id), String(input.decision)) })
-      if (action === 'note') return json(res, 200, { item: addNote(String(input.id), input.text) })
+      if (action === 'note') return json(res, 200, { item: addNote(String(input.id), input.text, 'reviewer', { page: true }) })
       if (action === 'order' && Array.isArray(input.ids)) {
         reorder(input.ids)
         return json(res, 200, { ok: true })
@@ -270,6 +271,13 @@ const server = createServer(async (req, res) => {
 
 if (WAKES_IN_STORE) console.error(`Not running the wake commands in ${join(HOME, 'work', 'wake')}: they came with the project's store. Set one on this computer with review wake set, kept in ${WAKES}.`)
 
+// The secret that stamps the person's decisions, made on the first start, in the person's own Markback folder.
+try {
+  makeSecret()
+} catch (error) {
+  console.error(`Answers cannot be stamped as yours: ${error.message}. In a project's store they will read as the project's words.`)
+}
+
 if (WHERE.problem) {
   console.error(`Not starting: ${WHERE.problem}`)
   process.exit(1)
@@ -285,7 +293,7 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`Markback on http://localhost:${PORT}, with screens and marks in ${HOME}`)
   const beat = () => {
     // Its notes go in the store too: not while a link in a .markback store could send them elsewhere.
-    if (WHERE.from === 'file' && linkIn(HOME)) return console.error(`Not saving: ${LINK_OUT}.`)
+    if (WHERE.project && linkIn(HOME)) return console.error(`Not saving: ${LINK_OUT}.`)
     try {
       // Said first, so a hook knows the page runs even when a look below fails.
       serverBeat(PORT)

@@ -1,3 +1,4 @@
+import './own-home.mjs'
 /**
  * The page itself, in a headless browser, each test on a server and a store of its own. The wizard has nothing to install, so
  * this borrows Playwright from elsewhere and is skipped without it:

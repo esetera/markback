@@ -1,3 +1,4 @@
+import './own-home.mjs'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { afterSend, answerWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, nextWords, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from '../public/flow.js'
