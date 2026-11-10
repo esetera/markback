@@ -31,7 +31,15 @@ Open your project in a local Claude Code or Codex session and ask in the chat.
 
 > Set up Markback from https://github.com/esetera/markback for this project. Open the first review and keep sending screenshots to Markback as you work.
 
-Your agent runs the setup and opens the review. As it reaches a visible change, it pushes the updated screenshots and waits for your feedback. You can draw and press **Send**, or press **Looks good**. Keep the agent session running while you review.
+Your agent runs the setup and opens the review. As it reaches a visible change, it pushes the updated screenshots and waits for your feedback. You can draw and press **Send**, or press **Looks good**.
+
+### Codex Desktop without a terminal
+
+Open your project in Codex Desktop and paste this into the project chat:
+
+> Set up Markback from https://github.com/esetera/markback in this project. Open the first review and turn on automatic pickup of my marks in this chat.
+
+Codex installs Markback locally, starts the review, and sets up a scheduled check in the same chat. Draw on a screenshot and press **Send**. Keep Codex Desktop open. On the next check, usually within a minute, the chat picks up the mark even if its first turn has finished. Codex applies the change and pushes a new screenshot for review.
 
 In a fresh Codex project, the agent can use `npm install --prefix .markback github:esetera/markback` to install locally and read `.markback/node_modules/markback/AGENTS.md` in the current session. The agent keeps `REVIEW_HOME` in a writable project folder and uses that same folder for each review command. `review project` can start the review even when Codex protects `.agents/skills` from edits.
 
@@ -80,7 +88,7 @@ In a local desktop session your agent opens the review for you. If it cannot, op
 - **Claude Code Desktop.** Open the Browser pane from the session toolbar and enter the review URL. [Claude Code browser docs](https://code.claude.com/docs/en/desktop#preview-your-app)
 - **Codex desktop.** Open the built-in browser from the toolbar and enter the review URL. You can also ask `@Browser` to open it. [Codex browser docs](https://learn.chatgpt.com/docs/browser#preview-a-page)
 
-Draw with Markback's tools and press **Send**. The local server saves the marked screenshot, notes and mark coordinates. The agent waits for the round with `review wait`, applies the feedback, then pushes new screenshots and waits again. If the agent session ended, ask it to resume the Markback review.
+Draw with Markback's tools and press **Send**. The local server saves the marked screenshot, notes and mark coordinates. [Codex Desktop's scheduled check](#codex-desktop-without-a-terminal) picks up the feedback in the same chat. Other agent sessions can wait for a round with `review wait`, apply the feedback, and push new screenshots.
 
 The same URL works in a regular browser on that computer. For voice notes, use Google Chrome if the built-in browser can't transcribe. See [Speaking](#speaking-early) for browser support and where the audio goes.
 
@@ -265,6 +273,7 @@ review wait --app MyApp --all     # blocks until every screen is answered, then 
 review wait --app MyApp           # returns as soon as one screen is answered
 review read --app MyApp --latest  # what was said, newest per screen; --json for raw
 review list                        # what is queued and its status
+review work wait --by "Claude"     # blocks until anything waits for an agent, on any app or in the queue
 review clear --app MyApp          # take the app off the page (feedback stays)
 ```
 
@@ -308,6 +317,43 @@ Press **W** for a second page. **Ideas:** say what for and how many, and press G
 **Queue:** Queued, In progress, Ready for you, Done. Each item says who has it. Drag to set the order, or use ⇧↑ and ⇧↓; agents take the top one first. Press N to add a note, typed or spoken; agents read notes while they work.
 
 A Yes becomes a proposal: an agent develops the UX and pushes it, shown loudly as **Proposal**. Marks start another round. Your approval moves it to **Build it**, and what gets built comes back for checking as **QA**. For the commands, run `review` or see the skills.
+
+### When nobody is listening
+
+Approved work must not wait unseen. An agent says that it listens while it waits (`review work wait`, `review wait`), and the page shows it: a small sign in the bar, with the agent's name when you point at it.
+
+When you approve a proposal, or send marks, and no agent listens, the page says so at once: "Approved. No agent is listening, so nothing will be built yet." The notice stays until you close it or an agent listens. The sign in the bar turns to a warning, and the tab's title starts with `!`. The queue shows how long each item has waited. When an agent does listen, you see one quiet line: "Claude is listening and will take this."
+
+The notice gives one line to copy for your agent:
+
+```
+Take the next item from the Markback queue and build it.
+```
+
+For an agent: `review work` prints all that waits (queued items, requests for ideas, answers nobody has read) with the next command for each. `review work wait --by "Claude"` blocks until there is something.
+
+### Markback wakes your agent
+
+In **Codex Desktop**, ask Codex to set up automatic Markback pickup in the chat. Codex starts Markback as part of opening the review and sets up a scheduled check in that chat. After you press **Send**, the next check reads the marks and Codex pushes the revised screen. Keep the desktop app open while reviewing. The review menu can turn pickup off for this review.
+
+#### Claude Code and other command-based agents
+
+You should not have to give that line. Your agent says once how to start it, and the review page's server does the rest:
+
+```bash
+review wake set --run "claude -p '{prompt}' --continue" --by "Claude"
+```
+
+The skills tell the agent to run this itself during setup, in your project's folder. About every 20 seconds the server looks at the same list as `review work`. When work waits and no agent has listened for a minute, it runs the command in that folder, with `{prompt}` replaced by a fixed prompt that says to run `review work` and do what it says. It runs one at a time, and not again for the same work within ten minutes. What the run prints goes to `~/.review-wizard/work/wake.log`. The page says "Waking your agent…", then that it listens. If the run fails, the page says so, with the last line of the log and the line to copy.
+
+- The command is set only from the command line. The page can turn wake on and off (menu: **Wake my agent when work waits**) and shows the exact command. It cannot set or change the command, and neither can anything else that reaches the server.
+- The woken agent runs with the permissions you already gave that tool. Markback adds none, and passes no flag that skips permission prompts.
+- `review wake` shows what is set. `review wake off`, `review wake on` and `review wake clear` change it.
+- The line above is for Claude Code (a run with no window that continues the last conversation in the folder). For another command-based tool, use its own command of that kind.
+
+### Claude Code hooks
+
+The Claude Code plugin has two hooks. When Claude is about to stop in a project that uses Markback, the Stop hook looks at what waits: if there is work for an agent, Claude is told to take it and does not stop; if nothing waits and no `review work wait` runs, Claude is told once to start one. When a session starts, Claude is told what waits. In a project that does not use Markback (no `review project`, `review push` or `review wake set` was run in its folder), the hooks do nothing. To turn them off, set `MARKBACK_HOOKS=off` in the environment, for example under `env` in your Claude Code settings.
 
 ## Keeping it working
 
