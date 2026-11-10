@@ -41,6 +41,8 @@ That line is for Claude Code: a run with no window that continues the last conve
 
 When work waits and no agent has listened for a minute, the server runs that command with a fixed prompt, which says to run `review work` and do what it says. It runs one at a time, and not again for the same work within ten minutes. You run with the permissions the person already gave your tool: Markback adds none. Do not put a flag that skips permission prompts in the command. `review wake` shows what is set, and `review wake off` stops it. The person can also turn it off in the page's menu, where the command is shown.
 
+If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
+
 ## Ideas
 
 `review work wait` ends when a request for ideas comes. To wait only for requests:
