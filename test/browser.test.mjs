@@ -1996,7 +1996,8 @@ test('the queue: four parts, drag or keys set the order, notes reach the session
   await page.locator('.section-head', { hasText: 'Queued' }).waitFor()
   // Empty parts say so together, in one line; what it is asked is plain words, and every note button looks alike.
   assert.equal(await page.locator('.empty-line').innerText(), 'Nothing in progress, ready for you or done.')
-  assert.equal(await page.locator('.section-head').count(), 1)
+  assert.equal(await page.locator('.section-head').count(), 2)
+  assert.ok(await page.getByRole('link', { name: 'View ideas' }).isVisible())
   assert.deepEqual([...new Set(await page.locator('[data-lane="queued"] .phase').allInnerTexts())], ['Proposal'])
   assert.equal(await page.locator('.tag').count(), 0, 'no labels in colour')
   assert.equal(await page.locator('.row .target').count(), 0, 'all for the same thing: no column for it')

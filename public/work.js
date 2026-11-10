@@ -147,7 +147,7 @@ function queuePage() {
     const by = stage === 'progress' && one ? ` · ${esc(one)}` : ''
     return `<section><h2 class="section-head">${head} <span>${list.length}${by}</span></h2>
       ${folded ? '' : `<div class="rows" data-lane="${stage}">${shown.map((item, at) => row(item, at, stage)).join('')}</div>`}</section>`
-  }).join('')}${empty.length && !ideas ? `<p class="empty-line">${nothingLine(empty)}</p>` : ''}${empty.length === STAGES.length && !ideas ? '<p><a class="btn primary" href="/">Start a project</a></p>' : ''}`
+  }).join('')}${empty.length && (!ideas || empty.length < STAGES.length) ? `<p class="empty-line">${nothingLine(empty)}</p>` : ''}${empty.length === STAGES.length && !ideas ? '<p><a class="btn primary" href="/">Start a project</a></p>' : ''}`
 }
 
 const decideButtons = item => `<span class="acts"><button class="btn" data-decide="yes" title="Y">Yes</button>${item.stage === 'no' ? '' : '<button class="btn" data-decide="no" title="N">No</button>'}${item.stage === 'later' ? '' : '<button class="btn" data-decide="later" title="L">Later</button>'}</span>`
