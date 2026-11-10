@@ -57,10 +57,15 @@ Run it in your project's folder. Then ask Codex: review my app.
 
 ```bash
 git clone https://github.com/esetera/markback ~/markback
+```
+
+Then, in your project's folder:
+
+```bash
 kimi --skills-dir ~/markback/skills
 ```
 
-Run `kimi` in your project's folder. Then ask Kimi: review my app. For that run, Markback's skills stand in for your others. To go back into a session, add `-S` to pick one, or `-c` for the latest in this folder: `kimi --skills-dir ~/markback/skills -S`.
+Then ask Kimi: review my app. For that run, Markback's skills stand in for your others. To go back into a session, add `-S` to pick one, or `-c` for the latest in this folder: `kimi --skills-dir ~/markback/skills -S`.
 
 To keep your other skills, put Markback's where Kimi Code already looks, and start it with plain `kimi`. `node ~/markback/review.mjs install-skills` writes them to `~/.agents/skills`; run it again after you update Markback. Or add `extra_skill_dirs = ["~/markback/skills"]` to Kimi Code's `config.toml`.
 

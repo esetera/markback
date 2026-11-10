@@ -10,7 +10,7 @@ import { writePicture } from './helpers.mjs'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const home = mkdtempSync(join(tmpdir(), 'review-agents-'))
 process.env.REVIEW_HOME = home
-const { agentsMd, installSkills, readSkills, BLOCK_START, BLOCK_END, FALLBACK } = await import('../lib/skills.mjs')
+const { agentsMd, installSkills, readSkills, BLOCK_START, BLOCK_END, FALLBACK, codeSpan, forAnyAgent, runReview } = await import('../lib/skills.mjs')
 const { receive } = await import('../lib/store.mjs')
 after(() => rmSync(home, { recursive: true, force: true }))
 const CLI = join(ROOT, 'review.mjs')
@@ -23,6 +23,8 @@ test('AGENTS.md is made from the skills, and is not out of date', () => {
 })
 
 /** What only Claude Code can fill in or find: its plugin's variables and arguments, and paths under its own folders. */
+/** A path that exists on one computer only: a home folder on a Mac, on Linux or on Windows. */
+const HOME_PATH = /\/Users\/[^\s/<]|\/home\/[^\s/<]|[A-Za-z]:\\Users\\/
 const CLAUDE_ONLY = /\$\{?CLAUDE_[A-Z_]*|\$ARGUMENTS|\.claude-plugin|~\/\.claude\b/
 
 test('every skill works read straight from the folder, by any agent: nothing only the Claude plugin can resolve', () => {
@@ -31,10 +33,28 @@ test('every skill works read straight from the folder, by any agent: nothing onl
     assert.doesNotMatch(text, CLAUDE_ONLY, `skills/${name} names something only Claude Code can resolve`)
     if (/^review |`review [a-z]/m.test(text)) assert.ok(text.includes(FALLBACK), `skills/${name} says how to run review when it is not on the PATH`)
     // What the line says must be true where the skills are read in place: from the folder, and as the plugin.
-    assert.ok(existsSync(join(ROOT, 'skills', name, '..', '..', 'review.mjs')), 'review.mjs is two folders up')
+    assert.doesNotMatch(text, HOME_PATH, `skills/${name} names a path on one computer`)
   }
-  assert.ok(existsSync(join(ROOT, '.claude-plugin', 'plugin.json')), 'the plugin is the same folder, so the line holds there too')
+  // The line says review.mjs is two folders up. The plugin's root must be this folder, with the skills where they are,
+  // and an npm install must keep the same layout.
+  const market = JSON.parse(readFileSync(join(ROOT, '.claude-plugin', 'marketplace.json'), 'utf8'))
+  assert.deepEqual(market.plugins.map(p => p.source), ['./'], 'the plugin is the whole folder')
+  const plugin = JSON.parse(readFileSync(join(ROOT, '.claude-plugin', 'plugin.json'), 'utf8'))
+  assert.equal(plugin.skills, undefined, 'the plugin keeps its skills in skills/')
+  const files = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).files
+  assert.ok(files.includes('skills') && files.includes('review.mjs'), 'an npm install keeps skills/ beside review.mjs')
   for (const file of readdirSync(join(ROOT, '.claude-plugin'))) assert.doesNotMatch(readFileSync(join(ROOT, '.claude-plugin', file), 'utf8'), CLAUDE_ONLY)
+})
+
+test('a copy names Markback\'s folder in a command a shell runs as written, whatever the folder is called', () => {
+  const odd = join(home, 'a b$c`d"e\'f')
+  mkdirSync(odd)
+  writeFileSync(join(odd, 'review.mjs'), "console.log('ran', process.argv[2])\n")
+  const line = forAnyAgent(FALLBACK, odd)
+  const [, fence, command] = /use (`+) ?(.+?) ?\1 in its place/.exec(line) ?? []
+  assert.ok(fence, `one whole code span in: ${line}`)
+  assert.equal(execFileSync('sh', ['-c', `${command} check`], { encoding: 'utf8' }), 'ran check\n')
+  assert.ok(agentsMd({ root: odd }).includes(line.slice(line.indexOf(fence), line.lastIndexOf(fence) + fence.length)), 'AGENTS.md says it the same way')
 })
 
 test('every skill has the name and description all agents need, and its name is its folder (Cursor insists)', () => {
@@ -63,12 +83,12 @@ test('install-skills writes skill folders any agent can follow, and a block in a
     assert.doesNotMatch(text, CLAUDE_ONLY)
     assert.ok(!text.includes('two folders up'), 'a copy says where Markback is')
   }
-  assert.ok(readFileSync(join(to, 'push-screens', 'SKILL.md'), 'utf8').includes(`node "${CLI}"`), 'says where Markback is')
+  assert.ok(readFileSync(join(to, 'push-screens', 'SKILL.md'), 'utf8').includes(codeSpan(runReview(ROOT))), 'says where Markback is')
   const mine = readFileSync(join(project, 'AGENTS.md'), 'utf8')
   assert.match(mine, /^# My project\n\nUse tabs\.\n/, 'what was there stays')
   assert.doesNotMatch(mine, /Working on Markback itself/, 'the line for Markback\'s own contributors stays in its own repo')
   assert.equal(mine.split(BLOCK_START).length, 2, 'once, however often it runs')
-  assert.ok(mine.includes(`node "${CLI}"`), 'says where Markback is')
+  assert.ok(mine.includes(codeSpan(runReview(ROOT))), 'says where Markback is')
   execFileSync('node', [CLI, 'install-skills', '--to', to, '--agents-md', project, '--no-path'], { encoding: 'utf8' })
   const pathless = readFileSync(join(project, 'AGENTS.md'), 'utf8')
   assert.ok(!pathless.includes(ROOT), '--no-path leaves no path of this computer in a file that may be committed')
