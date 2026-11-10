@@ -57,9 +57,12 @@ Run it in your project's folder. Then ask Codex: review my app.
 
 ```bash
 git clone https://github.com/esetera/markback ~/markback
+kimi --skills-dir ~/markback/skills
 ```
 
-Then, in your project: `kimi --skills-dir ~/markback/skills`. For that run, Markback's skills stand in for your others. To go back into a session: `kimi --skills-dir ~/markback/skills -S` (it lets you pick one).
+Run `kimi` in your project's folder. Then ask Kimi: review my app. For that run, Markback's skills stand in for your others. To go back into a session, add `-S` to pick one, or `-c` for the latest in this folder: `kimi --skills-dir ~/markback/skills -S`.
+
+To keep your other skills, put Markback's where Kimi Code already looks, and start it with plain `kimi`. `node ~/markback/review.mjs install-skills` writes them to `~/.agents/skills`; run it again after you update Markback. Or add `extra_skill_dirs = ["~/markback/skills"]` to Kimi Code's `config.toml`.
 
 Other agents that can run commands should work too: CodeWhale is next to be tried.
 
@@ -121,7 +124,7 @@ codex exec -s workspace-write "Here is a screen I want reviewed: shot.png. Put i
 
 For local projects inside Codex's macOS sandbox, Markback takes pictures with Chrome Headless Shell, about 100 MB from Google, fetched once and kept on this computer. Nothing is fetched until you say yes: the first capture stops and tells the agent to ask you, and after your yes the agent runs it again with `--fetch-browser`. The download needs network access. This capture path is for local pages and assets. An agent with a built-in browser can also capture a page there and push the screenshot to Markback.
 
-**Kimi Code** takes the skills with `--skills-dir`, in place of your others for that run: `kimi --skills-dir ~/markback/skills`, with `-S` to go back into a session.
+**Kimi Code** reads the skills straight from the cloned folder with `--skills-dir`, in place of your others for that run: `kimi --skills-dir ~/markback/skills`, with `-S` or `-c` to go back into a session. It also reads `~/.agents/skills` and `extra_skill_dirs`, which keep your others. See [Manual installation](#manual-installation).
 
 **Any other agent** that reads `AGENTS.md` (Codex and Cursor do, and others): add Markback's part to your project's `AGENTS.md`. It goes between two markers, so your own words stay and a rerun replaces only that part. It names where your Markback folder is; add `--no-path` to say it in words instead, for a file you commit.
 
@@ -129,7 +132,7 @@ For local projects inside Codex's macOS sandbox, Markback takes pictures with Ch
 node review.mjs install-skills --agents-md /path/to/your/project
 ```
 
-`npm install -g .` from the cloned folder puts `review` on your PATH. Without that, agents use `node /path/to/markback/review.mjs`, and the installed skills already say so.
+`npm install -g .` from the cloned folder puts `review` on your PATH. Without that, agents use `node /path/to/markback/review.mjs`, and the skills say so, both in the folder and when installed.
 
 **Full review workflow tried with Claude Code, Codex and Kimi Code.** What was run: Claude Code, with the plugin, including `/markback` in a project from a cold start. Codex, with the skills in `.agents/skills`, and Kimi Code, with `--skills-dir`: each pushed a screen, read the marks and acted on them, pushed round 2, and drew a sketch. A second Claude Code run with no plugin and no skills, which knew Markback only from `AGENTS.md`: it pushed a screen, and after a box and a note came back it read them and said where they were. A plain script that runs only the commands `AGENTS.md` shows, which is part of `npm test`. Cursor compatibility is based on its documentation.
 

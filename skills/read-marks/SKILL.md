@@ -5,6 +5,8 @@ description: Read what the person marked on screens pushed for review and act on
 
 Every mark is a request. Do not ask whether to act on it: do it, unless it is a choice only the person can make.
 
+If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
+
 ## Wait
 
 After pushing a round, tell the person they can press **Send** or **Looks good**. Then wait for them yourself: they do not have to tell you they have finished, and they never run a command.

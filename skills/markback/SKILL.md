@@ -6,7 +6,9 @@ argument-hint: "[what you want, if there is no app yet]"
 
 The goal is the person drawing on their own app's screens within a minute. Never ask them for an address. Open the review for them, and give them its address only when you cannot open it yourself.
 
-They said: $ARGUMENTS
+Start from what the person said.
+
+If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
 
 ## In their project
 
@@ -35,5 +37,3 @@ Tell them they can draw and press **Send**. From here you keep the review going 
 For a single-screen project, `review project --no-open` can also capture and push the next round. It uses the same review name and screen. Wait for that round in the same session.
 
 If a command fails or nothing shows, run `review check` and tell the person what it says.
-
-If `review` is not found, use `node <markback folder>/review.mjs` in its place (in Claude Code, `node "${CLAUDE_PLUGIN_ROOT}/review.mjs"`).

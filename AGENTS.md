@@ -14,6 +14,8 @@ The goal is the person drawing on their own app's screens within a minute. Never
 
 Start from what the person said.
 
+If `review` is not found, use `node review.mjs` in the Markback folder in its place.
+
 ### In their project
 
 Run this in the project's folder:
@@ -42,13 +44,13 @@ For a single-screen project, `review project --no-open` can also capture and pus
 
 If a command fails or nothing shows, run `review check` and tell the person what it says.
 
-If `review` is not found, use `node review.mjs` in the Markback folder in its place.
-
 ## push-screens
 
 _Put screenshots in front of the person to review and mark up. Use after any change to a user interface, a designed document or a slide, instead of pasting pictures in chat._
 
 The person reviews by drawing on real screens in a local page. In a session using Markback, push a review as soon as a meaningful visible change is ready to check. Push the screens that changed and include the earlier pictures when you have them. The person can review directly on the page.
+
+If `review` is not found, use `node review.mjs` in the Markback folder in its place.
 
 ### Start it
 
@@ -56,7 +58,7 @@ The person reviews by drawing on real screens in a local page. In a session usin
 review start
 ```
 
-It prints the address, by default http://localhost:5741. If `review` is not found, use `node review.mjs` in the Markback folder in its place. If the port is taken: `review start --port 5742`. Pushing only writes files, so it works with the page closed, or where a sandbox stops `start` from seeing it.
+It prints the address, by default http://localhost:5741. If the port is taken: `review start --port 5742`. Pushing only writes files, so it works with the page closed, or where a sandbox stops `start` from seeing it.
 
 ### Push one screen at a time
 
@@ -107,6 +109,8 @@ _Read what the person marked on screens pushed for review and act on each mark. 
 
 Every mark is a request. Do not ask whether to act on it: do it, unless it is a choice only the person can make.
 
+If `review` is not found, use `node review.mjs` in the Markback folder in its place.
+
 ### Wait
 
 After pushing a round, tell the person they can press **Send** or **Looks good**. Then wait for them yourself: they do not have to tell you they have finished, and they never run a command.
@@ -154,6 +158,8 @@ _Draw a workflow as a simple architect's sketch for the person to check and mark
 
 A workflow can only be checked when it says who may do each step and what makes it happen. A plain flowchart hides what goes wrong. Keep it simple.
 
+If `review` is not found, use `node review.mjs` in the Markback folder in its place.
+
 ### Rules for a sheet
 
 - One question a sheet. One row of boxes, eight at most. Two branches at most, as notes.
@@ -191,6 +197,8 @@ review push --app "Order workflow" --screen "1 An order reaches the warehouse" -
 _Answer the person's requests for improvement ideas and work through their queue in order. Use when asked to watch for idea requests, or to pick up queued work from the review page._
 
 The review page has two pages at /work.html: Ideas and Queue. They read the same files you do. The page cannot think, so requests wait for you.
+
+If `review` is not found, use `node review.mjs` in the Markback folder in its place.
 
 ### Ideas
 

@@ -5,6 +5,8 @@ description: Answer the person's requests for improvement ideas and work through
 
 The review page has two pages at /work.html: Ideas and Queue. They read the same files you do. The page cannot think, so requests wait for you.
 
+If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
+
 ## Ideas
 
 Wait for a request, in the background:

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
@@ -10,7 +10,7 @@ import { writePicture } from './helpers.mjs'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const home = mkdtempSync(join(tmpdir(), 'review-agents-'))
 process.env.REVIEW_HOME = home
-const { agentsMd, installSkills, readSkills, BLOCK_START, BLOCK_END } = await import('../lib/skills.mjs')
+const { agentsMd, installSkills, readSkills, BLOCK_START, BLOCK_END, FALLBACK } = await import('../lib/skills.mjs')
 const { receive } = await import('../lib/store.mjs')
 after(() => rmSync(home, { recursive: true, force: true }))
 const CLI = join(ROOT, 'review.mjs')
@@ -19,7 +19,22 @@ const AGENTS = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8')
 test('AGENTS.md is made from the skills, and is not out of date', () => {
   assert.equal(AGENTS, agentsMd(), 'run: node scripts/agents-md.mjs')
   for (const skill of readSkills()) assert.ok(AGENTS.includes(`## ${skill.name}\n`), `${skill.name} is in AGENTS.md`)
-  assert.doesNotMatch(AGENTS, /CLAUDE_PLUGIN_ROOT|\$ARGUMENTS/, 'nothing only Claude Code fills in')
+  assert.doesNotMatch(AGENTS, CLAUDE_ONLY, 'nothing only Claude Code fills in')
+})
+
+/** What only Claude Code can fill in or find: its plugin's variables and arguments, and paths under its own folders. */
+const CLAUDE_ONLY = /\$\{?CLAUDE_[A-Z_]*|\$ARGUMENTS|\.claude-plugin|~\/\.claude\b/
+
+test('every skill works read straight from the folder, by any agent: nothing only the Claude plugin can resolve', () => {
+  for (const name of readdirSync(join(ROOT, 'skills'))) {
+    const text = readFileSync(join(ROOT, 'skills', name, 'SKILL.md'), 'utf8')
+    assert.doesNotMatch(text, CLAUDE_ONLY, `skills/${name} names something only Claude Code can resolve`)
+    if (/^review |`review [a-z]/m.test(text)) assert.ok(text.includes(FALLBACK), `skills/${name} says how to run review when it is not on the PATH`)
+    // What the line says must be true where the skills are read in place: from the folder, and as the plugin.
+    assert.ok(existsSync(join(ROOT, 'skills', name, '..', '..', 'review.mjs')), 'review.mjs is two folders up')
+  }
+  assert.ok(existsSync(join(ROOT, '.claude-plugin', 'plugin.json')), 'the plugin is the same folder, so the line holds there too')
+  for (const file of readdirSync(join(ROOT, '.claude-plugin'))) assert.doesNotMatch(readFileSync(join(ROOT, '.claude-plugin', file), 'utf8'), CLAUDE_ONLY)
 })
 
 test('every skill has the name and description all agents need, and its name is its folder (Cursor insists)', () => {
@@ -45,7 +60,8 @@ test('install-skills writes skill folders any agent can follow, and a block in a
   for (const skill of readSkills()) {
     const text = readFileSync(join(to, skill.name, 'SKILL.md'), 'utf8')
     assert.match(text, new RegExp(`^---\\nname: ${skill.name}\\ndescription: `))
-    assert.doesNotMatch(text, /CLAUDE_PLUGIN_ROOT|\$ARGUMENTS/)
+    assert.doesNotMatch(text, CLAUDE_ONLY)
+    assert.ok(!text.includes('two folders up'), 'a copy says where Markback is')
   }
   assert.ok(readFileSync(join(to, 'push-screens', 'SKILL.md'), 'utf8').includes(`node "${CLI}"`), 'says where Markback is')
   const mine = readFileSync(join(project, 'AGENTS.md'), 'utf8')
@@ -68,6 +84,7 @@ test('install-skills --codex puts the skills in this project, where Codex finds 
   for (const skill of readSkills()) {
     const text = readFileSync(join(project, '.agents', 'skills', skill.name, 'SKILL.md'), 'utf8')
     assert.ok(!text.includes(ROOT), `${skill.name} names no path here`)
+    assert.ok(text.includes('`node review.mjs` in the Markback folder'), 'says where Markback is, in words')
     const [, description] = /^description: (.+)$/m.exec(text)
     assert.equal(JSON.parse(description), skill.fields.description)
   }
