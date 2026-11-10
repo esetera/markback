@@ -145,7 +145,9 @@ export function leftBehind(round, read, isReal) {
     const draft = read(r)
     const marks = (draft?.marks ?? []).filter(isReal).length
     const notes = draft?.notes ?? ''
-    if (marks || notes.trim()) out.push({ round: r, marks, notes })
+    // Earlier marks ticked and never sent are lost to the new round too: they are counted, so none goes unsaid.
+    const ticks = Object.values(draft?.said ?? {}).filter(word => word === 'fixed' || word === 'stands').length
+    if (marks || notes.trim() || ticks) out.push({ round: r, marks, notes, ticks })
   }
   return out
 }
@@ -168,14 +170,20 @@ export function askWords(ask) {
   return lead ? `${lead} “${cutWords(said)}”` : `“${cutWords(said)}”`
 }
 
-/** An earlier mark's place on the picture now. It was drawn on the last one, which can be another size. Null for notes. */
+/**
+ * An earlier mark's place on the picture now, or null. Notes have none. On a picture of the same width that only grew or shrank
+ * in height, a page that got longer say, the place stays in pixels from the top. One shrunk or grown as a whole is scaled.
+ * Any other change of shape means the place cannot be trusted: null, and the page says its place may have moved.
+ */
 export function placeOn(ask, size) {
   const box = ask?.box
   if (!box || !size) return null
   const from = ask.size?.w && ask.size?.h ? ask.size : size
+  if (from.w === size.w) return box.y < size.h ? { ...box, h: Math.min(box.h, size.h - box.y) } : null
   const sx = size.w / from.w
   const sy = size.h / from.h
-  return { x: box.x * sx, y: box.y * sy, w: box.w * sx, h: box.h * sy }
+  if (Math.abs(sx - sy) > 0.02 * Math.max(sx, sy)) return null
+  return { x: box.x * sx, y: box.y * sx, w: box.w * sx, h: box.h * sx }
 }
 
 const overlaps = (a, b) => !!a && !!b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h

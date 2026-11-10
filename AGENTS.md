@@ -136,7 +136,7 @@ Each answer has:
 - `notes`: what they typed or spoke.
 - `shapes`: each with `type` (box, arrow, text, freehand, words, pin) and `box` in the picture's own pixels. An arrow has `from` and `to`. Text has `text`. A pin is something said at a spot: `at` is the spot and `text` is what was said.
 - `words` on a shape: the words under that mark, when the picture was pushed with its words. `element` is the element they are all in. Search the code for them to find what the mark is about. A shape of type `words` is words the person chose, in `text`.
-- `asked`: the marks and notes from earlier rounds, on a screen pushed again. Each has `n`, the `round` it was asked in, and the mark's own `type`, `box`, `text` and `words`. `said` is what the person said of it: `fixed`, `stands`, or `null` when they did not tick it. `cameBack: true` means they had ticked it fixed, and it came back.
+- `asked`: the marks and notes from earlier rounds, on a screen pushed again. Each has `n`, the `round` it was asked in, and the mark's own `type`, `text` and `words`. `box` is its place: for an arrow or a pin, a 48 pixel square round the head or the spot. `said` is what the person said of it: `fixed`, `stands`, or `null` when they did not tick it or did not look (a `noComment` answer). `cameBack: true` means they had ticked it fixed, and it came back.
 - `annotatedImage`: the picture with the marks burned in. **Open it before you change anything.** A box round something says more than its numbers.
 - `afterImage`, `beforeImage`, `round`.
 

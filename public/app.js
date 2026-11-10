@@ -206,11 +206,12 @@ const saveDraft = s => {
 /** What this screen's draft would send: 'changes', 'approved', or null when nothing is on it yet. */
 function verdictOf(s) {
   const d = draftOf(s)
-  if (d.marks.some(isReal) || d.notes.trim() || stands(d)) return 'changes'
+  // Any word on an earlier mark is an answer: the ones not ticked are still to do.
+  if (d.marks.some(isReal) || d.notes.trim() || Object.keys(d.said).length) return 'changes'
   return d.good ? 'approved' : null
 }
-/** An earlier mark said to still stand is something to send, as a mark is. */
-const stands = d => Object.values(d.said).includes('stands')
+/** An earlier mark said to still stand is something to send, as a mark is, and so is a word said before and taken back (null). */
+const stands = d => Object.values(d.said).some(word => word === 'stands' || word === null)
 /** Something is on it to go by itself. Marks that cannot be trusted to this picture wait to be looked at. */
 const saysAnswer = s => !!verdictOf(s) && !draftOf(s).unsure
 const waitingOf = a => (a ? a.screens.filter(s => s.status === 'waiting') : [])
@@ -562,7 +563,7 @@ function renderAnswers(a, s) {
   setHtml($('yourAnswer'), standing ? `<h3>Your answer</h3><div class="round"><div class="rh"><i class="mk ${standing.verdict === 'approved' ? 'approved' : 'sent'}"></i>${esc(answerWords(standing))}<time>${esc(when(standing.sentAt))}</time></div>${said(standing)}${standing.annotatedUrl ? '<div class="prose small">Drawn on the picture.</div>' : ''}</div>` : '')
   const older = (records ?? []).filter(r => r !== standing)
   const left = leftBehindOn(s)
-  const leftHtml = left.map(r => `<div class="round"><div class="rh"><i class="mk draft-changes"></i>Round ${r.round} · Not sent${r.marks ? `, ${r.marks} mark${r.marks === 1 ? '' : 's'}` : ''}</div>${r.notes.trim() ? `<div class="prose">${esc(r.notes)}</div>` : ''}<div class="prose small">Left unsent, and the screen has changed since.</div></div>`).join('')
+  const leftHtml = left.map(r => `<div class="round"><div class="rh"><i class="mk draft-changes"></i>Round ${r.round} · Not sent${r.marks ? `, ${r.marks} mark${r.marks === 1 ? '' : 's'}` : ''}${r.ticks ? `, ${r.ticks} earlier mark${r.ticks === 1 ? '' : 's'} ticked` : ''}</div>${r.notes.trim() ? `<div class="prose">${esc(r.notes)}</div>` : ''}<div class="prose small">Left unsent, and the screen has changed since.</div></div>`).join('')
   setHtml($('history'), older.length || left.length ? `<h3>Earlier answers</h3>${leftHtml}${older.map(r => `<div class="round"><div class="rh"><i class="mk ${r.verdict === 'approved' ? 'approved' : 'sent'}"></i>Round ${r.round} · ${esc(answerWords(r))}<time>${esc(when(r.sentAt))}</time></div>${said(r)}${r.annotatedUrl ? `<button class="pic" data-pic="${esc(r.annotatedUrl)}" data-title="Round ${r.round}, as marked" aria-label="Open round ${r.round} as marked"><img src="${esc(r.annotatedUrl)}" alt="" loading="lazy"></button>` : ''}</div>`).join('')}` : '')
   // The small line in the foot, only when there is something behind it.
   const words = standing ? `You sent: ${answerWords(standing)}${standing.notes && !standing.noComment ? `. ${standing.notes}` : ''}` : ''
@@ -1260,6 +1261,8 @@ function showPicture(s) {
       current.replaceWith(img)
     }
     state.size = { w: img.naturalWidth, h: img.naturalHeight }
+    // Whether an earlier mark's place can be trusted depends on this picture's size, known only now.
+    renderAsked(s)
     $('canvas').width = state.size.w
     $('canvas').height = state.size.h
     if (state.fitted) fit()
@@ -1273,6 +1276,7 @@ function showPicture(s) {
   const held = pictures.get(url)
   $('beforeImg').src = s.before ? `/images/${s.before}` : ''
   showChanges(s)
+  showLastChanges(s)
   // Ready: in this same step, with nothing in between. Not yet: the last picture stays until this one is there.
   if (held?.ready) return put(held.img)
   state.size = null
@@ -1425,16 +1429,57 @@ function showSentMarks(s) {
 /* ---------- marks become checks: what was asked for last time, at its place, to tick fixed or say it still stands ---------- */
 
 const ASKED_WIDE = 300
-/** What was said of each earlier mark: here first, then in the answer already sent this round. */
-function saidOf(s) {
-  const standing = standingAnswer(histories.get(historyKey(s)), s.round)
-  return { ...(standing?.said ?? {}), ...draftOf(s).said }
+/** Narrower than this beside the list, the picture keeps the width and the list goes under it. */
+const ASKED_MIN_PICTURE = 560
+/** What was sent from here this round, until the server's list of answers has it too. */
+const saidSent = new Map()
+/**
+ * Words said of the earlier marks in answers already sent this round, as the server keeps them: they stand until changed. A
+ * Looks good pressed on the screen ticks them all, but only while nothing new is on it: changes after it take that back.
+ */
+function standingSaid(s) {
+  const records = (histories.get(historyKey(s)) ?? []).filter(r => r.round === s.round && !r.olderPicture)
+  const words = records.find(r => !(r.verdict === 'approved' && !r.noComment))?.said ?? {}
+  return { ...words, ...(saidSent.get(keyOf(s)) ?? {}) }
 }
-/** A screen's earlier marks. Where it changed counts only once it is worked out for this very picture. */
-const askedNow = s => askedOf(s, changes.key && changes.key === `${s.before}|${s.after}` ? changes.boxes : null, state.size)
+/** What was said of each earlier mark: here first, then in the answers already sent this round. */
+function saidOf(s) {
+  const d = draftOf(s)
+  const standing = standingAnswer(histories.get(historyKey(s)), s.round)
+  const passed = standing?.verdict === 'approved' && !standing.noComment && !verdictOf(s)
+  const all = passed ? Object.fromEntries(askedOf(s).open.map(a => [a.n, 'fixed'])) : standingSaid(s)
+  // A word taken back here is null: it hides the one said before.
+  return Object.fromEntries(Object.entries({ ...all, ...d.said }).filter(([, word]) => word))
+}
+/** A screen's earlier marks. Held ones are compared with the before, or with the last round's picture when there is none. */
+function askedNow(s) {
+  const changed = s.before ? (changes.key === `${s.before}|${s.after}` ? changes.boxes : null) : lastChanges.key && lastChanges.key === `${s.lastAfter}|${s.after}` ? lastChanges.boxes : null
+  return askedOf(s, changed, state.size)
+}
 /** The list stands beside the picture, in the After view, until it is closed. */
 const askedShown = s => !!s && state.view === 'after' && !state.askedShut.has(keyOf(s)) && askedNow(s).rows.length > 0
-const askedRoom = () => (askedShown(screen()) ? ASKED_WIDE + 16 : 0)
+const askedBeside = () => $('scroller').clientWidth - 14 - (ASKED_WIDE + 16) >= ASKED_MIN_PICTURE
+const askedRoom = () => (askedShown(screen()) && askedBeside() ? ASKED_WIDE + 16 : 0)
+
+/** With no before, held marks are compared with the last round's picture. Worked out only when there are some. */
+const lastChanges = { key: '', boxes: null }
+function showLastChanges(s) {
+  const key = !s.before && s.lastAfter && askedOf(s).held.length ? `${s.lastAfter}|${s.after}` : ''
+  if (lastChanges.key === key) return
+  lastChanges.key = key
+  lastChanges.boxes = changes.known.get(key) ?? null
+  if (!key || changes.known.has(key)) return
+  void Promise.all([pictureAt(`/images/${s.lastAfter}`), pictureAt(`/images/${s.after}`)]).then(([last, now]) => setTimeout(() => {
+    const boxes = changesBetween(last, now)
+    changes.known.set(key, boxes)
+    if (lastChanges.key !== key) return
+    lastChanges.boxes = boxes
+    const here = screen()
+    if (here) renderAsked(here)
+    if (state.fitted) fit()
+    paint()
+  })).catch(() => undefined)
+}
 
 function renderAsked(s) {
   const asked = s ? askedNow(s) : null
@@ -1455,9 +1500,11 @@ function renderAsked(s) {
   const row = a => {
     const back = asked.back.includes(a)
     const word = said[a.n] ?? ''
-    const when = back ? `You said fixed in round ${a.fixedIn}` : a.cameBack ? `Came back, from round ${a.round}` : `Round ${a.round}`
+    // Drawn on a picture of another shape, its place cannot be trusted: listed, and not drawn.
+    const moved = !!a.box && !!state.size && !placeOn(a, state.size)
+    const when = `${back ? `You said fixed in round ${a.fixedIn}` : a.cameBack ? `Came back, from round ${a.round}` : `Round ${a.round}`}${moved ? ' · place may have moved' : ''}`
     return `<li class="ask${word ? ` said-${word}` : ''}${back ? ' back' : ''}" data-ask="${a.n}">`
-      + `<button class="ask-n" data-ask-go="${a.n}" ${tip(a.box ? 'Show where it is' : 'Notes have no place on the picture')}>${a.n}</button>`
+      + `<button class="ask-n" data-ask-go="${a.n}" ${tip(moved ? 'The picture changed shape: its place may have moved' : a.box ? 'Show where it is' : 'Notes have no place on the picture')}>${a.n}</button>`
       + `<div class="ask-body"><span class="ask-words">${back ? '<b>Came back?</b> ' : ''}${esc(askWords(a))}</span><span class="ask-when">${esc(when)}</span>`
       + `<span class="ask-acts"><button class="btn ask-say${word === 'fixed' ? ' on' : ''}" data-ask-say="fixed" aria-pressed="${word === 'fixed'}">${ICONS.check}${back ? 'Still fixed' : 'Fixed'}</button>`
       + `<button class="btn ask-say${word === 'stands' ? ' on' : ''}" data-ask-say="stands" aria-pressed="${word === 'stands'}">${back ? 'Came back' : 'Still stands'}</button></span></div></li>`
@@ -1472,8 +1519,11 @@ function sayAsked(n, word) {
   const d = draftOf(s)
   touched(s)
   const said = { ...d.said }
-  if (saidOf(s)[n] === word && d.said[n] === word) delete said[n]
-  else said[n] = word
+  // Taken back: null hides a word said in an answer already sent; one said only here simply goes.
+  if (saidOf(s)[n] === word) {
+    if (standingSaid(s)[n]) said[n] = null
+    else delete said[n]
+  } else said[n] = word
   d.said = said
   d.good = false
   saveDraft(s)
@@ -1485,9 +1535,12 @@ function toggleAsked() {
   const s = screen()
   if (!s || !askedNow(s).rows.length) return
   const key = keyOf(s)
-  if (state.askedShut.has(key)) state.askedShut.delete(key)
+  // From Before or side by side, K is to see them: on to After, with the list open.
+  if (state.view !== 'after') {
+    state.view = 'after'
+    state.askedShut.delete(key)
+  } else if (state.askedShut.has(key)) state.askedShut.delete(key)
   else state.askedShut.add(key)
-  if (state.view !== 'after') state.view = 'after'
   render()
   // A zoom chosen by hand stays: only the column comes or goes.
   if (state.fitted) fit()
@@ -1611,17 +1664,20 @@ function placeChecks() {
   const foot = $('foot').offsetHeight
   // With the earlier marks beside the picture, what to check stands above them, in the same column.
   const asking = askedShown(s)
+  // A narrow window: the picture keeps the width, and the list goes under it, never past the edge.
+  const below = asking && !askedBeside()
   const room = { width: box.clientWidth - 14 - askedRoom(), height: $('center').clientHeight - foot - 14 }
   const shown = state.size && state.view === 'after' && state.fitted ? fittedZoom(room) * state.size.w : room.width
   const spare = room.width - shown - 16
-  state.sideChecks = items.length > 0 && (asking || spare >= 220)
+  state.sideChecks = items.length > 0 && ((asking && !below) || spare >= 220)
   $('checks').hidden = !state.sideChecks
-  $('asked').style.width = `${ASKED_WIDE}px`
-  $('sideCol').style.maxHeight = `${room.height}px`
+  $('pair').classList.toggle('asked-below', below)
+  $('asked').style.width = `${below ? Math.max(0, Math.min(ASKED_WIDE * 2, box.clientWidth - 30)) : ASKED_WIDE}px`
+  $('sideCol').style.maxHeight = below ? '' : `${room.height}px`
   $('sideCol').hidden = $('checks').hidden && !asking
   if (state.sideChecks) {
-    $('checks').style.width = `${asking ? ASKED_WIDE : Math.min(400, spare)}px`
-    $('checks').style.maxHeight = asking ? '' : `${room.height}px`
+    $('checks').style.width = `${asking && !below ? ASKED_WIDE : Math.min(400, spare)}px`
+    $('checks').style.maxHeight = asking && !below ? '' : `${room.height}px`
     setHtml($('checks'), `<h2><span>What to check</span><span class="from">${esc(fromWords(s))}</span></h2><ul>${items.map(item => `<li>${esc(item)}</li>`).join('')}</ul>${moreButton(look.rest)}${moreWords(look.rest)}`)
   }
   renderAbout(app(), s)
@@ -1861,6 +1917,9 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
     drafts.delete(key)
     store.set(key, null)
   }
+  // What was said stands until changed: shown again at once, before the server's list of answers has it.
+  if (verdict === 'approved') saidSent.delete(key)
+  else saidSent.set(key, { ...standingSaid(s), ...said })
   // The picture was replaced before this went: it says nothing about the new one, which still waits.
   if (result.olderPicture || result.record?.olderPicture) {
     toast(result.record ? `Your answer on ${label(s)} went in, marked as being about the older picture. It has a new one now.` : `Looks good not counted: ${label(s)} has a new picture to look at.`)
@@ -2199,7 +2258,11 @@ $('asked').onclick = event => {
   if (!row) return
   const n = Number(row.dataset.ask)
   const say = event.target.closest('[data-ask-say]')
-  if (say) return sayAsked(n, say.dataset.askSay)
+  if (say) {
+    sayAsked(n, say.dataset.askSay)
+    // The list was built again: the keyboard stays on the same button of the same row.
+    return $('asked').querySelector(`[data-ask="${n}"] [data-ask-say="${say.dataset.askSay}"]`)?.focus()
+  }
   if (event.target.closest('[data-ask-go]')) goToAsk(n)
 }
 // Pointing at one lights its place on the picture.

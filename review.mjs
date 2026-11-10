@@ -88,21 +88,25 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 function markLine(s) {
   const box = `x ${s.box.x}, y ${s.box.y}, ${s.box.w}x${s.box.h}`
   const what = s.type === 'text' ? `text "${s.text}"` : s.type === 'arrow' && s.from ? `arrow from ${s.from.x},${s.from.y} to ${s.to.x},${s.to.y}` : s.type === 'words' ? `words "${s.text}"` : s.type === 'pin' ? `said at pin ${s.n ?? ''} "${s.text}"`.replace('  ', ' ') : s.type
-  return printable(`${what} (${s.colour ?? s.color}) at ${box}${sayWords(s)}`)
+  const colour = s.colour ?? s.color
+  return printable(`${what}${colour ? ` (${colour})` : ''} at ${box}${sayWords(s)}`)
 }
 
 /** One feedback record as a change request someone can act on. */
 function describe(r) {
   const head = `${r.app} / ${r.screen}${r.mode ? ` (${r.mode})` : ''}, round ${r.round}: ${r.verdict === 'approved' ? (r.noComment ? 'LOOKS GOOD (no comment)' : 'LOOKS GOOD') : 'CHANGES ASKED'}${r.olderPicture ? ' (about an older picture; a new one has been pushed since)' : ''}`
   const lines = [head]
-  if (r.notes) lines.push(`  Notes: ${r.notes.replace(/\n/g, '\n         ')}`)
-  for (const [i, s] of r.shapes.entries()) lines.push(`  ${i + 1}. ${markLine(s)}`)
+  // Where the earlier marks stand comes first: the newest answer says it in full.
   const asked = Array.isArray(r.asked) ? r.asked : []
   if (asked.length) {
     const open = asked.filter(a => a.said !== 'fixed').length
-    lines.push(`  Earlier marks: ${asked.length - open} of ${asked.length} ticked fixed${open ? `, ${open} still to do` : ''}`)
-    for (const a of asked) lines.push(`    ${a.n}. ${a.said === 'fixed' ? 'fixed' : a.cameBack ? 'came back' : a.said === 'stands' ? 'still stands' : 'not ticked, so still to do'}, from round ${a.round}: ${a.type === 'notes' ? `notes "${printable(a.text)}"` : markLine(a)}`)
+    lines.push(`  Earlier marks: ${asked.length - open} of ${asked.length} ticked fixed${open ? `, ${open} still to do` : ''}${r.noComment && open ? ' (sent with the rest, not looked at)' : ''}`)
+    // Sent unseen, an unticked mark was not looked at: not the same as left unticked. `n` is its number here, not a pin's.
+    const unticked = r.noComment ? 'not looked at, so still to do' : 'not ticked, so still to do'
+    for (const a of asked) lines.push(`    ${a.n}. ${a.said === 'fixed' ? 'fixed' : a.cameBack ? 'came back' : a.said === 'stands' ? 'still stands' : unticked}, from round ${a.round}: ${a.type === 'notes' ? `notes "${printable(a.text)}"` : markLine({ ...a, n: undefined })}`)
   }
+  if (r.notes) lines.push(`  Notes: ${r.notes.replace(/\n/g, '\n         ')}`)
+  for (const [i, s] of r.shapes.entries()) lines.push(`  ${i + 1}. ${markLine(s)}`)
   if (r.annotatedImage) lines.push(`  Marked picture: ${r.annotatedImage}`)
   lines.push(`  After: ${r.afterImage}${r.beforeImage ? `\n  Before: ${r.beforeImage}` : ''}`)
   lines.push(`  File: ${r.file}`)

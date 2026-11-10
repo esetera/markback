@@ -33,7 +33,7 @@ test('an answer in a few words', () => {
 test('what was left unsent in an older round is found, newest first, and only what says something', () => {
   const real = m => m.real
   const kept = { 1: { marks: [{ real: true }], notes: '' }, 2: { marks: [{ real: false }], notes: 'Words' }, 3: { marks: [], notes: '  ', good: true } }
-  assert.deepEqual(leftBehind(5, r => kept[r] ?? null, real), [{ round: 2, marks: 0, notes: 'Words' }, { round: 1, marks: 1, notes: '' }])
+  assert.deepEqual(leftBehind(5, r => kept[r] ?? null, real), [{ round: 2, marks: 0, notes: 'Words', ticks: 0 }, { round: 1, marks: 1, notes: '', ticks: 0 }])
   assert.deepEqual(leftBehind(1, () => { throw new Error('not asked') }, real), [])
 })
 
@@ -127,7 +127,12 @@ test('an earlier mark in a few words: what was written or said, the words under 
 })
 
 test('an earlier mark is fitted to a picture of another size, and notes have no place', () => {
-  assert.deepEqual(placeOn({ box: { x: 10, y: 20, w: 30, h: 40 }, size: { w: 100, h: 100 } }, { w: 200, h: 50 }), { x: 20, y: 10, w: 60, h: 20 })
+  assert.deepEqual(placeOn({ box: { x: 10, y: 20, w: 30, h: 40 }, size: { w: 100, h: 100 } }, { w: 200, h: 200 }), { x: 20, y: 40, w: 60, h: 80 }, 'grown as a whole: scaled')
+  // A page that grew from 900 to 3600 high: what was at 700 is still at 700, the same size.
+  assert.deepEqual(placeOn({ box: { x: 100, y: 700, w: 200, h: 150 }, size: { w: 1440, h: 900 } }, { w: 1440, h: 3600 }), { x: 100, y: 700, w: 200, h: 150 })
+  assert.deepEqual(placeOn({ box: { x: 0, y: 800, w: 10, h: 200 }, size: { w: 1440, h: 1200 } }, { w: 1440, h: 900 }), { x: 0, y: 800, w: 10, h: 100 }, 'cut at the new foot')
+  assert.equal(placeOn({ box: { x: 0, y: 1000, w: 10, h: 10 }, size: { w: 1440, h: 1200 } }, { w: 1440, h: 900 }), null, 'below the new foot: no place')
+  assert.equal(placeOn({ box: { x: 10, y: 20, w: 30, h: 40 }, size: { w: 100, h: 100 } }, { w: 200, h: 50 }), null, 'another shape: the place cannot be trusted')
   assert.deepEqual(placeOn({ box: { x: 1, y: 2, w: 3, h: 4 } }, { w: 9, h: 9 }), { x: 1, y: 2, w: 3, h: 4 }, 'with no size, as drawn')
   assert.equal(placeOn({ type: 'notes', text: 'x' }, { w: 9, h: 9 }), null)
 })
@@ -149,4 +154,9 @@ test('earlier marks: open ones to tick, and a fixed one where the picture change
   assert.deepEqual(askedCount(changed, { 1: 'fixed', 2: 'fixed' }), { words: '2 checked', done: true })
   assert.deepEqual(askedCount(quiet, {}), { words: '1 to check', done: false })
   assert.deepEqual(askedCount(askedOf({}), {}), { words: '', done: true })
+})
+
+test('earlier marks ticked and never sent are counted with what was left behind', () => {
+  const kept = { 1: { marks: [], notes: '', said: { 1: 'fixed', 2: 'stands', 3: null } } }
+  assert.deepEqual(leftBehind(2, r => kept[r] ?? null, () => true), [{ round: 1, marks: 0, notes: '', ticks: 2 }])
 })

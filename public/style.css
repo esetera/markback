@@ -183,6 +183,9 @@ body.covered .marking, body.covered #views, body.covered #zoomValue, body.covere
 .checks li:last-child { margin-bottom: 0; }
 /* Beside the picture: what to check, and above it nothing moves; under it, what was asked for last time. */
 .side-col { flex: none; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+/* A narrow window: the list goes under the picture, which keeps the width. */
+.pair.asked-below { flex-direction: column; align-items: center; max-width: 100%; }
+.pair.asked-below .side-col { overflow: visible; }
 /* Marks become checks: each earlier mark, to tick fixed or say it still stands. Its place is drawn on the picture. */
 .asked { flex: none; padding: 10px 12px 12px; background: var(--ground); border: 1px solid var(--rule-firm); box-shadow: var(--sheet-lift); font-size: 14px; line-height: 1.4; color: var(--ink); }
 .asked h2 { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--faint); }

@@ -2142,3 +2142,97 @@ test('marks become checks: a mark fixed before is flagged when the picture chang
   assert.deepEqual(sent.asked.map(a => [a.n, a.said, a.cameBack]), [[1, 'stands', true]])
   assert.deepEqual([...errors, ...quiet.errors], [])
 })
+
+/* ---------- marks become checks: what an independent read found ---------- */
+
+/** One screen with round 1 answered by marks, as the page sends them, and round 2 pushed. */
+async function twoRounds(r, app, shapes, round2 = [], picture = undefined) {
+  r.push(app, ['One'], null, [], picture)
+  const slug = app.toLowerCase()
+  const first = (await r.queue(slug)).screens[0]
+  await fetch(`http://127.0.0.1:${r.port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: slug, id: 'one', after: first.after, round: 1, verdict: 'changes', notes: '', imageSize: { w: 1600, h: 900 }, shapes }) })
+  r.push(app, ['One'], null, ...round2)
+}
+const three = [100, 500, 900].map(x => ({ type: 'box', colour: 'red', box: { x, y: 100, w: 200, h: 150 } }))
+
+test('a second send on one picture keeps the ticks said before it, on the page, after a reload, and in the newest record', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Twice', three)
+  const { page, errors } = await r.open('twice', { undo: 40 })
+  await page.locator('#asked').waitFor()
+  await page.locator('#asked [data-ask="1"] [data-ask-say="fixed"]').click()
+  await page.keyboard.press('Meta+Enter')
+  await waitFor(() => r.read('Twice').find(x => x.round === 2))
+  const again = await r.open('twice/one', { undo: 40 })
+  const row = n => again.page.locator(`#asked [data-ask="${n}"]`)
+  await row(1).waitFor()
+  await again.page.waitForFunction(() => document.querySelector('#asked [data-ask="1"]').classList.contains('said-fixed'))
+  await row(2).locator('[data-ask-say="stands"]').click()
+  await again.page.keyboard.press('Meta+Enter')
+  await waitFor(() => r.read('Twice').filter(x => x.round === 2).length === 2)
+  const newest = r.read('Twice').filter(x => x.round === 2).at(-1)
+  assert.deepEqual(newest.asked.map(a => [a.n, a.said]), [[1, 'fixed'], [2, 'stands'], [3, null]])
+  const third = await r.open('twice/one', { undo: 60000 })
+  await third.page.waitForFunction(() => document.querySelector('#asked [data-ask="2"]')?.classList.contains('said-stands') && document.querySelector('#asked [data-ask="1"]').classList.contains('said-fixed'))
+  assert.equal(await third.page.locator('#askedChip').innerText(), '1 to check')
+  assert.deepEqual([...errors, ...again.errors, ...third.errors], [])
+})
+
+for (const width of [900, 600, 400]) {
+  test(`at ${width} wide the earlier marks never squeeze the picture or run past the edge`, { skip }, async () => {
+    const r = await rig()
+    await twoRounds(r, 'Narrow', three)
+    const { page, errors } = await r.open('narrow', { width, height: 800 })
+    await page.locator('#asked').waitFor()
+    const room = await page.locator('#scroller').evaluate(el => el.clientWidth - 14)
+    const stage = await page.locator('#stage').boundingBox()
+    const list = await page.locator('#asked').boundingBox()
+    assert.ok(stage.width >= Math.min(560, room) * 0.95, `the picture keeps its width: ${stage.width} of ${room}`)
+    assert.ok(list.x >= 0 && list.x + list.width <= width, 'the list is on the page')
+    assert.equal(await page.locator('#scroller').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, 'nothing runs past the edge')
+    if (width < 900) assert.ok(list.y >= stage.y + stage.height, 'under the picture')
+    assert.deepEqual(errors, [])
+  })
+}
+
+test('K from Before shows the earlier marks in After, and a key press on Fixed keeps the keyboard on that button', { skip }, async () => {
+  const r = await rig()
+  const before = join(r.home, 'p.png')
+  await twoRounds(r, 'Keys', three, [['--before', before]])
+  const { page, errors } = await r.open('keys', { undo: 60000 })
+  await page.locator('#asked').waitFor()
+  await page.keyboard.press('v')
+  await page.keyboard.press('v')
+  assert.equal(await page.locator('#asked').isVisible(), false, 'in Before')
+  await page.keyboard.press('k')
+  assert.equal(await page.locator('#asked').isVisible(), true)
+  assert.equal(await page.locator('[data-view="after"]').getAttribute('class').then(c => c.includes('on')), true)
+  await page.locator('#asked [data-ask="2"] [data-ask-say="fixed"]').focus()
+  await page.keyboard.press('Space')
+  assert.equal(await page.evaluate(() => document.activeElement.matches('#asked [data-ask="2"] [data-ask-say="fixed"]')), true)
+  assert.equal(await page.locator('#asked [data-ask="2"]').getAttribute('class').then(c => c.includes('said-fixed')), true)
+  assert.deepEqual(errors, [])
+})
+
+test('with no before, a held mark is compared with the last round\'s picture; on a picture of another shape a place is not trusted', { skip }, async () => {
+  const r = await rig()
+  const plain = join(r.home, 'plain.png')
+  const moved = join(r.home, 'moved.png')
+  writePicture(plain, 1600, 900)
+  writePicture(moved, 1600, 900, { x: 120, y: 120, w: 200, h: 120 })
+  await twoRounds(r, 'Last', three.slice(0, 1), [[], plain], plain)
+  const s = (await r.queue('last')).screens[0]
+  await fetch(`http://127.0.0.1:${r.port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: 'last', id: 'one', after: s.after, round: 2, verdict: 'changes', notes: 'x', shapes: [], imageSize: { w: 1600, h: 900 }, said: { 1: 'fixed' } }) })
+  r.push('Last', ['One'], null, [], moved)
+  const { page, errors } = await r.open('last', { undo: 60000 })
+  const row = page.locator('#asked [data-ask="1"]')
+  await row.waitFor()
+  assert.match(await row.innerText(), /Came back\?/)
+  // Another shape: listed, not drawn, and it says so.
+  await twoRounds(r, 'Shape', three.slice(0, 1), [[], r.tall])
+  const other = await r.open('shape', { undo: 60000 })
+  const listed = other.page.locator('#asked [data-ask="1"]')
+  await listed.waitFor()
+  await other.page.waitForFunction(() => /place may have moved/.test(document.querySelector('#asked [data-ask="1"]').textContent), null, { timeout: 5000 })
+  assert.deepEqual([...errors, ...other.errors], [])
+})
