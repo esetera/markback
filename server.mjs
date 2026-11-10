@@ -157,6 +157,41 @@ const proxied = req => Object.keys(req.headers).some(name => name.startsWith('ta
  */
 const phone = phoneDoor({ serverPort: PORT, handle: (req, res) => handle(req, res, true) })
 
+/**
+ * What a phone is sent, built from short lists of fields rather than by taking some away: nothing of this computer goes, no
+ * path, no folder, no command an agent is woken with, no line of its log. A field added later is not sent until it is put here.
+ */
+const pick = (from, names) => Object.fromEntries(names.filter(name => from?.[name] !== undefined).map(name => [name, from[name]]))
+const SCREEN = ['app', 'appSlug', 'id', 'screen', 'mode', 'note', 'check', 'from', 'kind', 'item', 'order', 'round', 'after', 'before', 'words', 'status', 'pushedAt', 'sentAt']
+const forPhone = {
+  apps: apps => apps.map(a => ({
+    slug: a.slug,
+    name: a.name,
+    // Feedback is only counted by the page: its names, never where they are.
+    screens: a.screens.map(s => ({ ...pick(s, SCREEN), feedback: (s.feedback ?? []).map(() => 'sent') })),
+    ...(a.setAside ? { setAside: pick(a.setAside, ['at', 'isNew']) } : {}),
+  })),
+  listening: l => ({
+    agents: (l.agents ?? []).map(a => pick(a, ['by', 'what', 'app', 'told'])),
+    heard: l.heard,
+    unheard: pick(l.unheard, ['queue', 'ideas', 'marks']),
+    // Whether an agent is being woken, and by whom: never how.
+    wake: l.wake ? pick(l.wake, ['status', 'on', 'by']) : null,
+    wakes: [],
+    desktop: Object.fromEntries(Object.entries(l.desktop ?? {}).map(([slug, d]) => [slug, pick(d, ['on', 'pending'])])),
+  }),
+  phone: status => pick(status, ['on', 'stuck', 'minutes']),
+  records: records => records.map(r => pick(r, ['round', 'verdict', 'notes', 'marks', 'noComment', 'olderPicture', 'sentAt', 'annotatedUrl', 'afterUrl', 'beforeUrl'])),
+  film: f => f && {
+    ...pick(f, ['screen', 'mode', 'finished', 'missing', 'seconds']),
+    rounds: f.rounds.map(r => ({ round: r.round, url: r.url, answer: r.answer && pick(r.answer, ['verdict', 'notes', 'marks', 'noComment']) })),
+    steps: f.steps.map(step => pick(step, ['at', 'url', 'marked', 'seconds'])),
+    save: pick(f.save, ['why']),
+  },
+  record: record => pick(record, ['verdict', 'round', 'sentAt', 'olderPicture']),
+  made: made => made && pick(made, ['what', 'title', 'heard']),
+}
+
 /** Every request: from this computer on the page's own listener, or from a phone through the door. */
 async function handle(req, res, fromPhone = false) {
   const url = new URL(req.url, 'http://localhost')
@@ -167,9 +202,10 @@ async function handle(req, res, fromPhone = false) {
     if (req.method === 'GET' && url.pathname === '/api/queue') {
       const apps = listApps()
       // `remote`: asked through the phone's door, so the page offers only what a phone may do.
-      return json(res, 200, { apps, listening: listening(apps), phone: phone.status(), ...(fromPhone ? { remote: true } : {}) })
+      if (fromPhone) return json(res, 200, { apps: forPhone.apps(apps), listening: forPhone.listening(listening(apps)), phone: forPhone.phone(phone.status()), remote: true })
+      return json(res, 200, { apps, listening: listening(apps), phone: phone.status() })
     }
-    if (req.method === 'GET' && url.pathname === '/api/phone') return json(res, 200, phone.status())
+    if (req.method === 'GET' && url.pathname === '/api/phone') return json(res, 200, fromPhone ? forPhone.phone(phone.status()) : phone.status())
     if (req.method === 'POST' && url.pathname === '/api/phone') {
       const input = JSON.parse(await body(req))
       // Turned on only from this computer itself: a phone can turn it off, never on or on for longer.
@@ -195,10 +231,12 @@ async function handle(req, res, fromPhone = false) {
       return path ? sendFile(res, path, 'max-age=31536000, immutable') : json(res, 404, { error: 'No such picture' })
     }
     if (req.method === 'GET' && url.pathname === '/api/history') {
-      return json(res, 200, { records: history(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '') })
+      const records = history(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '')
+      return json(res, 200, { records: fromPhone ? forPhone.records(records) : records })
     }
     if (req.method === 'GET' && url.pathname === '/api/film') {
-      return json(res, 200, { film: film(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '') })
+      const made = film(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '')
+      return json(res, 200, { film: fromPhone ? forPhone.film(made) : made })
     }
     if (req.method === 'GET' && url.pathname === '/api/film/file') {
       // The film as a video, made when asked for and not kept. It needs ffmpeg: without it, a plain line says so.
@@ -286,6 +324,7 @@ async function handle(req, res, fromPhone = false) {
       const stageBefore = record.item ? listWork().find(i => i.id === record.item)?.stage : null
       const made = madeBy(record, stageBefore, answered(record))
       console.log(`received ${record.app} / ${record.screen}${record.mode ? ` (${record.mode})` : ''}: ${record.verdict}, ${record.shapes.length} marks`)
+      if (fromPhone) return json(res, 200, { ok: true, record: forPhone.record(record), ...(made ? { made: forPhone.made(made) } : {}), listening: forPhone.listening(listening()) })
       return json(res, 200, { ok: true, record, ...(made ? { made } : {}), listening: listening() })
     }
     if (req.method === 'GET') {

@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { standInTailscale } from './helpers.mjs'
+import { standInTailscale, writePicture } from './helpers.mjs'
 import { qr, qrSvg } from '../public/qr.js'
 import { allowed, phoneMay, warmUp } from '../lib/phone.mjs'
 
@@ -248,6 +248,46 @@ test('a phone reviews and marks, nothing more: what runs things on this computer
   assert.equal(phoneMay('GET', '/work.html'), false)
   assert.equal(phoneMay('POST', '/api/film'), false)
   assert.equal(phoneMay('PATCH', '/'), false)
+})
+
+test('a phone is sent nothing of this computer: no path, no folder, no wake command, in any reply', async () => {
+  const r = await rig()
+  // A project folder with a picture in it, pushed from there, a wake command set there, and marks that wait unheard.
+  const project = mkdtempSync(join(work, 'project-folder-'))
+  const picture = join(project, 'home-shot.png')
+  writePicture(picture, 800, 500)
+  const inProject = (...words) => spawnSync('node', [CLI, ...words], { env: r.env, cwd: project, encoding: 'utf8' })
+  assert.equal(inProject('push', '--app', 'Leak', '--screen', 'Home', '--after', picture).status, 0)
+  assert.equal(inProject('push', '--app', 'Leak', '--screen', 'Other', '--after', picture).status, 0)
+  const command = 'secret-agent-command --resume {prompt}'
+  assert.equal(inProject('wake', 'set', '--run', command, '--by', 'Tester', '--app', 'Leak').status, 0)
+  r.review('phone', 'on')
+  const origin = `https://${NAME}`
+  const queue = JSON.parse((await r.local('/api/queue')).text)
+  const home = queue.apps[0].screens.find(x => x.id === 'home')
+  const answer = { appSlug: 'leak', id: 'home', after: home.after, round: home.round, verdict: 'changes', notes: 'Move it', shapes: [{ type: 'box', colour: 'red', box: { x: 1, y: 1, w: 9, h: 9 } }], imageSize: { w: 800, h: 500 }, png: null }
+  const replies = {
+    queue: await r.ask('/api/queue'),
+    send: await r.ask('/api/send', { method: 'POST', headers: { origin }, body: answer }),
+    queueAfter: await r.ask('/api/queue'),
+    history: await r.ask('/api/history?app=leak&id=home'),
+    film: await r.ask('/api/film?app=leak&id=home'),
+    phone: await r.ask('/api/phone'),
+  }
+  // The same, asked at the computer, does hold them: so the test has something to find.
+  const atComputer = (await r.local('/api/queue')).text
+  assert.ok(atComputer.includes(project) && atComputer.includes('secret-agent-command'), 'the computer\'s own page is told where and how')
+  for (const [name, got] of Object.entries(replies)) {
+    assert.equal(got.status, 200, name)
+    for (const secret of [project, r.home, work, 'secret-agent-command', tmpdir(), secretOf(r.tail).slice(1)]) assert.equal(got.text.includes(secret), false, `${name} holds ${secret}`)
+    assert.equal(/"(source|run|in|lastLine|annotatedImage|afterImage|beforeImage|pushedFrom)"/.test(got.text), false, `${name}: ${got.text.slice(0, 200)}`)
+  }
+  // What the phone's page needs is there.
+  const sent = JSON.parse(replies.queueAfter.text)
+  assert.equal(sent.remote, true)
+  assert.deepEqual(sent.apps[0].screens.map(x => x.status).sort(), ['sent', 'waiting'])
+  assert.ok(sent.listening.unheard.marks >= 1)
+  assert.equal(JSON.parse(replies.history.text).records[0].verdict, 'changes')
 })
 
 test('the page turns it on and off too, from this computer', async () => {
