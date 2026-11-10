@@ -1014,17 +1014,16 @@ test('a new picture while the person writes in a box: the box, its words and the
   assert.deepEqual(errors, [])
 })
 
-test('Esc closes the box, and a G straight after is a Looks good; Tab goes to the notes and every word typed there lands', { skip }, async () => {
+test('Esc closes the box, and a G straight after is a Looks good; words typed in the notes while a box is open land there', { skip }, async () => {
   const { page, errors } = await twoReadings()
-  // The last line's box: Tab from it goes on to the notes.
   await page.locator('.reading[data-reading$="|2"] [data-no]').click()
   await page.keyboard.type('The footer')
-  await page.keyboard.press('Tab')
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'notes')
+  // The notes, chosen by a press: typing there is words, never the page's keys, and the box stays open with its own.
+  await page.locator('#notes').click()
   const sentence = 'Also make the whole page lighter please, it is far too dark'
   await page.keyboard.type(sentence, { delay: 20 })
   assert.equal(await page.locator('#notes').inputValue(), sentence)
-  assert.equal(await page.locator('[data-correct]').inputValue(), 'The footer')
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'The footer')
   await page.locator('#notes').fill('')
   await page.locator('[data-correct]').focus()
   await page.keyboard.press('Escape')
@@ -1035,14 +1034,17 @@ test('Esc closes the box, and a G straight after is a Looks good; Tab goes to th
   assert.deepEqual(errors, [])
 })
 
-test('Yes on one line keeps a half-written box on another, with its words', { skip }, async () => {
+test('one box at a time: while it is open the other lines wait, and once it is sent they can be pressed', { skip }, async () => {
   const { page, errors, read } = await twoReadings()
   await page.locator('.reading[data-reading$="|2"] [data-no]').click()
   await page.keyboard.type('half a corr')
+  await page.locator('.reading[data-reading$="|1"] [data-yes]').click({ timeout: 500 }).then(() => assert.fail('it could be pressed'), () => undefined)
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'half a corr')
+  assert.equal(read('Lines')[0].inferred[0].reply ?? null, null)
+  await page.locator('.reading.open [data-send]').click()
+  await page.locator('.reading.open').waitFor({ state: 'detached' })
   await page.locator('.reading[data-reading$="|1"] [data-yes]').click()
-  await page.locator('.reading[data-reading$="|1"] .rs').waitFor()
-  assert.equal(await page.locator('[data-correct]').inputValue(), 'half a corr')
-  await waitFor(() => read('Lines')[0].inferred[0].reply?.yes)
+  await waitFor(() => read('Lines')[0].inferred[0].reply?.yes && read('Lines')[0].inferred[1].reply?.text === 'half a corr')
   assert.deepEqual(errors, [])
 })
 
@@ -1102,6 +1104,125 @@ test('a line whose mark is out of view is not pulled in: a marker says how many,
   // Pointing at a line lights its mark.
   await page.locator('.reading[data-reading$="|2"]').hover()
   assert.equal(await page.locator('#readingSpot').isVisible(), true)
+  assert.deepEqual(errors, [])
+})
+
+test('while a box is open the page\'s keys are off wherever the keyboard is: Tab stays in the card, words typed on its buttons go into the box', { skip }, async () => {
+  const { page, errors, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Not the')
+  assert.equal(await page.locator('.reading[data-reading$="|2"]').evaluate(el => el.inert), true, 'the other line cannot be pressed')
+  await page.keyboard.press('Tab')
+  assert.equal(await page.evaluate(() => !!document.activeElement.closest('.reading.open')), true, 'Tab stays in the card')
+  await page.keyboard.type(' footer, go')
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'Not the footer, go')
+  assert.equal(await page.evaluate(() => !!document.fullscreenElement), false)
+  assert.equal(await page.locator('.tool.on[data-tool]').getAttribute('data-tool'), 'box')
+  assert.equal(await page.locator('#confirmModal').isVisible(), false)
+  // A key on a control outside the card does nothing, and Tab from there goes back into the box.
+  await page.locator('#menuOpen').focus()
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Space')
+  await page.keyboard.press('g')
+  assert.equal(await page.locator('#menu').isVisible(), false, 'New project and the rest of the menu cannot be opened by key')
+  await page.keyboard.press('Tab')
+  assert.equal(await page.evaluate(() => document.activeElement.matches('.reading.open [data-correct]')), true)
+  // A late Go there does nothing while the box is open.
+  await page.evaluate(() => {
+    const t = document.getElementById('toast')
+    t.innerHTML = '<button class="link" data-toast-go="lines/two">Go there</button>'
+    t.hidden = false
+  })
+  await page.locator('[data-toast-go]').click()
+  assert.equal(await at(page), 1)
+  await page.locator('.reading.open [data-correct]').focus()
+  await page.keyboard.press('Enter')
+  await page.locator('.reading.open').waitFor({ state: 'detached' })
+  const [record] = read('Lines')
+  assert.deepEqual(record.inferred.map(r => r.reply?.text ?? r.reply?.yes ?? null), ['Not the footer, go', null], 'nothing was said on line 2')
+  assert.equal(read('Lines').length, 1, 'the screen was not answered')
+  // Box closed: G is G again, at once.
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('g')
+  await waitFor(() => read('Lines').some(r => r.screen === 'Two' && r.verdict === 'approved'))
+  assert.deepEqual(errors, [])
+})
+
+test('letters from an input method and pasted words go into the box, and nothing reaches the page\'s keys', { skip }, async () => {
+  const { page, errors, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Input.imeSetComposition', { text: 'g', selectionStart: 1, selectionEnd: 1 })
+  // Enter while letters are still being put together ends the word, not the box.
+  await page.locator('[data-correct]').dispatchEvent('keydown', { key: 'Enter', isComposing: true, keyCode: 229 })
+  await cdp.send('Input.insertText', { text: '日本語' })
+  await page.keyboard.insertText(' and pasted words')
+  await page.locator('[data-correct]').dispatchEvent('paste')
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), '日本語 and pasted words')
+  assert.equal(await at(page), 1)
+  assert.equal(await page.locator('#confirmModal').isVisible(), false)
+  assert.equal(read('Lines')[0].inferred[0].reply ?? null, null, 'nothing was sent')
+  assert.deepEqual(errors, [])
+})
+
+test('words that do not reach the server stay in their box, which says so, and Enter tries again', { skip }, async () => {
+  const { page, read } = await twoReadings()
+  await page.route('**/api/reading', route => route.abort())
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('The other button')
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() => /Not sent/.test(document.querySelector('.reading.open .rx')?.textContent ?? ''))
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'The other button')
+  await page.unroute('**/api/reading')
+  await page.locator('.reading.open [data-correct]').focus()
+  await page.keyboard.press('Enter')
+  await page.locator('.reading.open').waitFor({ state: 'detached' })
+  await waitFor(() => read('Lines')[0].inferred[0].reply?.text === 'The other button')
+})
+
+test('a kept box says where its words went once they are saved', { skip }, async () => {
+  const { page, push, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Not that')
+  push('Lines', ['One'])
+  await page.locator('.reading.kept').waitFor({ timeout: 8000 })
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() => /Sent, about the earlier picture \(round 1\)\./.test(document.getElementById('toast').textContent))
+  await waitFor(() => read('Lines')[0].inferred[0].reply?.text === 'Not that')
+})
+
+test('a review cleared while a box is open: the box stays, with its words, and says the review was cleared', { skip }, async () => {
+  const { page, push, clear } = await twoReadings()
+  // Another review, so a screen is left to show once this one is cleared.
+  push('Else', ['Here'])
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Bigger')
+  clear('Lines')
+  await page.locator('.reading.kept').waitFor({ timeout: 8000 })
+  assert.match(await page.locator('.reading.kept').innerText(), /This review was cleared\. Your words are kept/)
+  assert.equal(await page.locator('.reading.kept [data-correct]').inputValue(), 'Bigger')
+})
+
+test('in a narrow window the lines fold into a bar under the picture: marks at the bottom can be seen and drawn on, and each line reached', { skip }, async () => {
+  const marks = [[0.05, 0.05, 0.2, 0.15], [0.3, 0.3, 0.4, 0.4], [0.5, 0.5, 0.6, 0.6], [0.05, 0.85, 0.25, 0.98], [0.75, 0.85, 0.95, 0.98]]
+  const { page, errors, read } = await twoReadings({ width: 380, height: 600, marks })
+  await page.locator('#readingsBar').waitFor()
+  assert.match(await page.locator('#readingsBar').innerText(), /5 readings/)
+  // Drawing folds it; the bar has its own room, so the whole picture is above it, the bottom edge too.
+  await draw(page, 0.6, 0.1, 0.8, 0.2)
+  assert.equal(await page.locator('#readings').isVisible(), false)
+  await draw(page, 0.4, 0.88, 0.6, 0.97)
+  const stage = await page.locator('#stage').boundingBox()
+  const bar = await page.locator('#readingsBar').boundingBox()
+  assert.ok(stage.y + stage.height <= bar.y + 1, `${JSON.stringify(stage)} above ${JSON.stringify(bar)}`)
+  assert.equal((await saved(page, 'lines', 'one'))?.marks?.length, 2, 'a mark at the bottom edge was drawn')
+  // Open again: every line can be pressed, and the sheet never covers the Send bar.
+  await page.locator('[data-fold-readings]').click()
+  for (let i = 1; i <= 5; i++) await page.locator(`.reading[data-reading$="|${i}"] [data-yes]`).click()
+  const list = await page.locator('#readings').boundingBox()
+  const foot = await page.locator('#foot').boundingBox()
+  assert.ok(list.y + list.height <= foot.y, 'the Send bar stays clear')
+  await waitFor(() => read('Lines')[0].inferred.every(r => r.reply?.yes))
   assert.deepEqual(errors, [])
 })
 

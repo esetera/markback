@@ -241,6 +241,16 @@ body.covered .marking, body.covered #views, body.covered #zoomValue, body.covere
 .reading button.link { height: auto; padding: 0; border: 0; background: none; font-weight: 400; color: var(--soft); text-decoration: underline; text-underline-offset: 2px; }
 .reading input { flex: 1 1 auto; min-width: 220px; height: 24px; padding: 2px 6px; font: inherit; border: 1px solid var(--accent); border-radius: 2px; background: var(--ground); color: var(--ink); outline: none; }
 .reading[hidden] { display: none; }
+.reading.open { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent), var(--sheet-lift); }
+.reading .rx:empty { display: none; }
+.reading .rx { flex-basis: 100%; color: var(--danger); font-size: 12px; }
+.reading.sending .rx { color: var(--soft); }
+.reading.open, .reading.kept { flex-wrap: wrap; }
+.readings.list.folded { display: none; }
+/* The bar under the picture in a narrow window: how many lines, and a press to open or fold them. */
+.readings-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 34px; padding: 0 8px 0 12px; border-top: 1px solid var(--rule-firm); background: var(--side); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.readings-bar[hidden] { display: none; }
+.readings-bar .btn { height: 24px; padding: 0 10px; font-size: 12px; }
 /* A box whose line went from under it: the words stay, and it says why. */
 .reading.kept { border-color: var(--amber); }
 .reading.kept .rt b { font-weight: 600; }
