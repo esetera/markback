@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Markback · Queue</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/work.css">
+</head>
+<body class="work">
+  <header class="work-bar">
+    <span class="wordmark"><img src="/icon.svg" alt="" width="16" height="16">Markback</span>
+    <a class="btn" href="/" data-tip-key="R">Review <span class="kbd">R</span></a>
+    <div class="segmented" role="group" aria-label="Page">
+      <button class="btn" data-page="queue">Queue</button>
+      <button class="btn" data-page="ideas">Ideas</button>
+    </div>
+    <span class="spacer"></span>
+    <button class="btn" id="micBtn" hidden></button>
+  </header>
+  <main class="work-page" id="page"></main>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="/work.js"></script>
+</body>
+</html>

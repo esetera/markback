@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+// In a project's folder: finds its app, takes its main screens and opens them to draw on. The same as review project.
+process.argv.splice(2, 0, 'project')
+import('../review.mjs')

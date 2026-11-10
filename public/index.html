@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Markback</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="loading">
+  <header class="bar" id="bar">
+    <button class="tool" id="listOpen" data-tip="Apps and screens" data-key="L" aria-label="Apps and screens"></button>
+    <span class="wordmark"><img src="/icon.svg" alt="" width="16" height="16">Markback</span>
+    <span class="kind" id="kindTag" hidden></span>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="pager">
+      <button class="tool" id="back" data-tip="Previous screen" data-key="←" aria-label="Previous screen"></button>
+      <button class="tool" id="next" data-tip="Next screen" data-key="→" aria-label="Next screen"></button>
+    </div>
+    <span class="sep marking"></span>
+    <div class="group marking" id="toolButtons" role="group" aria-label="Tools"></div>
+    <span class="sep marking"></span>
+    <div class="group marking" id="colours" role="group" aria-label="Colour"></div>
+    <span class="sep marking"></span>
+    <div class="group marking">
+      <button class="tool" id="undo" data-tip="Undo" data-key="⌘Z" aria-label="Undo"></button>
+      <button class="tool" id="redo" data-tip="Redo" data-key="⇧⌘Z" aria-label="Redo"></button>
+      <button class="tool" id="clear" data-tip="Remove every mark on this screen" aria-label="Clear marks"></button>
+      <button class="tool" id="changesOn" data-tip="Where it changed" data-key="C" aria-label="Where it changed" hidden></button>
+    </div>
+    <button class="zoom-value" id="zoomValue" data-tip="Fit the screen in the window" data-key="0" hidden></button>
+    <button class="overall" id="overall" data-tip="All screens of this review" data-key="O"></button>
+    <span class="spacer"></span>
+    <button class="btn stop" id="stopHere" data-tip="Leave at any time: nothing is lost" data-key="S">Stop here</button>
+    <div class="segmented" id="views" role="group" aria-label="View"></div>
+    <div class="menu-wrap">
+      <button class="tool" id="menuOpen" data-tip="More" aria-label="More" aria-haspopup="menu"></button>
+      <div class="menu" id="menu" role="menu" hidden></div>
+    </div>
+  </header>
+
+  <div class="workspace" id="workspace">
+    <nav class="filmstrip" id="filmstrip" aria-label="Screens">
+      <div class="strip-head" id="stripHead"></div>
+      <div class="strip-list" id="screenList"></div>
+    </nav>
+
+    <main class="center" id="center">
+      <div class="about" id="about" hidden><div class="about-note" id="aboutNote"></div><div class="about-size" id="aboutSize" aria-hidden="true"></div></div>
+      <div class="scroller" id="scroller">
+        <div class="pair" id="pair">
+          <figure class="shot before-shot" id="beforeShot"><figcaption>Before</figcaption><div class="frame"><img id="beforeImg" alt="Before"></div></figure>
+          <figure class="shot after-shot" id="afterShot"><figcaption id="afterCaption">After</figcaption><div class="frame" id="stage"><img id="afterImg" alt="After"><canvas id="canvas"></canvas></div></figure>
+          <aside class="checks" id="checks" hidden></aside>
+        </div>
+        <div class="state-card" id="stateCard" hidden></div>
+      </div>
+      <footer class="foot" id="foot">
+        <div class="note-wrap"><textarea id="notes" rows="1" placeholder="Notes (N)"></textarea></div>
+        <button class="tool" id="micBtn" data-key="D" aria-label="Speak your notes" hidden></button>
+        <button class="said" id="said" hidden></button>
+        <div class="foot-actions" id="footActions"></div>
+      </footer>
+      <section class="segment" id="segment" aria-live="polite" hidden></section>
+    </main>
+
+    <aside class="inspector" id="inspector" aria-label="This screen">
+      <section class="insp-head" id="inspHead"></section>
+      <section class="insp-section" id="yourAnswer"></section>
+      <section class="insp-section" id="history"></section>
+    </aside>
+  </div>
+
+  <aside class="drawer" id="drawer" aria-label="Apps and screens" hidden>
+    <div class="drawer-scroll" id="drawerList"></div>
+  </aside>
+
+  <div class="modal-back" id="helpModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+      <div class="modal-head"><h2 id="helpTitle">Keyboard shortcuts</h2><button class="tool" id="helpClose" aria-label="Close"></button></div>
+      <div class="keys" id="keys"></div>
+    </div>
+  </div>
+
+  <div class="modal-back" id="confirmModal" hidden>
+    <div class="modal small" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h2 id="confirmTitle">Send as looking good?</h2>
+      <p id="confirmText">Your marks on this screen are dropped. Only the approval is sent.</p>
+      <div class="modal-actions"><button class="btn" id="confirmNo">Keep my marks</button><button class="btn primary" id="confirmYes">Send as looking good</button></div>
+    </div>
+  </div>
+
+  <div class="modal-back" id="sheetModal" hidden>
+    <div class="modal sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <div class="modal-head"><h2 id="sheetTitle"></h2><button class="tool" id="sheetClose" aria-label="Close" data-tip="Close" data-key="Esc"></button></div>
+      <div class="sheet-grid" id="sheetGrid"></div>
+      <div class="modal-actions"><button class="btn primary" id="sheetRest"></button></div>
+    </div>
+  </div>
+
+  <div class="modal-back" id="submitModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="submitTitle">
+      <div class="modal-head"><h2 id="submitTitle">Looks good for the rest</h2></div>
+      <div id="submitBody"></div>
+      <div class="modal-actions"><span class="submit-status" id="submitStatus"></span><button class="btn" id="submitNo">Cancel</button><button class="btn primary" id="submitYes">Answer</button></div>
+    </div>
+  </div>
+
+  <div class="viewer" id="viewer" hidden>
+    <div class="viewer-head"><span id="viewerTitle"></span><button class="tool" id="viewerClose" aria-label="Close" data-tip="Close" data-key="Esc"></button></div>
+    <div class="viewer-body"><img id="viewerImg" alt=""></div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <div class="tip" id="tip" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

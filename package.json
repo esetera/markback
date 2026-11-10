@@ -1,0 +1,36 @@
+{
+  "name": "markback",
+  "version": "0.1.0",
+  "description": "Building apps is not prompting, it is annotating. Agents push screenshots; you mark them up; each mark comes back as a request.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "bin": {
+    "markback": "./bin/markback",
+    "review": "./bin/review"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "author": "Pure Science Inc. <adam@pure.science>",
+  "homepage": "https://github.com/esetera/markback",
+  "license": "MIT",
+  "files": [
+    ".claude-plugin",
+    "bin",
+    "docs/picture.png",
+    "docs/icon.svg",
+    "docs/icon.png",
+    "lib",
+    "public",
+    "skills",
+    "AGENTS.md",
+    "README.md",
+    "LICENSE",
+    "package.json",
+    "review.mjs",
+    "server.mjs"
+  ]
+}
