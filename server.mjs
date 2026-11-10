@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
+import { MINUTES as PHONE_MINUTES, PhoneProblem, WORDS as PHONE_WORDS, phoneDoor } from './lib/phone.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' }
@@ -78,8 +79,9 @@ const hostOf = text => {
     return ''
   }
 }
-function isLocal(req) {
-  if (!LOCAL_HOSTS.has(hostOf(`http://${req.headers.host}`))) return false
+const localHost = req => LOCAL_HOSTS.has(hostOf(`http://${req.headers.host}`))
+/** Asked by this site's own page, not by another site open in the same browser. */
+function ownPage(req) {
   // A picture or script tag on another site sends no origin, but the browser says where it came from.
   // Following a link here is fine: that opens the page, and the other site sees nothing.
   if (['cross-site', 'same-site'].includes(req.headers['sec-fetch-site']) && req.headers['sec-fetch-mode'] !== 'navigate') return false
@@ -90,13 +92,42 @@ function isLocal(req) {
     return false
   }
 }
+const isLocal = req => localHost(req) && ownPage(req)
 
-const server = createServer(async (req, res) => {
+/** Review from a phone: a second door, closed until the person opens it here. Requests through it carry its code. */
+const phone = phoneDoor((req, res) => handle(req, res, true))
+
+/** Every request, from this computer or, with the code, through the phone's door. */
+async function handle(req, res, fromPhone = false) {
   const url = new URL(req.url, 'http://localhost')
   // Only this computer's own pages: another site open in the browser must not write here, or read by renaming itself.
-  if (!isLocal(req)) return json(res, 403, { error: 'Only this computer can use this.' })
+  // Through the phone's door the code has been checked already, and the name it was asked by does not matter.
+  if (!(fromPhone ? ownPage(req) : isLocal(req))) return json(res, 403, { error: 'Only this computer can use this.' })
   try {
-    if (req.method === 'GET' && url.pathname === '/api/queue') return json(res, 200, { apps: listApps() })
+    if (req.method === 'GET' && url.pathname === '/api/queue') return json(res, 200, { apps: listApps(), phone: phone.status() })
+    if (req.method === 'GET' && url.pathname === '/api/phone') return json(res, 200, phone.status())
+    if (req.method === 'POST' && url.pathname === '/api/phone') {
+      const input = JSON.parse(await body(req))
+      // Opened only here: the phone can close its door, never open it or keep it open longer.
+      if (input.on !== true && fromPhone) {
+        // Closing the door drops every connection through it, this one too: the answer goes first.
+        res.on('finish', () => phone.off())
+        return json(res, 200, { on: false, minutes: PHONE_MINUTES })
+      }
+      if (input.on !== true) phone.off()
+      else if (fromPhone) return json(res, 403, { error: PHONE_WORDS.atComputer })
+      else {
+        try {
+          await phone.on()
+        } catch (error) {
+          if (error instanceof PhoneProblem) return json(res, 400, { error: error.message })
+          throw error
+        }
+      }
+      return json(res, 200, phone.status())
+    }
+    // Taking a picture drives this computer's own browser to an address: that is for the computer, not the phone.
+    if (fromPhone && url.pathname === '/api/show') return json(res, 403, { error: 'Do this at the computer.' })
     if (req.method === 'GET' && url.pathname.startsWith('/images/')) {
       const path = inside(IMAGES, decodeURIComponent(url.pathname.slice('/images/'.length)))
       // Pushed pictures are never changed in place (a new push makes a new name), so they can be kept.
@@ -166,12 +197,13 @@ const server = createServer(async (req, res) => {
   } catch (error) {
     json(res, 500, { error: error instanceof Error ? error.message : String(error) })
   }
-})
+}
+const server = createServer((req, res) => handle(req, res))
 
 server.on('error', error => {
   if (error.code !== 'EADDRINUSE') throw error
   console.error(`Port ${PORT} is taken. Choose another: review start --port ${PORT + 1}`)
   process.exit(1)
 })
-// This computer only: nothing here is reachable from another machine.
+// This computer only. The phone's door, when the person opens it, is a listener of its own, and closes with this process.
 server.listen(PORT, '127.0.0.1', () => console.log(`Markback on http://localhost:${PORT}`))

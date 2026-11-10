@@ -19,6 +19,10 @@ const from = process.env.REVIEW_PLAYWRIGHT_FROM
 const skip = from ? false : 'set REVIEW_PLAYWRIGHT_FROM to a package.json that has Playwright'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 let browser
+let chromium
+// No question from the Mac's keychain while a test runs.
+const CHROME = { headless: true, ...(process.env.REVIEW_CHROME ? { executablePath: process.env.REVIEW_CHROME } : {}) }
+const CHROME_ARGS = ['--use-mock-keychain', '--password-store=basic']
 /** A port nothing else is on: another wizard running here must not answer for this one. */
 const freePort = () => new Promise((resolve, reject) => {
   const probe = createServer()
@@ -32,8 +36,8 @@ const cleanups = []
 
 before(async () => {
   if (skip) return
-  const { chromium } = createRequire(from)('playwright')
-  browser = await chromium.launch({ headless: true, ...(process.env.REVIEW_CHROME ? { executablePath: process.env.REVIEW_CHROME } : {}) })
+  chromium = createRequire(from)('playwright').chromium
+  browser = await chromium.launch({ ...CHROME, args: CHROME_ARGS })
 })
 after(async () => {
   await browser?.close()
@@ -41,11 +45,11 @@ after(async () => {
 })
 
 /** A store and a server for one test. */
-async function rig() {
+async function rig(more = {}) {
   const home = mkdtempSync(join(tmpdir(), 'review-browser-'))
   const port = await freePort()
   // REVIEW_CHROME here is for driving these tests; a picture of an app is taken by the Chrome a person would have.
-  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_CHROME: '' }
+  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_CHROME: '', ...more }
   // Wide: it fills the room, and what to check is the line under the bar. `tall` leaves room beside it.
   const picture = join(home, 'p.png')
   writePicture(picture, 1600, 900)
@@ -74,8 +78,8 @@ async function rig() {
   const read = app => JSON.parse(execFileSync('node', [join(ROOT, 'review.mjs'), 'read', '--app', app, '--json'], { env, encoding: 'utf8' }))
   const queue = async slug => (await (await fetch(`http://127.0.0.1:${port}/api/queue`)).json()).apps.find(a => a.slug === slug)
   /** `undo` is how long an answer can be taken back. Long: it stays here. Short: it goes at once. */
-  const open = async (app, { undo = 40, width = 1500, height = 960, colorScheme = 'light', seed = null } = {}) => {
-    const context = await browser.newContext({ viewport: { width, height }, colorScheme })
+  const open = async (app, { undo = 40, width = 1500, height = 960, colorScheme = 'light', seed = null, touch = false } = {}) => {
+    const context = await browser.newContext({ viewport: { width, height }, colorScheme, hasTouch: touch })
     const page = await context.newPage()
     const errors = []
     page.on('pageerror', e => errors.push(e.message))
@@ -1984,4 +1988,249 @@ test('select the words themselves: where a picture has a word list, the words to
   await settled(page)
   assert.equal((await saved(page, 'words', 'without')).marks[0].tool, 'box')
   assert.deepEqual(errors, [])
+})
+
+/* ---------- review from a phone ---------- */
+
+/** One finger on the picture: down at the first place, along the rest, and up. Places are parts of the picture's width and height. */
+const finger = async (page, ...places) => {
+  const b = await page.locator('#canvas').boundingBox()
+  const cdp = await page.context().newCDPSession(page)
+  const touch = (type, at) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: at ? [{ x: Math.round(b.x + b.width * at[0]), y: Math.round(b.y + b.height * at[1]) }] : [] })
+  await touch('touchStart', places[0])
+  for (const at of places.slice(1)) await touch('touchMove', at)
+  await touch('touchEnd')
+  await cdp.detach()
+  await page.waitForTimeout(40)
+}
+const PHONE = { width: 390, height: 844, touch: true }
+
+test('on a phone: a name, a count and three large buttons; a finger draws a box, an arrow and a line once Mark is pressed, and Send sends them', { skip }, async () => {
+  const r = await rig()
+  r.push('Pocket', ['One', 'Two'], () => 'Do the rows line up?')
+  const { page, errors } = await r.open('pocket', PHONE)
+  const sizeOf = sel => page.locator(sel).boundingBox()
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390, 'nothing is wider than the phone')
+  assert.equal(await page.locator('#crumbs').innerText(), 'Pocket')
+  assert.equal(await page.locator('#overall').innerText(), '1 of 2')
+  assert.match(await page.locator('#aboutNote').innerText(), /Do the rows line up\?/)
+  for (const sel of ['#markBtn', '#talkBtn', '#footActions [data-act=good]']) {
+    const b = await sizeOf(sel)
+    assert.ok(b.height >= 44 && b.width >= 100 && b.x >= 0 && b.x + b.width <= 390, `${sel} is a finger wide and on the screen`)
+  }
+  assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Hold to talk', 'Looks good'])
+  assert.equal(await page.locator('#toolButtons').isVisible(), false, 'the tools are folded away')
+  const about = await sizeOf('#about')
+  const picture = await sizeOf('#canvas')
+  assert.ok(about.y > picture.y + picture.height, 'what to look at is under the picture, by the buttons')
+  // Until Mark is pressed a finger moves the picture: it leaves no mark.
+  await finger(page, [0.2, 0.2], [0.4, 0.5], [0.6, 0.7])
+  assert.equal(await saved(page, 'pocket', 'one'), null)
+  assert.equal(await page.locator('#canvas').evaluate(el => getComputedStyle(el).touchAction), 'auto')
+
+  await page.locator('#markBtn').tap()
+  assert.equal(await page.locator('#markBtn').getAttribute('aria-pressed'), 'true')
+  assert.equal(await page.locator('#canvas').evaluate(el => getComputedStyle(el).touchAction), 'none', 'now a finger draws, and the page does not scroll under it')
+  for (const b of await page.locator('#bar .tool:visible').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) {
+    assert.ok(b.width >= 44 && b.height >= 44 && b.left >= 0 && b.right <= 390, 'each tool is a finger wide and on the screen')
+  }
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390)
+  assert.ok(await page.locator('#notes').isVisible(), 'and there is a box for notes')
+  await page.locator('#toolButtons [data-tool=box]').tap()
+  await finger(page, [0.1, 0.2], [0.2, 0.3], [0.3, 0.45])
+  // A second finger put down while one draws is not a second mark.
+  await page.locator('#toolButtons [data-tool=arrow]').tap()
+  await finger(page, [0.8, 0.8], [0.7, 0.6], [0.6, 0.5])
+  await page.locator('#toolButtons [data-tool=pen]').tap()
+  await finger(page, [0.4, 0.7], [0.45, 0.75], [0.5, 0.7], [0.55, 0.75])
+  const marks = (await saved(page, 'pocket', 'one')).marks
+  assert.deepEqual(marks.map(m => m.tool), ['box', 'arrow', 'pen'])
+  assert.ok(Math.abs(marks[0].a[0] - 160) < 12 && Math.abs(marks[0].b[0] - 480) < 12, 'the box is where the finger went')
+  assert.ok(await inked(page) > 0)
+  await page.locator('#notes').fill('The fourth row sits too far in.')
+  // With something to send, the one large answer is Send.
+  assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Hold to talk', 'Send'])
+  await page.locator('#footActions [data-act=send]').tap()
+  const sent = await waitFor(() => r.read('Pocket').find(x => x.screenId === 'one'))
+  assert.deepEqual(sent.shapes.map(s => s.type), ['box', 'arrow', 'freehand'])
+  assert.equal(sent.notes, 'The fourth row sits too far in.')
+  assert.ok(sent.annotatedImage)
+  // On to the next, where Looks good is the answer again.
+  await page.waitForFunction(() => document.getElementById('overall').innerText === '2 of 2')
+  assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Hold to talk', 'Looks good'])
+  await page.locator('#footActions [data-act=good]').tap()
+  const good = await waitFor(() => r.read('Pocket').find(x => x.screenId === 'two'))
+  assert.equal(good.verdict, 'approved')
+  assert.deepEqual(errors, [])
+})
+
+test('on a phone: the speak tool drops a pin where a finger taps, and Hold to talk fills the notes while it is held', { skip }, async () => {
+  const r = await rig()
+  r.push('Voice', ['A', 'B'], null)
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true })
+  await context.addInitScript(fakeSpeech())
+  const page = await context.newPage()
+  const errors = []
+  page.on('pageerror', e => errors.push(e.message))
+  await page.goto(`http://localhost:${r.port}/?undo=40#voice`)
+  await page.locator('#canvas').waitFor()
+  await page.waitForFunction(() => document.getElementById('canvas').width > 300)
+  await page.locator('#markBtn').tap()
+  await page.locator('#toolButtons [data-tool=speak]').tap()
+  const c = await page.locator('#canvas').boundingBox()
+  await page.touchscreen.tap(c.x + c.width * 0.25, c.y + c.height * 0.3)
+  await page.waitForFunction(() => window.FAKE)
+  assert.equal(await page.locator('#pinGlow').evaluate(el => el.hidden), false, 'the pin listens where the finger tapped')
+  await page.evaluate(() => window.say('this heading is too big', true))
+  // A tap somewhere else ends that pin and starts the next.
+  await page.touchscreen.tap(c.x + c.width * 0.7, c.y + c.height * 0.7)
+  await settled(page)
+  await page.evaluate(() => window.say('and that button', true))
+  // Mark again puts the tools away, and the pin that listened ends with its words.
+  await page.locator('#markBtn').tap()
+  await settled(page)
+  const marks = (await saved(page, 'voice', 'a')).marks
+  assert.deepEqual(marks.map(m => [m.tool, m.n, m.text]), [['pin', 1, 'this heading is too big'], ['pin', 2, 'and that button']])
+  assert.ok(Math.abs(marks[0].a[0] - 1600 * 0.25) < 12 && Math.abs(marks[0].a[1] - 900 * 0.3) < 12, 'the pin is where the tap was')
+  assert.equal(await page.locator('#talkBtn').evaluate(el => el.classList.contains('listening')), false)
+
+  // Hold to talk: it listens while the finger is down, and what is said goes to the notes.
+  const t = await page.locator('#talkBtn').boundingBox()
+  const cdp = await context.newCDPSession(page)
+  const at = [{ x: Math.round(t.x + t.width / 2), y: Math.round(t.y + t.height / 2) }]
+  const starts = await page.evaluate(() => window.FAKE_STARTS)
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at })
+  await page.waitForFunction(n => window.FAKE_STARTS > n, starts)
+  assert.equal(await page.locator('#talkBtn').innerText(), 'Listening…')
+  await page.evaluate(() => window.say('the whole page feels tight', true))
+  assert.equal(await page.locator('#notes').inputValue(), 'the whole page feels tight')
+  assert.ok(await page.locator('#notes').isVisible(), 'the notes show once there are words in them')
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await page.waitForFunction(() => document.getElementById('talkBtn').innerText === 'Hold to talk')
+  assert.equal(await page.locator('#talkBtn').evaluate(el => el.classList.contains('listening')), false, 'lifting the finger stops it')
+  assert.equal((await saved(page, 'voice', 'a')).marks.length, 2, 'and it made no pin')
+
+  await page.locator('#footActions [data-act=send]').tap()
+  const sent = await waitFor(() => r.read('Voice').find(x => x.screenId === 'a'))
+  assert.deepEqual(sent.shapes.map(s => [s.type, s.n, s.text]), [['pin', 1, 'this heading is too big'], ['pin', 2, 'and that button']])
+  assert.equal(sent.notes, 'the whole page feels tight')
+  assert.deepEqual(errors, [])
+})
+
+/** What Chrome's own reader reads in the code the page shows, or null where this Chrome has no reader. */
+async function readCode(svg) {
+  const reader = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--enable-experimental-web-platform-features'] })
+  try {
+    const page = await reader.newPage()
+    // The reader is for secure pages only, as localhost is.
+    const server = (await import('node:http')).createServer((req, res) => res.end('<body></body>')).listen(0, '127.0.0.1')
+    await new Promise(resolve => server.once('listening', resolve))
+    await page.goto(`http://localhost:${server.address().port}/`)
+    server.close()
+    return await page.evaluate(async svg => {
+      if (typeof BarcodeDetector === 'undefined') return null
+      const img = new Image()
+      img.src = `data:image/svg+xml;base64,${btoa(svg)}`
+      await img.decode()
+      const c = document.createElement('canvas')
+      c.width = c.height = 400
+      c.getContext('2d').drawImage(img, 0, 0, 400, 400)
+      return (await new BarcodeDetector({ formats: ['qr_code'] }).detect(c))[0]?.rawValue ?? ''
+    }, svg)
+  } finally {
+    await reader.close()
+  }
+}
+
+test('review from a phone: the page turns it on, shows a code that reads as the address, says so in the bar, and turns it off', { skip }, async t => {
+  const r = await rig({ REVIEW_PHONE_HOST: '127.0.0.1' })
+  r.push('Desk', ['One'])
+  const { page, errors } = await r.open('desk')
+  assert.equal(await page.locator('#phoneOn').isVisible(), false, 'off until it is turned on')
+  await page.locator('#menuOpen').click()
+  await page.locator('[data-menu=phone]').click()
+  const modal = page.locator('#phoneModal')
+  await modal.getByText('Until you turn it on, this page answers this computer only.').waitFor()
+  await modal.getByText('It turns itself off after 30 minutes, and when Markback stops.').waitFor()
+  assert.equal((await (await fetch(`http://127.0.0.1:${r.port}/api/phone`)).json()).on, false, 'opening the window opens nothing')
+  await modal.getByRole('button', { name: 'Turn it on' }).click()
+  await page.locator('.phone-code svg').waitFor()
+  const { url } = await (await fetch(`http://127.0.0.1:${r.port}/api/phone`)).json()
+  assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/\?key=[\w-]{24}$/)
+  assert.equal(await page.locator('.phone-address a').innerText(), url)
+  await modal.getByText('Others on the network see nothing without it.').waitFor()
+  const read = await readCode(await page.locator('.phone-code').innerHTML())
+  if (read === null) t.diagnostic('this Chrome has no code reader: the code was not read back')
+  else assert.equal(read, url, 'a camera reads the address from the code')
+  // The window can be closed with it still on: the bar then says so in words, until it is off.
+  await page.keyboard.press('Escape')
+  assert.equal(await modal.isVisible(), false)
+  assert.equal(await page.locator('#phoneOn').innerText(), 'Open to your phone')
+  await page.locator('#phoneOn').click()
+  await modal.getByRole('button', { name: 'Turn it off' }).click()
+  await modal.getByRole('button', { name: 'Turn it on' }).waitFor()
+  assert.equal(await page.locator('#phoneOn').isVisible(), false)
+  await assert.rejects(fetch(url), 'nothing listens for a phone any more')
+  assert.deepEqual(errors, [])
+
+  // What stops it is said in the window, in plain words.
+  const away = await rig({ REVIEW_PHONE_HOST: '192.0.2.1' })
+  away.push('Desk', ['One'])
+  const other = await away.open('desk')
+  await other.page.locator('#menuOpen').click()
+  await other.page.locator('[data-menu=phone]').click()
+  await other.page.locator('#phoneModal').getByRole('button', { name: 'Turn it on' }).click()
+  await other.page.locator('.phone-problem').getByText('Markback could not listen for your phone at 192.0.2.1').waitFor()
+  assert.equal(await other.page.locator('#phoneOn').isVisible(), false)
+})
+
+test('review from a phone: the address from the code opens the page on a phone, which marks and sends; others and the closed door get nothing', { skip }, async () => {
+  const r = await rig({ REVIEW_PHONE_HOST: '127.0.0.1' })
+  r.push('Afar', ['One', 'Two'], null)
+  const out = execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, encoding: 'utf8' })
+  const url = new URL(out.match(/http:\/\/127\.0\.0\.1:\d+\/\?key=[\w-]+/)[0])
+  // A name that is not this computer's own, as a phone sees the computer: a plain address, not a secure one.
+  url.hostname = 'phone.test'
+  const far = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--host-resolver-rules=MAP phone.test 127.0.0.1'] })
+  try {
+    const context = await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    const page = await context.newPage()
+    const errors = []
+    page.on('pageerror', e => errors.push(e.message))
+    await page.goto(`${url}&undo=40#afar`)
+    await page.locator('#canvas').waitFor()
+    await page.waitForFunction(() => document.getElementById('canvas').width > 300)
+    assert.equal(new URL(page.url()).searchParams.has('key'), false, 'the code has left the address bar')
+    assert.equal(await page.evaluate(() => window.isSecureContext), false)
+    // No microphone at a plain address: two large buttons, and the box for notes is out to type in.
+    await page.waitForFunction(() => document.body.classList.contains('no-talk'))
+    assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Looks good'])
+    assert.ok(await page.locator('#notes').isVisible())
+    assert.equal(await page.locator('#notes').getAttribute('placeholder'), 'Notes', 'no key to press on a phone')
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390)
+    await page.locator('#markBtn').tap()
+    await page.locator('#toolButtons [data-tool=box]').tap()
+    await finger(page, [0.1, 0.2], [0.2, 0.3], [0.3, 0.45])
+    await page.locator('#notes').tap()
+    await page.keyboard.type('The title wraps too soon.')
+    assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Send'])
+    await page.locator('#footActions [data-act=send]').tap()
+    const sent = await waitFor(() => r.read('Afar').find(x => x.screenId === 'one'))
+    assert.deepEqual(sent.shapes.map(s => s.type), ['box'], 'sent from the phone, and written on this computer')
+    assert.equal(sent.notes, 'The title wraps too soon.')
+    // On to the next screen, where Looks good is the answer.
+    await page.waitForFunction(() => document.getElementById('overall').innerText === '2 of 2')
+    await page.locator('#footActions [data-act=good]').tap()
+    assert.equal((await waitFor(() => r.read('Afar').find(x => x.screenId === 'two'))).verdict, 'approved')
+    // Another phone on the same network, without the code, is shown nothing.
+    const stranger = await (await far.newContext()).newPage()
+    const refused = await stranger.goto(`http://phone.test:${url.port}/`)
+    assert.equal(refused.status(), 403)
+    assert.match(await stranger.locator('body').innerText(), /needs the code from the computer/)
+    execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'off'], { env: r.env, stdio: 'ignore' })
+    await assert.rejects(page.goto(`http://phone.test:${url.port}/`), 'off: the same phone reaches nothing')
+    assert.deepEqual(errors, [])
+  } finally {
+    await far.close()
+  }
 })

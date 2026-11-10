@@ -146,7 +146,11 @@ Adding one says what it adds and asks first (in a terminal; run any other way, i
 
 ## What stays on your computer
 
-The Markback server listens only on this computer. Screens, marks and notes are plain files in `~/.review-wizard`, a folder that keeps Markback's first name (set `REVIEW_HOME` to move it). Your coding agent handles any review material it reads under its own data settings. If you enable online speech recognition, your browser sends the audio to its speech service.
+The Markback server listens only on this computer, unless you turn on review from your phone (below). Screens, marks and notes are plain files in `~/.review-wizard`, a folder that keeps Markback's first name (set `REVIEW_HOME` to move it). Your coding agent handles any review material it reads under its own data settings. If you enable online speech recognition, your browser sends the audio to its speech service.
+
+## Review from your phone
+
+Choose **Review from your phone** in the page's menu (or run `review phone on`) and scan the code with your phone's camera, on the same Wi-Fi. The page works with a finger: **Mark** brings out the tools, a finger draws, and **Looks good** or **Send** answers. It is off until you turn it on. Turned on, Markback listens on this computer's address in your local network as well, and every request must carry a code that is new each time, so others on the network see nothing. The bar says **Open to your phone** while it is on. It turns itself off after 30 minutes, when you press **Turn it off** (or run `review phone off`), and when Markback stops. It changes no settings; your computer may ask once whether to let Node accept incoming connections. A phone opens a plain address, so notes there are typed: browsers keep the microphone for secure ones.
 
 ## Speaking (early)
 

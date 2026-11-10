@@ -1,5 +1,6 @@
 import { burnCanvas, changesBetween, COLOURS, fitZoom, isReal, paintChanged, paintMarks, redone, shapeOf, strokeFor, textFor, undone, withMark, withMarks, ZOOM_STEP, ZOOM_WHEEL_STEP, zoomedBy } from './annotate.js'
 import { createListener, findRoute, installPack } from './mic.js'
+import { qrSvg } from './qr.js'
 import { afterSend, answerWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from './flow.js'
 
 /**
@@ -44,6 +45,7 @@ const ICONS = {
   check: svg('<path d="m3 8.5 3.2 3L13 4.5"/>'),
   list: svg('<path d="M2.5 4h11M2.5 8h11M2.5 12h11"/>'),
   more: svg('<circle cx="3.5" cy="8" r="0.6"/><circle cx="8" cy="8" r="0.6"/><circle cx="12.5" cy="8" r="0.6"/>'),
+  phone: svg('<rect x="4.5" y="1.5" width="7" height="13" rx="1.3"/><path d="M7.2 12.2h1.6"/>'),
 }
 const TOOLS = [
   { id: 'box', tip: 'Box round what is wrong', key: 'B' },
@@ -142,7 +144,21 @@ const state = {
   moreOf: '',
   lineCut: false,
   changesOn: true,
+  // On a phone: the marking tools are out, and a finger on the picture draws. Otherwise a finger moves the picture.
+  marking: false,
 }
+/**
+ * A phone, or a window as narrow as one: a name and a count above, the picture, and three large buttons under it. The marking
+ * tools fold away until Mark is pressed.
+ */
+const narrow = matchMedia('(max-width: 640px)')
+const onPhone = () => narrow.matches
+/** A phone has no N key to press, so the notes box does not offer one. */
+const phoneLook = () => {
+  document.body.classList.toggle('phone', onPhone())
+  $('notes').placeholder = onPhone() ? 'Notes' : 'Notes (N)'
+}
+phoneLook()
 if (prefs.get('strip') === 'hidden') document.body.classList.add('no-strip')
 if (prefs.get('details') === 'hidden') document.body.classList.add('no-details')
 const panels = () => document.body.classList.contains('panels')
@@ -236,11 +252,12 @@ const liveScreen = s => state.apps.find(a => a.slug === s.appSlug)?.screens.find
 
 async function loadQueue() {
   const res = await fetch('/api/queue', { cache: 'no-store' })
-  const { apps } = await res.json()
+  const { apps, phone: phoneNow } = await res.json()
   const text = JSON.stringify(apps)
   state.loaded = true
   document.body.classList.remove('loading')
   resendKept()
+  setPhone(phoneNow)
   if (text === lastQueue) return
   const wasLoaded = lastQueue !== ''
   lastQueue = text
@@ -684,7 +701,7 @@ function paintPins(ctx, pins, wide, listening = null) {
     const onRight = right >= Math.min(most, size * 9)
     const room = Math.max(size * 6, Math.min(most, onRight ? right : x - gap - size * 0.5) - pad * 2)
     const lines = linesOf(ctx, m.text, room)
-    const hint = live ? 'Listening · click, Esc or a pause stops' : ''
+    const hint = live ? (onPhone() ? 'Listening · a tap or a pause stops' : 'Listening · click, Esc or a pause stops') : ''
     ctx.font = `500 ${size * 0.72}px -apple-system, system-ui, sans-serif`
     const hintWide = hint ? ctx.measureText(hint).width : 0
     ctx.font = `600 ${size}px -apple-system, system-ui, sans-serif`
@@ -754,8 +771,14 @@ function renderMic() {
   const button = $('micBtn')
   const route = mic.route
   button.hidden = !route
-  if (!route) return
   const on = !!mic.listener?.on
+  // The large button on a phone. Its words change in place, so a finger held on it stays on the same button.
+  $('talkBtn').classList.toggle('listening', on)
+  $('talkBtn').textContent = on ? 'Listening…' : 'Hold to talk'
+  // No way to listen here: the phone keeps two large buttons, and the notes box stays out to type in.
+  $('talkBtn').hidden = !route || route.route === 'none'
+  document.body.classList.toggle('no-talk', $('talkBtn').hidden)
+  if (!route) return
   button.classList.toggle('listening', on)
   button.classList.toggle('with-words', route.route === 'cloud' || on)
   button.setAttribute('aria-pressed', String(on))
@@ -820,7 +843,8 @@ async function startMic() {
   return true
 }
 void findRoute().then(route => {
-  mic.route = route
+  // A browser lets a page use the microphone only at a secure address. A phone on the Wi-Fi opens a plain one.
+  mic.route = window.isSecureContext ? route : null
   renderMic()
 })
 
@@ -1040,6 +1064,7 @@ function renderMenu() {
     ${panels() ? `<button data-menu="strip" role="menuitem"><span>${document.body.classList.contains('no-strip') ? 'Show' : 'Hide'} the screens</span></button><button data-menu="details" role="menuitem"><span>${document.body.classList.contains('no-details') ? 'Show' : 'Hide'} the details</span></button>` : ''}
     <button data-menu="full" role="menuitem"><span>Full screen</span><span class="kbd">F</span></button>
     <button data-menu="notices" role="menuitem"><span>${noticesLabel()}</span></button>
+    <button data-menu="phone" role="menuitem"><span>Review from your phone${phone.status.on ? ': on' : ''}</span></button>
     <hr>
     <button data-menu="keys" role="menuitem"><span>Keyboard shortcuts</span><span class="kbd">?</span></button>`)
 }
@@ -1110,7 +1135,7 @@ function render() {
   // Nothing to draw on until a picture is up: the overlay hides the tools and the views with it.
   document.body.classList.toggle('covered', covered)
   // One count, and only where a picture is: the overlay says it in full.
-  $('overall').textContent = s && a ? countWords(openOf(a).length, waitingInAll(), { short: true }) : ''
+  $('overall').textContent = s && a ? (onPhone() ? `${state.index + 1} of ${a.screens.length}` : countWords(openOf(a).length, waitingInAll(), { short: true })) : ''
   // The tab says how many wait, for someone working in another one.
   document.title = waitingInAll() ? `(${waitingInAll()}) Markback` : 'Markback'
   $('overall').title = s && a ? `Screen ${state.index + 1} of ${a.screens.length}. ${countWords(openOf(a).length, waitingInAll())}.` : ''
@@ -1129,7 +1154,10 @@ function render() {
   const here = placeOf(a)
   // A group called Proposal or Built only says again what the label says: the name alone is enough.
   const kindGroup = /^(proposal|built|qa)$/i.test(here.group ?? '')
-  setHtml($('crumbs'), here.group
+  // On a phone there is room for the name only. The count beside it says which screen.
+  setHtml($('crumbs'), onPhone()
+    ? `<span class="crumb-app" title="${esc(a.name)}">${esc(here.group ? here.title : barName(a.name))}</span>`
+    : here.group
     ? `${kindGroup ? '' : `<span class="crumb-app" title="${esc(a.name)}">${esc(placeWords(here))}</span><span class="sep-slash">/</span>`}<span class="crumb-app" title="${esc(a.name)}">${esc(here.title)}</span>${s ? `<span class="sep-slash">/</span>${screenCrumb(s)}` : ''}`
     : `<span class="crumb-app" title="${esc(a.name)}">${esc(barName(a.name))}</span>${s ? `<span class="sep-slash">/</span>${screenCrumb(s)}` : ''}`)
   $('back').disabled = !s || state.index === 0
@@ -1443,7 +1471,7 @@ function placeChecks() {
   const room = { width: box.clientWidth - 14, height: $('center').clientHeight - foot - 14 }
   const shown = state.size && state.view === 'after' && state.fitted ? fittedZoom(room) * state.size.w : room.width
   const spare = room.width - shown - 16
-  state.sideChecks = items.length > 0 && spare >= 220
+  state.sideChecks = !onPhone() && items.length > 0 && spare >= 220
   $('checks').hidden = !state.sideChecks
   if (state.sideChecks) {
     $('checks').style.width = `${Math.min(400, spare)}px`
@@ -1537,10 +1565,16 @@ const at = event => {
   return [((event.clientX - r.left) * state.size.w) / r.width, ((event.clientY - r.top) * state.size.h) / r.height]
 }
 let pan = null
+/** The finger or mouse that is drawing now. A second finger put down meanwhile is not a second mark. */
+let drawingWith = null
+/** On a phone a finger on the picture moves it, until Mark brings the tools out. */
+const mayDraw = () => !onPhone() || state.marking
 
 $('canvas').addEventListener('pointerdown', event => {
   // Text opens on click, once the press is over, so nothing takes the focus away from the field afterwards.
-  if (!state.size || event.button !== 0 || state.tool === 'text') return
+  if (!state.size || event.button !== 0 || state.tool === 'text' || !mayDraw()) return
+  if (!event.isPrimary) return
+  drawingWith = event.pointerId
   event.preventDefault()
   // That also stops the focus moving: a note box would go on taking the keys that follow, and B or G would land in it.
   if (document.activeElement?.matches?.('textarea, input, select')) document.activeElement.blur()
@@ -1550,7 +1584,10 @@ $('canvas').addEventListener('pointerdown', event => {
     // The mark is drawn from the events that arrive.
   }
   const p = at(event)
-  if (state.tool === 'speak') return void startPin(p)
+  if (state.tool === 'speak') {
+    drawingWith = null
+    return void startPin(p)
+  }
   const w = strokeFor(markWidth())
   const words = state.tool === 'words' ? wordsNow() : null
   if (words) {
@@ -1564,6 +1601,7 @@ $('canvas').addEventListener('pointerdown', event => {
   else draft = { tool: state.tool === 'words' ? 'box' : state.tool, a: p, b: p, color: state.colour, w }
 })
 $('canvas').addEventListener('pointermove', event => {
+  if (event.pointerId !== drawingWith) return
   if (pan) {
     $('scroller').scrollLeft = pan.left - (event.clientX - pan.x)
     $('scroller').scrollTop = pan.top - (event.clientY - pan.y)
@@ -1578,6 +1616,7 @@ $('canvas').addEventListener('pointermove', event => {
 })
 const finish = () => {
   pan = null
+  drawingWith = null
   if (!draft) return
   const done = draft
   draft = null
@@ -1587,10 +1626,16 @@ const finish = () => {
   else paint()
 }
 $('canvas').addEventListener('click', event => {
-  if (state.size && state.tool === 'text' && !textEntry) openTextEntry(event)
+  if (state.size && state.tool === 'text' && !textEntry && mayDraw()) openTextEntry(event)
 })
-$('canvas').addEventListener('pointerup', finish)
-$('canvas').addEventListener('pointercancel', finish)
+$('canvas').addEventListener('pointerup', event => event.pointerId === drawingWith && finish())
+// The system took the touch away, for a gesture of its own: half a mark is not a mark.
+$('canvas').addEventListener('pointercancel', event => {
+  if (event.pointerId !== drawingWith) return
+  draft = null
+  finish()
+  paint()
+})
 
 let textEntry = null
 function openTextEntry(event) {
@@ -2076,7 +2121,13 @@ $('toast').onclick = event => {
 
 let tipTimer = null
 let tipFor = null
+let touchLast = false
+document.addEventListener('pointerdown', event => {
+  touchLast = event.pointerType === 'touch'
+}, true)
 document.addEventListener('mouseover', event => {
+  // A finger does not hover: a tip would come up after the tap and stay.
+  if (touchLast) return
   const el = event.target.closest?.('[data-tip]')
   if (el === tipFor) return
   tipFor = el
@@ -2144,6 +2195,8 @@ function growNotes() {
   const box = $('notes')
   box.style.height = '30px'
   if (box.value) box.style.height = `${Math.min(180, box.scrollHeight + 2)}px`
+  // On a phone the box is out of the way until there are words in it, or the tools are out.
+  $('foot').classList.toggle('has-notes', !!box.value)
 }
 
 function go(index) {
@@ -2230,7 +2283,7 @@ function cycleView() {
   if (state.fitted) fit()
 }
 
-for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', sheetClose: 'close', viewerClose: 'close' })) $(id).innerHTML = ICONS[icon]
+for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', sheetClose: 'close', viewerClose: 'close', phoneClose: 'close' })) $(id).innerHTML = ICONS[icon]
 
 $('listOpen').onclick = openDrawer
 $('back').onclick = () => go(state.index - 1)
@@ -2249,6 +2302,7 @@ $('menu').onclick = event => {
   else if (what === 'details') togglePanel('details', 'no-details')
   else if (what === 'full') toggleFull()
   else if (what === 'notices') void toggleNotices()
+  else if (what === 'phone') openPhone()
   else if (what === 'sheet') openSheet()
   else if (what === 'keys') showHelp(true)
 }
@@ -2392,6 +2446,112 @@ $('undo').onclick = undo
 $('redo').onclick = redo
 $('changesOn').onclick = toggleChanges
 $('micBtn').onclick = () => pressMic()
+
+/* ---------- on a phone: Mark brings the tools out, and Hold to talk fills the notes ---------- */
+
+function setMarking(on) {
+  if (!on) closeTextEntry(true)
+  state.marking = on
+  document.body.classList.toggle('marking-on', on)
+  $('markBtn').classList.toggle('on', on)
+  $('markBtn').setAttribute('aria-pressed', String(on))
+  if (state.fitted) fit()
+}
+$('markBtn').onclick = () => setMarking(!state.marking)
+narrow.addEventListener('change', () => {
+  phoneLook()
+  render()
+  if (state.fitted) fit()
+})
+
+/** Listening lasts as long as the finger is down. What is said goes to the notes. */
+let holding = false
+function letGo() {
+  if (!holding) return
+  holding = false
+  removeEventListener('pointerup', letGo)
+  removeEventListener('pointercancel', letGo)
+  if (mic.listener?.on) mic.listener.stop()
+}
+$('talkBtn').addEventListener('pointerdown', async event => {
+  if (event.button !== 0 || holding) return
+  event.preventDefault()
+  holding = true
+  // Heard on the window, not the button: the finger may slide off it before it lifts.
+  addEventListener('pointerup', letGo)
+  addEventListener('pointercancel', letGo)
+  endPin()
+  if (!mic.route) return
+  // A question may come first, about where the sound goes. If the finger has lifted by the answer, nothing listens.
+  const stillHeld = () => holding
+  if ((await startMic()) && !stillHeld() && mic.listener?.on) mic.listener.stop()
+})
+// A long press must not bring up the system's own menu over the button.
+$('talkBtn').addEventListener('contextmenu', event => event.preventDefault())
+// From a keyboard there is nothing to hold: a press turns it on, and the next turns it off.
+$('talkBtn').addEventListener('click', event => {
+  if (event.detail === 0) void pressMic()
+})
+
+/* ---------- review from a phone: off until it is turned on here, and it says what it opens ---------- */
+
+const phone = { status: { on: false, minutes: 30 }, problem: '', busy: false }
+function setPhone(status) {
+  if (!status || JSON.stringify(status) === JSON.stringify(phone.status)) return
+  phone.status = status
+  renderPhone()
+}
+const phoneOpen = () => !$('phoneModal').hidden
+function renderPhone() {
+  const st = phone.status
+  $('phoneOn').hidden = !st.on
+  $('phoneOn').innerHTML = `${ICONS.phone}<span>Open to your phone</span>`
+  $('phoneOn').dataset.tip = st.on ? `Your phone can open this page until ${when(st.until)}. Press to see the code, or to turn it off` : ''
+  if (!phoneOpen()) return
+  if (st.on) {
+    const code = qrSvg(st.url)
+    // An address too long for the code is shown large, to type.
+    setHtml($('phoneBody'), `${code ? `<div class="phone-code">${code}</div>` : ''}<div class="phone-words"><p><b>On until ${esc(when(st.until))}.</b> Scan the code with your phone's camera, on the same Wi-Fi as this computer.</p><p>The code in the address is new each time. Others on the network see nothing without it.</p><p>On the phone, type your notes: speaking needs a secure address.</p><p class="phone-address${code ? '' : ' large'}"><a href="${esc(st.url)}">${esc(st.url)}</a></p></div>`)
+    setHtml($('phoneActions'), `<button class="btn" data-phone="close">Close</button><button class="btn primary" data-phone="off"${phone.busy ? ' disabled' : ''}>Turn it off</button>`)
+  } else {
+    setHtml($('phoneBody'), `<div class="phone-words"><p>Mark the screens from your phone, on the same Wi-Fi as this computer.</p><p><b>Until you turn it on, this page answers this computer only.</b> Turned on, it needs a code that is new each time, so others on the network see nothing.</p><p>It turns itself off after ${st.minutes ?? 30} minutes, and when Markback stops.</p>${phone.problem ? `<p class="phone-problem" role="alert">${esc(phone.problem)}</p>` : ''}</div>`)
+    setHtml($('phoneActions'), `<button class="btn" data-phone="close">Not now</button><button class="btn primary" data-phone="on"${phone.busy ? ' disabled' : ''}>${phone.busy ? 'Turning it on…' : 'Turn it on'}</button>`)
+  }
+}
+function openPhone() {
+  closeMenu()
+  phone.problem = ''
+  $('phoneModal').hidden = false
+  renderPhone()
+  $('phoneActions').querySelector('button:last-child')?.focus()
+}
+const closePhone = () => {
+  $('phoneModal').hidden = true
+}
+async function switchPhone(on) {
+  phone.busy = true
+  phone.problem = ''
+  renderPhone()
+  try {
+    const res = await fetch('/api/phone', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on }) })
+    const got = await res.json()
+    if (!res.ok) throw new Error(got.error ?? 'It could not be changed.')
+    phone.status = got
+  } catch (error) {
+    phone.problem = error.message
+  }
+  phone.busy = false
+  renderPhone()
+  $('phoneActions').querySelector('button:last-child')?.focus()
+}
+$('phoneActions').onclick = event => {
+  const what = event.target.closest('[data-phone]')?.dataset.phone
+  if (what === 'close') closePhone()
+  else if (what) void switchPhone(what === 'on')
+}
+$('phoneClose').onclick = closePhone
+$('phoneOn').onclick = openPhone
+$('phoneModal').onclick = event => event.target === $('phoneModal') && closePhone()
 $('clear').onclick = () => {
   const s = screen()
   const d = draftOf(s)
@@ -2443,6 +2603,10 @@ document.addEventListener('keydown', event => {
   }
   if (!$('viewer').hidden) {
     if (key === 'Escape') $('viewer').hidden = true
+    return
+  }
+  if (phoneOpen()) {
+    if (key === 'Escape') closePhone()
     return
   }
   if (!$('helpModal').hidden) {

@@ -34,6 +34,7 @@
     <span class="spacer"></span>
     <button class="btn stop" id="stopHere" data-tip="Leave at any time: nothing is lost" data-key="S">Stop here</button>
     <div class="segmented" id="views" role="group" aria-label="View"></div>
+    <button class="tool on" id="phoneOn" aria-label="Review from your phone is on" hidden></button>
     <div class="menu-wrap">
       <button class="tool" id="menuOpen" data-tip="More" aria-label="More" aria-haspopup="menu"></button>
       <div class="menu" id="menu" role="menu" hidden></div>
@@ -60,6 +61,8 @@
         <div class="note-wrap"><textarea id="notes" rows="1" placeholder="Notes (N)"></textarea></div>
         <button class="tool" id="micBtn" data-key="⇧D" aria-label="Speak your notes" hidden></button>
         <button class="said" id="said" hidden></button>
+        <button class="btn big" id="markBtn" aria-pressed="false">Mark</button>
+        <button class="btn big talk" id="talkBtn" hidden>Hold to talk</button>
         <div class="foot-actions" id="footActions"></div>
       </footer>
       <section class="segment" id="segment" aria-live="polite" hidden></section>
@@ -88,6 +91,14 @@
       <h2 id="confirmTitle">Send as looking good?</h2>
       <p id="confirmText">Your marks on this screen are dropped. Only the approval is sent.</p>
       <div class="modal-actions"><button class="btn" id="confirmNo">Keep my marks</button><button class="btn primary" id="confirmYes">Send as looking good</button></div>
+    </div>
+  </div>
+
+  <div class="modal-back" id="phoneModal" hidden>
+    <div class="modal phone-modal" role="dialog" aria-modal="true" aria-labelledby="phoneTitle">
+      <div class="modal-head"><h2 id="phoneTitle">Review from your phone</h2><button class="tool" id="phoneClose" aria-label="Close" data-tip="Close" data-key="Esc"></button></div>
+      <div class="phone-body" id="phoneBody"></div>
+      <div class="modal-actions" id="phoneActions"></div>
     </div>
   </div>
 

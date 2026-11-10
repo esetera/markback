@@ -31,6 +31,9 @@
  *   review project [--yes] [--no-open]           in a project's folder: finds its app, takes its main screens, opens
  *                                               them in your browser (the markback command is this)
  *   review open [--app MyApp]                   opens the review page in your browser
+ *   review phone [on|off] [--code]              review from a phone on the same Wi-Fi: off until turned on, with a code in
+ *                                               the address that is new each time, and off by itself after 30 minutes.
+ *                                               Alone, it says whether it is on. --code prints the code to scan anywhere
  *
  *   review plugin add <folder or git address> [--yes]   review plugin list   review plugin remove <name>
  *   review <plugin> [<command>] ...             a command a plugin adds
@@ -55,6 +58,7 @@ import { addPlugins, addsWords, fetchSource, listPlugins, pluginsIn, removePlugi
 import { findApp, openPage, shootScreens, startApp } from './lib/project.mjs'
 import { runChecks, sayResult, sayVerdict, up } from './lib/check.mjs'
 import { addNote, closeRequest, listWork, openRequests, postIdea, pushedFor, setStage, take } from './lib/work.mjs'
+import { qr } from './public/qr.js'
 
 const [command, ...rest] = process.argv.slice(2)
 const flags = {}
@@ -215,10 +219,53 @@ async function stop() {
   if (!existsSync(PID_FILE)) return console.log('It is not running from here.')
   const pid = readPid()
   if (ourServer(pid)) {
+    // The phone's door is the server's own, and closes with it. Said, so nobody wonders.
+    const wasOpen = (await askPhone().catch(() => null))?.on
     process.kill(pid)
-    console.log('Stopped.')
+    console.log(wasOpen ? 'Stopped. Review from your phone is off.' : 'Stopped.')
   } else console.log('It was not running.')
   rmSync(PID_FILE, { force: true })
+}
+
+/**
+ * The code as text for a terminal: two rows of the code to a line. The light parts are drawn in the terminal's own letters, and
+ * so is the clear edge of four a reader needs, since a terminal's background is often dark.
+ */
+const qrText = text => {
+  const m = qr(text)
+  if (!m) return ''
+  const n = m.length
+  const on = (x, y) => x >= 0 && y >= 0 && x < n && y < n && m[y][x]
+  const lines = []
+  for (let y = -4; y < n + 4; y += 2) lines.push(Array.from({ length: n + 8 }, (_, i) => (on(i - 4, y) ? (on(i - 4, y + 1) ? ' ' : '▄') : on(i - 4, y + 1) ? '▀' : '█')).join(''))
+  return lines.join('\n')
+}
+/** Asks the running page about the phone's door, which only it can open or close. It throws when the page is not running. */
+async function askPhone(on) {
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/phone`, on === undefined ? { signal: AbortSignal.timeout(3000) } : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on }), signal: AbortSignal.timeout(10000) })
+  const got = await res.json()
+  if (!res.ok) fail(got.error ?? 'It could not be changed.')
+  return got
+}
+const sayPhone = status => {
+  if (!status.on) return console.log('Review from your phone is off. The page answers this computer only.\nTurn it on with: review phone on')
+  const at = new Date(status.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const code = process.stdout.isTTY || flags.code ? qrText(status.url) : ''
+  console.log(`Review from your phone is on.\nOpen this on your phone, on the same Wi-Fi as this computer:\n\n  ${status.url}\n${code ? `\n${code}\n` : ''}\nThe code at the end of the address is new each time. Others on the network see nothing without it.\nIt turns itself off at ${at}. To turn it off now: review phone off`)
+}
+async function phone(what) {
+  if (what && what !== 'on' && what !== 'off') fail('review phone | phone on | phone off')
+  if (!(await up(PORT))) {
+    // No page, no door: nothing listens for a phone.
+    if (what === 'off' || !what) return console.log('Review from your phone is off. The review page is not running.')
+    fail('The review page is not running. Start it with: review start')
+  }
+  if (what === 'off') {
+    const wasOn = (await askPhone()).on
+    await askPhone(false)
+    return console.log(wasOn ? 'Review from your phone is off.' : 'Review from your phone was not on.')
+  }
+  return sayPhone(what === 'on' ? await askPhone(true) : await askPhone())
 }
 
 if (command === 'push') {
@@ -330,6 +377,8 @@ if (command === 'push') {
   const page = `http://localhost:${PORT}/${typeof flags.app === 'string' ? `#${slug(flags.app)}` : ''}`
   if (!(await up(PORT))) fail('The review page is not running. Start it with: review start')
   console.log((await openPage(page)) ? `I've opened it in your browser. (${page})` : `Open ${page}`)
+} else if (command === 'phone') {
+  await phone(rest[0] && !rest[0].startsWith('--') ? rest[0] : '')
 } else if (command === 'install-skills') {
   // --codex: into this project, where Codex finds them, and without this computer's paths, since the folder may be committed.
   const to = flags.codex ? join(process.cwd(), '.agents', 'skills') : typeof flags.to === 'string' ? flags.to.replace(/^~(?=\/|$)/, homedir()) : join(homedir(), '.agents', 'skills')
@@ -460,6 +509,6 @@ if (command === 'push') {
     fail(error.message)
   }
 } else {
-  console.log(`review start | stop | check | see | pdf | demo | sketch | push | list | wait | read | clear | ideas | queue | take | show | note | stage | project | open | install-skills | plugin | export   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
+  console.log(`review start | stop | check | see | pdf | demo | sketch | push | list | wait | read | clear | ideas | queue | take | show | note | stage | project | open | phone | install-skills | plugin | export   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
   if (command) process.exit(1)
 }
