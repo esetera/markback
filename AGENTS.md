@@ -16,6 +16,10 @@ Start from what the person said.
 
 If `review` is not found, use `node review.mjs` in the Markback folder in its place.
 
+### Set up the New project page
+
+When the person asks to open New project, start Markback with `review start`, then connect their agent to this workspace using the wake instructions in `ideas-and-queue`. Use the workspace name as the review target when there are no screens yet. Run `review open --new --no-open` and open the printed address in the agent’s browser pane. If the agent has no browser pane, use `review open --new` to open it in the person’s browser. The box starts with “Make a todo app.” The person can edit it or press **Send to agent**. Wait for their request before building.
+
 ### In their project
 
 Run this in the project's folder:
@@ -44,7 +48,7 @@ For a single-screen project, `review project --no-open` can also capture and pus
 
 Once the first review is open, set up wake as described in the `ideas-and-queue` skill. In Codex Desktop, use the chat's native heartbeat and let the turn end after the first push. Do not register a subprocess or start a blocking wait when the Desktop heartbeat is active.
 
-For sessions without a Desktop heartbeat, keep listening after each round: start `review work wait --by "your name"` as the `ideas-and-queue` skill says, and when it ends, do what it prints. An approved proposal is an instruction to build, not a question.
+For Kimi with background wake configured, finish the turn after a push so Markback can resume the selected Kimi Code session on the next request. For other sessions without a Desktop heartbeat, start `review work wait --by "your name"` after each round and do what it prints.
 
 If a command fails or nothing shows, run `review check` and tell the person what it says.
 
@@ -222,7 +226,7 @@ The review page has two pages at /work.html: Ideas and Queue. They read the same
 
 ### Keep listening
 
-If a Codex Desktop heartbeat is active for this review, it handles the marks. For sessions without that heartbeat, start this after any round and whenever you would otherwise stop:
+If a Codex Desktop heartbeat is active for this review, it handles the marks and build requests sent to it from New project. For sessions without that heartbeat, start this after any round and whenever you would otherwise stop:
 
 ```bash
 review work wait --by "your name"
@@ -238,11 +242,21 @@ While it runs, the page shows the person that you are listening. When no agent l
 
 #### Codex Desktop
 
-When automatic pickup is requested, set up a native heartbeat in this chat after the first screenshot is pushed. Use the app's scheduled-task tool to create one active heartbeat in the current chat, with a one-minute interval or the shortest interval the app supports. Reuse an existing Markback heartbeat for this review. Put the actual project folder, app slug, absolute path to the installed review CLI, and any project-specific `REVIEW_HOME` in its prompt. The heartbeat's instructions should say:
+When automatic pickup is requested, set up a native heartbeat in this chat. Register after the first screenshot is pushed, or use `review wake desktop --app <workspace-name> --new` from an empty project folder to accept build requests before there are any screens. Use the app's scheduled-task tool to create one active heartbeat in the current chat, with a one-minute interval or the shortest interval the app supports. Reuse an existing Markback heartbeat for this review. Put the actual project folder, app slug, absolute path to the installed review CLI, and any project-specific `REVIEW_HOME` in its prompt. The heartbeat's instructions should say:
 
-> In this project, run the installed Markback CLI's `review wake poll --app <slug>`. If the review is complete, stop this heartbeat and unregister it with `review wake desktop --app <slug> --off`. If wake is off or there are no marks, end quietly. Otherwise open each marked picture, apply its notes and shapes, verify the changes, and push an updated screenshot under the same screen name. Keep the heartbeat in this chat for further rounds.
+> In this project, run the installed Markback CLI's `review wake poll --app <slug>`. If wake is off, end quietly. Answer each request in `ideas` by posting results with `review ideas post`. In `queue`, take an approved idea and develop or build it according to its phase. For a new build in `builds`, take it, build the app in a dedicated folder inside the connected workspace, and push the first screenshots with the item ID. A build that comes back with marks is a revision of that item's app. Read and apply those marks once, verify the changes, and push the same item again. For other unread marks, open each marked picture, apply its notes and shapes, verify the changes, and push an updated screenshot under the same screen name. Keep listening for new work while the workspace is connected. If this heartbeat is only for a finished review and nothing waits, stop it and unregister with `review wake desktop --app <slug> --off`.
 
-Once the app confirms the heartbeat is active, run `review wake desktop --app <slug>` from this chat. The person only draws and presses **Send**. End the turn so the heartbeat can run. Do not start `review wait`, `review work wait`, or `codex exec resume` for this review. If the native scheduler is unavailable, report that and use the ordinary foreground review workflow.
+Once the app confirms the heartbeat is active, run `review wake desktop --app <slug> --builds --ideas` from this chat for an existing review, or use `--new --ideas` for an empty workspace. The person can send builds, ideas, and marks directly in Markback. End the turn so the heartbeat can run. Do not start `review wait`, `review work wait`, or `codex exec resume` for this review. If the native scheduler is unavailable, report that and use the ordinary foreground review workflow.
+
+#### Kimi Work and Kimi Code
+
+Use a signed-in Kimi Code CLI for background pickup while the person reviews in Kimi Work or a browser. In the workspace, use `kimi session list --json` to find the dedicated local Kimi Code session for Markback. If it does not exist, create one with `kimi --prompt "This is the Kimi Code session for Markback reviews in this workspace. Reply Ready and use no tools."` and identify the new session in the list. Keep the session ID tied to this workspace.
+
+```bash
+review wake kimi --session <id> --app <workspace-name>
+```
+
+Keep the Markback server running and finish the current Kimi task. When a request comes in, Markback resumes the selected Kimi Code session in print mode, which handles ordinary tool calls without approval prompts. Enable it for the workspace the person wants Kimi to work in. In Kimi Work’s browser pane, open the Markback page at `127.0.0.1` using its printed port. Kimi Work displays the review while the separate Kimi Code session applies the changes. Use `review wake off` from the workspace to stop background pickup.
 
 #### Claude Code and other command-based agents
 
@@ -277,6 +291,8 @@ review ideas post --request <id> --what "Sort the list by last change" --why "Fi
 One short line for what. One for why. Size is S, M or L. The request closes when enough have come; `review ideas close --request <id>` closes it sooner.
 
 ### Queue
+
+A request sent from New project goes straight to **Queued** as a build with the original brief. Take it before starting so the person sees **In progress**. For a new app, use a separate folder in the connected workspace. Run `review project --item <id>` there to push the app, or add `--item <id> --kind qa` to each manual push. This moves it to **Ready for you**, links the review from the Queue, and lets **Looks good** finish the item. When marks come back, take the same item, update its app, and push with the same ID.
 
 The person sets the order by dragging. `review work wait` ends when an item is in the queue. Always take the top:
 
