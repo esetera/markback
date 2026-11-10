@@ -156,3 +156,25 @@ test("the person's own page is only looked at: it says where it runs, or how to 
   assert.equal(running.words, 'Your review page is running at http://localhost:5999')
   assert.match((await checkOwnPage({ port: quiet })).words, /is not running\. Start it with: review start/)
 })
+
+test('the small browser a sandbox needs is never fetched without a yes', async () => {
+  const { localBrowser, NEEDS_YES } = await import('../lib/capture-browser.mjs')
+  const fetched = globalThis.fetch
+  const said = process.env.MARKBACK_FETCH_BROWSER
+  let asked = 0
+  // Any fetch here would be the download, or the look-up before it.
+  globalThis.fetch = () => {
+    asked++
+    return Promise.reject(new Error('no network in this test'))
+  }
+  delete process.env.MARKBACK_FETCH_BROWSER
+  try {
+    await assert.rejects(localBrowser(), error => error.message === NEEDS_YES)
+    assert.equal(asked, 0, 'nothing was asked of the network')
+    assert.match(NEEDS_YES, /Ask the person first\. On a yes, run the same command again with --fetch-browser\./)
+  } finally {
+    globalThis.fetch = fetched
+    if (said === undefined) delete process.env.MARKBACK_FETCH_BROWSER
+    else process.env.MARKBACK_FETCH_BROWSER = said
+  }
+})

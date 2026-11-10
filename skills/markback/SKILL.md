@@ -6,7 +6,9 @@ argument-hint: "[what you want, if there is no app yet]"
 
 The goal is the person drawing on their own app's screens within a minute. Never ask them for an address. Open the review for them, and give them its address only when you cannot open it yourself.
 
-They said: $ARGUMENTS
+Start from what the person said.
+
+If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
 
 ## In their project
 
@@ -19,6 +21,7 @@ review project
 It finds how the app runs, takes pictures of its main screens, and names the review after the folder. If your desktop session can open the review in its built-in browser, use `review project --no-open` and open the printed URL there yourself. If that fails, run `review open --app "<review name>"` to open their regular browser.
 
 - **"Your app runs with npm run dev, and it is not running":** starting it runs their code. Ask them first, in one line. On a yes, run `review project --yes`.
+- **"needs a small Chrome from Google":** that is a download. Ask them first, in one line, saying what it is and how big. On a yes, run the same command again with `--fetch-browser`.
 - **"There is no app in this folder yet":** make the first screen from what they said (below).
 
 ## No app yet
@@ -33,6 +36,8 @@ Tell them they can draw and press **Send**. From here you keep the review going 
 
 For a single-screen project, `review project --no-open` can also capture and push the next round. It uses the same review name and screen. Wait for that round in the same session.
 
-If a command fails or nothing shows, run `review check` and tell the person what it says.
+Once the first review is open, set up wake as described in the `ideas-and-queue` skill. In Codex Desktop, use the chat's native heartbeat and let the turn end after the first push. Do not register a subprocess or start a blocking wait when the Desktop heartbeat is active.
 
-If `review` is not found, use `node <markback folder>/review.mjs` in its place (in Claude Code, `node "${CLAUDE_PLUGIN_ROOT}/review.mjs"`).
+For sessions without a Desktop heartbeat, keep listening after each round: start `review work wait --by "your name"` as the `ideas-and-queue` skill says, and when it ends, do what it prints. An approved proposal is an instruction to build, not a question.
+
+If a command fails or nothing shows, run `review check` and tell the person what it says.

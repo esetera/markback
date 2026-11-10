@@ -1,6 +1,7 @@
 import { burnCanvas, changesBetween, COLOURS, fitZoom, isReal, paintChanged, paintMarks, redone, shapeOf, strokeFor, textFor, undone, withMark, withMarks, ZOOM_STEP, ZOOM_WHEEL_STEP, zoomedBy } from './annotate.js'
 import { createListener, findRoute, installPack } from './mic.js'
 import { qrSvg } from './qr.js'
+import { agentsWords, heardWords, SETUP_LINE, signOf, signShows, unheardCount, unheardWords } from './listen.js'
 import { afterSend, answerWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from './flow.js'
 
 /**
@@ -44,6 +45,9 @@ const ICONS = {
   close: svg('<path d="m4 4 8 8M12 4l-8 8"/>'),
   check: svg('<path d="m3 8.5 3.2 3L13 4.5"/>'),
   list: svg('<path d="M2.5 4h11M2.5 8h11M2.5 12h11"/>'),
+  // An agent that listens: a point with waves. Struck through when none does.
+  listen: svg('<circle cx="8" cy="8" r="1.1" fill="currentColor"/><path d="M5.4 5.4a3.7 3.7 0 0 0 0 5.2M10.6 5.4a3.7 3.7 0 0 1 0 5.2M3.4 3.4a6.5 6.5 0 0 0 0 9.2M12.6 3.4a6.5 6.5 0 0 1 0 9.2"/>'),
+  deaf: svg('<circle cx="8" cy="8" r="1.1" fill="currentColor"/><path d="M5.4 5.4a3.7 3.7 0 0 0 0 5.2M10.6 5.4a3.7 3.7 0 0 1 0 5.2M3.4 3.4a6.5 6.5 0 0 0 0 9.2M12.6 3.4a6.5 6.5 0 0 1 0 9.2" opacity="0.45"/><path d="M2.5 13.5l11-11"/>'),
   more: svg('<circle cx="3.5" cy="8" r="0.6"/><circle cx="8" cy="8" r="0.6"/><circle cx="12.5" cy="8" r="0.6"/>'),
   phone: svg('<rect x="4.5" y="1.5" width="7" height="13" rx="1.3"/><path d="M7.2 12.2h1.6"/>'),
 }
@@ -146,6 +150,8 @@ const state = {
   changesOn: true,
   // On a phone: the marking tools are out, and a finger on the picture draws. Otherwise a finger moves the picture.
   marking: false,
+  // Who listens and what waits unheard, as the server last said. Unset with a server from before it said so.
+  listening: null,
 }
 /**
  * A phone, or a window as narrow as one: a name and a count above, the picture, and three large buttons under it. The marking
@@ -253,7 +259,8 @@ const liveScreen = s => state.apps.find(a => a.slug === s.appSlug)?.screens.find
 
 async function loadQueue() {
   const res = await fetch('/api/queue', { cache: 'no-store' })
-  const { apps, phone: phoneNow } = await res.json()
+  const { apps, listening, phone: phoneNow } = await res.json()
+  setListening(listening)
   const text = JSON.stringify(apps)
   state.loaded = true
   document.body.classList.remove('loading')
@@ -320,6 +327,127 @@ async function loadQueue() {
   render()
   if (notice) toast(notice)
   if (fresh.length) announce(fresh, !notice)
+}
+
+/* ---------- is an agent listening: a steady sign in the bar, and a notice that stays when approved work has nobody to hear it ---------- */
+
+/** The notice under the sign. `made` is what an answer just made; `quiet` is the short line when an agent will hear it. */
+const heard = { open: false, made: null, quiet: '', timer: 0 }
+let lastListening = ''
+function setListening(next) {
+  const text = JSON.stringify(next ?? null)
+  if (text === lastListening) return
+  lastListening = text
+  state.listening = next ?? null
+  // What it warned about is heard now, or has been taken: the warning has nothing left to say.
+  if (heard.open && heard.made && next && !unheardCount(next)) {
+    if (next.agents.length) return quietLine(heardWords(next.agents))
+    heard.open = false
+  }
+  return renderHeard()
+}
+function closeHeard() {
+  clearTimeout(heard.timer)
+  Object.assign(heard, { open: false, made: null, quiet: '' })
+  renderHeard()
+}
+function quietLine(words) {
+  clearTimeout(heard.timer)
+  Object.assign(heard, { open: true, made: null, quiet: words })
+  heard.timer = setTimeout(closeHeard, 4000)
+  renderHeard()
+}
+/** An answer made work for an agent. Heard: one quiet line. Not heard: said at once, and it stays until closed or heard. */
+function saidMade(made) {
+  const l = state.listening
+  if (!l?.unheard) return
+  if (made.heard && l.agents.length) return quietLine(heardWords(l.agents))
+  clearTimeout(heard.timer)
+  Object.assign(heard, { open: true, made: made.what, quiet: '' })
+  renderHeard()
+}
+const copyRow = line => `<div class="copy-line"><code>${esc(line)}</code><button class="btn" data-copy="${esc(line)}">Copy</button></div>`
+const desktopWake = () => {
+  const registrations = state.listening?.desktop
+  return registrations && Object.hasOwn(registrations, state.appSlug) ? registrations[state.appSlug] : null
+}
+const reviewSign = () => {
+  const desktop = desktopWake()
+  if (!desktop?.on) return signOf(state.listening)
+  const tip = 'Codex Desktop checks this review for new marks.'
+  return desktop.pending ? { state: 'waking', words: 'Waiting for Codex…', tip } : { state: 'on', words: '', tip }
+}
+function heardHtml() {
+  const l = state.listening
+  if (heard.quiet) return `<p class="quiet">${esc(heard.quiet)}</p>`
+  const close = `<button class="tool" data-heard-close aria-label="Close">${ICONS.close}</button>`
+  const desktop = desktopWake()
+  if (desktop?.on) return `<div class="heard-head"><p>${desktop.pending ? 'Your marks are in.' : 'Codex Desktop wake is on.'}</p>${close}</div><p class="sub">Codex picks up marks on its next check.</p>`
+  const setup = `<p class="sub">Your agent can start by itself next time. Ask it once:</p>${copyRow(SETUP_LINE)}`
+  if (!unheardCount(l)) {
+    const who = agentsWords(l.agents)
+    return `<div class="heard-head"><p>${esc(who ? `${who}.` : 'No agent is listening.')}</p>${close}</div><p class="sub">${who ? 'It takes what you approve or send.' : projectWake()?.on ? `Nothing waits for an agent now. When work waits, ${esc(projectWake().by)} is started.` : 'Nothing waits for an agent now.'}</p>${!who && !projectWake() ? setup : ''}`
+  }
+  const w = unheardWords(l, heard.made)
+  return `<div class="heard-head"><p>${esc(w.head)}</p>${close}</div><p class="sub">${esc(w.sub)}</p>${w.log ? `<p class="sub">It last said:</p><pre>${esc(w.log)}</pre>` : ''}${w.line ? copyRow(w.line) : ''}${w.setup ? setup : ''}`
+}
+/** The tab says how many screens wait, with a mark in front when work waits and no agent hears it. */
+const titleNow = () => `${reviewSign().state === 'warn' ? '! ' : ''}${waitingInAll() ? `(${waitingInAll()}) ` : ''}Markback`
+function renderHeard() {
+  const sign = reviewSign()
+  const el = $('heardSign')
+  // Said only when work waits that no agent will hear. While one listens, nothing is in the way.
+  el.hidden = !signShows(sign)
+  el.className = `tool heard-sign is-${sign.state}`
+  el.dataset.tip = sign.tip
+  el.setAttribute('aria-label', sign.tip)
+  setHtml(el, `${ICONS[sign.state === 'on' || sign.state === 'waking' ? 'listen' : 'deaf']}${sign.words ? `<span>${esc(sign.words)}</span>` : ''}`)
+  const card = $('heard')
+  // A card opened from the sign closes with it. The quiet line, and the notice for what was just sent, may stay.
+  card.hidden = !heard.open || sign.state === 'none' || (!signShows(sign) && !heard.quiet && !heard.made)
+  if (!card.hidden) {
+    card.className = `heard${!heard.quiet && sign.state === 'warn' ? ' warn' : ''}`
+    setHtml(card, heardHtml())
+  }
+  if (state.loaded) document.title = titleNow()
+}
+$('heardSign').onclick = () => {
+  if (heard.open) return closeHeard()
+  clearTimeout(heard.timer)
+  Object.assign(heard, { open: true, made: null, quiet: '' })
+  return renderHeard()
+}
+$('heard').onclick = async event => {
+  if (event.target.closest('[data-heard-close]')) return closeHeard()
+  const copy = event.target.closest('[data-copy]')
+  if (!copy) return undefined
+  let done = false
+  try {
+    await navigator.clipboard.writeText(copy.dataset.copy)
+    done = true
+  } catch {
+    // The clipboard can be refused. The line is selected instead, ready to copy with the keys.
+    getSelection().selectAllChildren(copy.previousElementSibling)
+  }
+  copy.textContent = done ? 'Copied' : 'Selected: copy it'
+  return undefined
+}
+/** The wake of the project this review belongs to. Each project has its own, or none. */
+const projectWake = () => state.listening?.wakes?.find(w => w.apps?.includes(state.appSlug)) ?? null
+async function toggleWake() {
+  closeMenu()
+  const desktop = desktopWake()
+  const wake = desktop ?? projectWake()
+  if (!wake) return
+  try {
+    const res = await fetch('/api/wake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: !wake.on, ...(desktop ? { app: state.appSlug } : { key: wake.key }) }) })
+    const got = await res.json()
+    if (!res.ok) throw new Error(got.error || 'the server did not take it')
+    setListening(got.listening)
+    toast(wake.on ? 'Your agent is not woken now' : desktop ? 'Codex Desktop will check for marks' : `${wake.by} is woken when work waits`, wake.on ? 'Work waits until an agent listens' : '')
+  } catch (error) {
+    toast('That could not be saved', error.message, { problem: true })
+  }
 }
 
 /* ---------- something new to review: said in the tab's title always, and by a sound and a notice unless turned off ---------- */
@@ -641,9 +769,12 @@ function endPin({ keepMic = false } = {}) {
   pin.active = null
   pinBox.value = ''
   showGlow()
+  // A phrase still being heard stays with this pin as far as it got. The rest of it must not land in the next box.
+  mic.listener?.skip()
   if (p.startedMic && !keepMic && mic.listener?.on) mic.listener.stop()
   // A mark with a place and its words. The far corner only says it is a real mark to the shared drawing code.
-  if (p.text) commit({ tool: 'pin', a: p.at, b: [p.at[0] + 24, p.at[1] + 24], color: p.color, text: p.text, n: p.n })
+  // The size it was seen at goes with it, so the marked picture shows it as the screen did.
+  if (p.text) commit({ tool: 'pin', a: p.at, b: [p.at[0] + 24, p.at[1] + 24], color: p.color, text: p.text, n: p.n, size: state.size ? textFor(markWidth()) : undefined })
   else paint()
 }
 /** Lets the listening pin go without a mark: the screen it was on has gone. */
@@ -654,6 +785,7 @@ function dropPin() {
   pin.active = null
   pinBox.value = ''
   showGlow()
+  mic.listener?.skip()
   if (p.startedMic && mic.listener?.on) mic.listener.stop()
 }
 /** A press with the speak tool: the pin that listened ends there, and a new one listens here. */
@@ -664,8 +796,13 @@ async function startPin(at) {
   if (!s || !state.size) return
   const wasOn = !!mic.listener?.on
   if (!wasOn && !(await startMic())) return
-  if (screen() !== s) return
-  pin.active = { at, n: draftOf(s).marks.filter(isPin).length + 1, color: state.colour, text: '', timer: null, startedMic: kept || !wasOn }
+  // A question may have been asked first. If the screen has gone meanwhile, nothing is left listening for a pin that is not there.
+  if (!screen() || keyOf(screen()) !== keyOf(s) || !state.size) {
+    if (!wasOn && mic.listener?.on) mic.listener.stop()
+    return
+  }
+  const used = draftOf(screen()).marks.filter(isPin).map(m => m.n)
+  pin.active = { at, n: Math.max(0, ...used) + 1, color: state.colour, text: '', timer: null, startedMic: kept || !wasOn }
   pinBox.value = ''
   restPin()
   showGlow()
@@ -674,7 +811,14 @@ async function startPin(at) {
 /** The words of a pin in lines that fit a width. */
 function linesOf(ctx, text, room) {
   const lines = []
-  for (const word of text.split(/\s+/).filter(Boolean)) {
+  for (let word of text.split(/\s+/).filter(Boolean)) {
+    // A word longer than the room is broken, so nothing runs off the picture.
+    while (ctx.measureText(word).width > room && word.length > 1) {
+      let fits = word.length - 1
+      while (fits > 1 && ctx.measureText(word.slice(0, fits)).width > room) fits--
+      lines.push(word.slice(0, fits))
+      word = word.slice(fits)
+    }
     const next = lines.length ? `${lines[lines.length - 1]} ${word}` : word
     if (lines.length && ctx.measureText(next).width <= room) lines[lines.length - 1] = next
     else lines.push(word)
@@ -686,11 +830,11 @@ function linesOf(ctx, text, room) {
  * where there is room and to the left where there is not. The pin that listens shows a line saying how to stop.
  */
 function paintPins(ctx, pins, wide, listening = null) {
-  const size = textFor(wide)
-  const r = size * 0.8
-  const line = Math.max(2, Math.round(size / 9))
   const picture = { w: ctx.canvas.width, h: ctx.canvas.height }
   for (const m of pins) {
+    const size = m.size ?? textFor(wide)
+    const r = size * 0.8
+    const line = Math.max(2, Math.round(size / 9))
     const [x, y] = m.a ?? m.at
     const live = m === listening
     // The box of words.
@@ -700,16 +844,17 @@ function paintPins(ctx, pins, wide, listening = null) {
     const most = Math.min(size * 19, picture.w * 0.5)
     const right = picture.w - (x + gap) - size * 0.5
     const onRight = right >= Math.min(most, size * 9)
-    const room = Math.max(size * 6, Math.min(most, onRight ? right : x - gap - size * 0.5) - pad * 2)
+    // Never wider than the picture, however little room the side it is on has.
+    const room = Math.min(picture.w - line * 2 - pad * 2, Math.max(size * 6, Math.min(most, onRight ? right : x - gap - size * 0.5) - pad * 2))
     const lines = linesOf(ctx, m.text, room)
-    const hint = live ? (onPhone() ? 'Listening · a tap or a pause stops' : 'Listening · click, Esc or a pause stops') : ''
     ctx.font = `500 ${size * 0.72}px -apple-system, system-ui, sans-serif`
-    const hintWide = hint ? ctx.measureText(hint).width : 0
+    const hints = live ? linesOf(ctx, onPhone() ? 'Listening · a tap or a pause stops' : 'Listening · click, Esc or a pause stops', room) : []
+    const hintWide = Math.max(0, ...hints.map(l => ctx.measureText(l).width))
     ctx.font = `600 ${size}px -apple-system, system-ui, sans-serif`
-    const wideBox = Math.max(...lines.map(l => ctx.measureText(l).width), hintWide, size * 2) + pad * 2
-    const tall = Math.max(1, lines.length) * size * 1.3 + (hint ? size * 1.05 : 0) + pad * 1.4
+    const wideBox = Math.min(picture.w - line * 2, Math.max(...lines.map(l => ctx.measureText(l).width), hintWide, size * 2) + pad * 2)
+    const tall = Math.max(1, lines.length) * size * 1.3 + hints.length * size * 1.05 + pad * 1.4
     if (lines.length || live) {
-      const left = onRight ? x + gap : x - gap - wideBox
+      const left = Math.max(line, Math.min(picture.w - wideBox - line, onRight ? x + gap : x - gap - wideBox))
       const top = Math.max(line, Math.min(picture.h - tall - line, y - r))
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(left, top, wideBox, tall)
@@ -719,11 +864,9 @@ function paintPins(ctx, pins, wide, listening = null) {
       ctx.textBaseline = 'top'
       ctx.fillStyle = '#1c1c1e'
       lines.forEach((text, n) => ctx.fillText(text, left + pad, top + pad * 0.7 + n * size * 1.3))
-      if (hint) {
-        ctx.font = `500 ${size * 0.72}px -apple-system, system-ui, sans-serif`
-        ctx.fillStyle = '#6b6b70'
-        ctx.fillText(hint, left + pad, top + pad * 0.7 + Math.max(1, lines.length) * size * 1.3)
-      }
+      ctx.font = `500 ${size * 0.72}px -apple-system, system-ui, sans-serif`
+      ctx.fillStyle = '#6b6b70'
+      hints.forEach((text, n) => ctx.fillText(text, left + pad, top + pad * 0.7 + Math.max(1, lines.length) * size * 1.3 + n * size * 1.05))
     }
     // The pin: a disc in the mark's colour with a white microphone.
     ctx.fillStyle = m.color
@@ -735,7 +878,9 @@ function paintPins(ctx, pins, wide, listening = null) {
     ctx.lineWidth = Math.max(1.5, r * 0.13)
     ctx.lineCap = 'round'
     ctx.beginPath()
-    ctx.roundRect(x - r * 0.17, y - r * 0.48, r * 0.34, r * 0.6, r * 0.17)
+    // An older browser has no rounded rectangle: a plain one says microphone well enough.
+    if (ctx.roundRect) ctx.roundRect(x - r * 0.17, y - r * 0.48, r * 0.34, r * 0.6, r * 0.17)
+    else ctx.rect(x - r * 0.17, y - r * 0.48, r * 0.34, r * 0.6)
     ctx.fill()
     ctx.beginPath()
     ctx.arc(x, y + r * 0.02, r * 0.32, 0.15 * Math.PI, 0.85 * Math.PI)
@@ -765,7 +910,7 @@ function paintPins(ctx, pins, wide, listening = null) {
 /** What goes to the agent for a pin: where it is and what was said there. */
 function pinShape(m, wide) {
   const colour = COLOURS.find(c => c.value === m.color)
-  const r = Math.round(textFor(wide) * 0.8)
+  const r = Math.round((m.size ?? textFor(wide)) * 0.8)
   return { type: 'pin', colour: colour ? colour.id : m.color, box: { x: Math.round(m.a[0] - r), y: Math.round(m.a[1] - r), w: r * 2, h: r * 2 }, at: { x: Math.round(m.a[0]), y: Math.round(m.a[1]) }, text: m.text, n: m.n }
 }
 function renderMic() {
@@ -799,7 +944,10 @@ async function pressMic() {
 /** Turns listening on, asking what it must ask first. True when it is on. */
 async function startMic() {
   const route = mic.route
-  if (!route) return false
+  if (!route) {
+    toast('The microphone is not ready yet', 'Try again in a moment')
+    return false
+  }
   if (route.route === 'none') {
     toast(route.why)
     return false
@@ -1065,6 +1213,7 @@ function renderMenu() {
     ${panels() ? `<button data-menu="strip" role="menuitem"><span>${document.body.classList.contains('no-strip') ? 'Show' : 'Hide'} the screens</span></button><button data-menu="details" role="menuitem"><span>${document.body.classList.contains('no-details') ? 'Show' : 'Hide'} the details</span></button>` : ''}
     <button data-menu="full" role="menuitem"><span>Full screen</span><span class="kbd">F</span></button>
     <button data-menu="notices" role="menuitem"><span>${noticesLabel()}</span></button>
+    ${desktopWake() ? `<button data-menu="wake" role="menuitem"><span>Wake Codex Desktop for this review: ${desktopWake().on ? 'on' : 'off'}</span></button>` : projectWake() ? `<button data-menu="wake" role="menuitem"><span>Wake my agent when work waits: ${projectWake().on ? 'on' : 'off'}</span></button><div class="menu-note">It runs <code>${esc(projectWake().run)}</code> in ${esc(projectWake().in)}</div>` : ''}
     <button data-menu="phone" role="menuitem"><span>Review from your phone${phone.status.on ? ': on' : ''}</span></button>
     <hr>
     <button data-menu="keys" role="menuitem"><span>Keyboard shortcuts</span><span class="kbd">?</span></button>`)
@@ -1138,7 +1287,7 @@ function render() {
   // One count, and only where a picture is: the overlay says it in full.
   $('overall').textContent = s && a ? (onPhone() ? `${state.index + 1} of ${a.screens.length}` : countWords(openOf(a).length, waitingInAll(), { short: true })) : ''
   // The tab says how many wait, for someone working in another one.
-  document.title = waitingInAll() ? `(${waitingInAll()}) Markback` : 'Markback'
+  document.title = titleNow()
   $('overall').title = s && a ? `Screen ${state.index + 1} of ${a.screens.length}. ${countWords(openOf(a).length, waitingInAll())}.` : ''
   $('stopHere').hidden = !s
   document.body.classList.toggle('no-apps', state.loaded && !state.apps.length)
@@ -1745,6 +1894,9 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
   }
   answeredHere.set(key, { status, sentAt })
   sentHere.add(key)
+  // The answer made work for an agent: say at once whether one will hear it.
+  if (result.listening) setListening(result.listening)
+  if (result.made) saidMade(result.made)
   return result.record
 }
 
@@ -2304,6 +2456,7 @@ $('menu').onclick = event => {
   else if (what === 'full') toggleFull()
   else if (what === 'notices') void toggleNotices()
   else if (what === 'phone') openPhone()
+  else if (what === 'wake') void toggleWake()
   else if (what === 'sheet') openSheet()
   else if (what === 'keys') showHelp(true)
 }

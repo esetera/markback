@@ -466,3 +466,21 @@ test('scripts/phone-check.mjs, for the real Tailscale, says plainly when there i
   assert.match(off.stdout, /Review from your phone is off\. Turn it on with: review phone on/)
   assert.deepEqual(r.tail.calls(), [], 'and Tailscale was not asked')
 })
+
+test('every file the review page loads is one a phone may load', async () => {
+  const { readFileSync } = await import('node:fs')
+  const PUBLIC = join(ROOT, 'public')
+  const wanted = new Set(['/'])
+  for (const [, path] of readFileSync(join(PUBLIC, 'index.html'), 'utf8').matchAll(/(?:src|href)="(\/[^"]+)"/g)) wanted.add(path)
+  // And what each script imports, and what those import.
+  const scripts = [...wanted].filter(path => path.endsWith('.js'))
+  while (scripts.length) {
+    const file = scripts.pop()
+    for (const [, name] of readFileSync(join(PUBLIC, file), 'utf8').matchAll(/^import .* from '\.\/([\w-]+\.js)'/gm)) {
+      if (!wanted.has(`/${name}`)) scripts.push(`/${name}`)
+      wanted.add(`/${name}`)
+    }
+  }
+  for (const path of wanted) assert.equal(phoneMay('GET', path), true, path)
+  assert.ok(wanted.has('/app.js') && wanted.has('/qr.js'))
+})
