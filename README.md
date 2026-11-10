@@ -173,6 +173,7 @@ Light and dark are separate screens. The page is the review: the picture fills t
 - **All the screens:** the count in the bar ("4 left", or **O**) opens every screen of the review with where each stands. A press goes to one, and **Looks good for the rest** answers what is left.
 - **Select words:** where a picture came with a word list, the words tool (**E**) marks the words themselves, as in a document. Without a list it draws a box.
 - **Something new:** the tab's title counts what waits. New screens are said on the page, and from behind another window by a sound and, if you allow it, a notice. The menu turns the sound and notices off.
+- **New project:** in the menu, the same two ways in as the first screen: a running app's address, or `/markback` in your agent, with one sentence after it when there is no app yet. The new project stands beside the ones there, which are left as they are. **Esc** closes it.
 - **At the foot:** a slim notes box that grows up over the picture as you type, Looks good and Send. If there are answers already, a small line opens them.
 
 Opened at the plain address it starts at the next thing to review, not set aside, says where with one press to be in, and the list and panels stay out of the way. A link with a `#` opens what it names.

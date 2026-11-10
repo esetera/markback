@@ -1694,6 +1694,76 @@ test('the first minute: the sample, from an empty page', { skip }, async () => {
   assert.match(await page.locator('#crumbs').innerText(), /Sample/)
 })
 
+test('New project in the menu: the same two ways in as the first screen, Esc closes, focus goes back, and a wrong address is said there', { skip }, async () => {
+  const r = await rig()
+  r.push('Garden', ['Home', 'Bookings'], null)
+  const { page, errors } = await r.open('garden')
+  const grounds = []
+  for (const scheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: scheme })
+    // By keyboard: the menu, then its entry.
+    await page.locator('#menuOpen').focus()
+    await page.keyboard.press('Enter')
+    await page.getByRole('menuitem', { name: 'New project' }).focus()
+    await page.keyboard.press('Enter')
+    const modal = page.locator('#newModal')
+    assert.equal(await modal.isVisible(), true)
+    assert.equal(await page.evaluate(() => document.activeElement.matches('#newModal [data-first-address]')), true, 'the address takes the keys')
+    // The same form as the first screen, without the sample, and with no id said twice.
+    assert.match(await modal.innerText(), /1\. Your app's address/)
+    assert.match(await modal.innerText(), /\/markback a recipe box for my family/)
+    assert.equal(await modal.locator('[data-first-sample]').count(), 0)
+    assert.equal(await page.evaluate(() => { const ids = [...document.querySelectorAll('[id]')].map(e => e.id); return ids.length === new Set(ids).size }), true)
+    grounds.push(await modal.locator('.modal').evaluate(el => getComputedStyle(el).backgroundColor))
+    await page.keyboard.press('Escape')
+    assert.equal(await modal.isVisible(), false, 'Esc closes it')
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'menuOpen', 'focus goes back to the menu')
+  }
+  assert.notEqual(grounds[0], grounds[1], 'light and dark each have their own')
+  // A wrong address is said in the window, which stays.
+  await page.locator('#menuOpen').click()
+  await page.getByRole('menuitem', { name: 'New project' }).click()
+  await page.locator('#newModal [data-first-address]').fill('not a place at all')
+  await page.keyboard.press('Enter')
+  await page.locator('#newModal [data-first-said]').getByText('is not an address').waitFor({ timeout: 8000 })
+  assert.equal(await page.locator('#newModal').isVisible(), true)
+  await page.locator('#newClose').click()
+  assert.equal((await r.queue('garden')).screens.length, 2, 'the project there is untouched')
+  // A narrow window: the form fits.
+  const narrow = await r.open('garden', { width: 380, height: 760 })
+  await narrow.page.locator('#menuOpen').click()
+  await narrow.page.getByRole('menuitem', { name: 'New project' }).click()
+  const box = await narrow.page.locator('#newModal .modal').boundingBox()
+  assert.ok(box.x >= 0 && box.x + box.width <= 380, `inside the window: ${box.x}, ${box.width}`)
+  assert.equal(await narrow.page.locator('#newModal .modal').evaluate(el => el.scrollWidth <= el.clientWidth), true)
+  // The wrong address is a 400, which the browser logs; nothing else may be.
+  assert.deepEqual([...errors, ...narrow.errors].filter(e => !/400 .*\/api\/show/.test(e)), [])
+})
+
+test('New project from the menu makes a second project beside the first, and goes to it', { skip }, async t => {
+  const driving = process.env.REVIEW_CHROME
+  delete process.env.REVIEW_CHROME
+  const chrome = (await import('../lib/first.mjs')).findChrome()
+  if (driving) process.env.REVIEW_CHROME = driving
+  if (!chrome) return t.skip('no Chrome on this computer')
+  const r = await rig()
+  r.push('Garden', ['Home', 'Bookings'], null)
+  const { page, errors } = await r.open('garden')
+  await page.locator('#menuOpen').click()
+  await page.getByRole('menuitem', { name: 'New project' }).click()
+  await page.locator('#newModal [data-first-address]').fill(`127.0.0.1:${r.port}/work.html`)
+  await page.getByRole('button', { name: 'Show it' }).click()
+  await page.locator('#newModal').waitFor({ state: 'hidden', timeout: 50000 })
+  await page.locator('#crumbs').getByText('127.0.0.1').waitFor({ timeout: 8000 })
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'menuOpen')
+  assert.equal((await r.queue('garden')).screens.length, 2, 'the first project is as it was')
+  const apps = (await (await fetch(`http://127.0.0.1:${r.port}/api/queue`)).json()).apps
+  assert.equal(apps.length, 2)
+  await page.keyboard.press('l')
+  assert.match(await page.locator('#drawerList').innerText(), /Garden[\s\S]*127\.0\.0\.1|127\.0\.0\.1[\s\S]*Garden/)
+  assert.deepEqual(errors, [])
+})
+
 test('speak at a spot: a click drops a pin that listens, its words are written beside it, and each goes as what was said and where', { skip }, async () => {
   const r = await rig()
   r.push('Point', ['A', 'B'], null)

@@ -1050,6 +1050,7 @@ function renderMenu() {
   setHtml($('menu'), `
     <button data-menu="sheet" role="menuitem"${a ? '' : ' disabled'}><span>All screens of this review</span><span class="kbd">O</span></button>
     <button data-menu="list" role="menuitem"><span>Apps and screens</span><span class="kbd">L</span></button>
+    <button data-menu="new" role="menuitem"><span>New project</span></button>
     <button data-menu="work" role="menuitem"><span>Ideas and queue</span><span class="kbd">W</span></button>
     <button data-menu="rest" role="menuitem"${left ? '' : ' disabled'}><span>Looks good for the rest${left ? ` (${left})` : ''}</span><span class="kbd">⇧⌘↩</span></button>
     <button data-menu="aside-one" role="menuitem"${a ? '' : ' disabled'}><span>Set ${group ? `this ${placeOf(a).noun.trim() || 'one'}` : 'this'} aside</span></button>
@@ -2250,7 +2251,7 @@ function cycleView() {
   if (state.fitted) fit()
 }
 
-for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', sheetClose: 'close', viewerClose: 'close' })) $(id).innerHTML = ICONS[icon]
+for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', newClose: 'close', sheetClose: 'close', viewerClose: 'close' })) $(id).innerHTML = ICONS[icon]
 
 $('listOpen').onclick = openDrawer
 $('back').onclick = () => go(state.index - 1)
@@ -2259,6 +2260,7 @@ $('menuOpen').onclick = toggleMenu
 $('menu').onclick = event => {
   const what = event.target.closest('[data-menu]')?.dataset.menu
   if (what === 'list') openDrawer()
+  else if (what === 'new') openNewProject()
   else if (what === 'work') location.href = '/work.html'
   else if (what === 'rest') openSubmit()
   else if (what === 'stop') stopHere()
@@ -2331,47 +2333,83 @@ $('drawerList').addEventListener('keydown', event => {
 $('center').addEventListener('click', event => {
   if (event.target.closest('[data-more]')) toggleMore()
 })
-/* The first minute: your own app, or one sentence to your agent, or a sample. */
-function firstRunHtml() {
+/* The first minute: your own app, or one sentence to your agent, or a sample. New project in the menu shows the same form,
+   without the sample, so there is one wording for both. */
+function firstRunHtml({ sample = true } = {}) {
+  // The ids are for the first screen only; the menu's copy is found through its form, so the two never share an id.
+  const id = name => (sample ? ` id="first${name}"` : '')
   return `<form class="first" data-first>
-    <h2>Two ways to start.</h2>
+    ${sample ? '<h2>Two ways to start.</h2>' : ''}
     <div class="first-or">1. Your app's address, on this computer or online</div>
-    <div class="first-row"><input id="firstAddress" placeholder="http://localhost:3000" aria-label="Your app's address" autocomplete="off"><button class="btn primary" id="firstShow">Show it</button></div>
-    <p class="first-said" id="firstSaid" hidden></p>
+    <div class="first-row"><input${id('Address')} data-first-address placeholder="http://localhost:3000" aria-label="Your app's address" autocomplete="off"><button class="btn primary"${id('Show')} data-first-show>Show it</button></div>
+    <p class="first-said"${id('Said')} data-first-said hidden></p>
     <div class="first-or">2. In your agent, in your project: it finds the app and opens it here</div>
-    <div class="first-row"><code id="firstAsk">/markback</code><button type="button" class="btn" data-first-copy>Copy</button></div>
+    <div class="first-row"><code${id('Ask')} data-first-ask>/markback</code><button type="button" class="btn" data-first-copy>Copy</button></div>
     <p class="first-said">No app yet? Say what you want after it: <b>/markback a recipe box for my family</b>. In a terminal, <b>markback</b> in the project's folder does the same, once installed: <b>npm install -g github:esetera/markback</b></p>
-    <div class="first-or">Just looking</div>
-    <div class="first-row"><button type="button" class="btn" data-first-sample>Try the sample</button></div>
+    ${sample ? '<div class="first-or">Just looking</div>\n    <div class="first-row"><button type="button" class="btn" data-first-sample>Try the sample</button></div>' : ''}
   </form>`
 }
-async function firstRun(path, body) {
-  const said = $('firstSaid')
+async function firstRun(form, path, body) {
+  const said = form.querySelector('[data-first-said]')
+  const show = form.querySelector('[data-first-show]')
   said.hidden = false
   said.textContent = path === '/api/show' ? 'Taking a picture…' : ''
-  $('firstShow').disabled = true
+  show.disabled = true
   try {
     const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     const got = await res.json()
     if (!res.ok) throw new Error(got.error)
     location.hash = got.appSlug
+    closeNewProject()
     await loadQueue()
+    // With projects already here, the address alone does not move the page: go to the new one, beside the others.
+    if (state.appSlug !== got.appSlug && state.apps.some(a => a.slug === got.appSlug)) {
+      pickApp(got.appSlug)
+      toast(`Now: ${placeWords(placeOf(app()))}`)
+    }
   } catch (error) {
     said.textContent = error.message
-    $('firstShow').disabled = false
+    show.disabled = false
   }
 }
-$('stateCard').addEventListener('submit', event => {
-  event.preventDefault()
-  void firstRun('/api/show', { url: $('firstAddress').value || $('firstAddress').placeholder })
-})
-$('stateCard').addEventListener('click', event => {
-  if (event.target.closest('[data-first-sample]')) void firstRun('/api/sample', {})
-  if (event.target.closest('[data-first-copy]')) {
-    void navigator.clipboard?.writeText($('firstAsk').textContent)
-    event.target.textContent = 'Copied'
-  }
-})
+for (const holder of [$('stateCard'), $('newModal')]) {
+  holder.addEventListener('submit', event => {
+    event.preventDefault()
+    const input = event.target.querySelector('[data-first-address]')
+    void firstRun(event.target, '/api/show', { url: input.value || input.placeholder })
+  })
+  holder.addEventListener('click', event => {
+    const form = event.target.closest('[data-first]')
+    if (event.target.closest('[data-first-sample]')) void firstRun(form, '/api/sample', {})
+    if (event.target.closest('[data-first-copy]')) {
+      void navigator.clipboard?.writeText(form.querySelector('[data-first-ask]').textContent)
+      event.target.textContent = 'Copied'
+    }
+  })
+}
+/* New project, from the menu: the first screen's two ways in, over the page, with the projects there left as they are. */
+const newProjectOpen = () => !$('newModal').hidden
+function openNewProject() {
+  closeMenu()
+  // With no project yet, the first screen is already this form.
+  if (!state.apps.length) return $('firstAddress')?.focus()
+  closeTextEntry(true)
+  closeDrawer()
+  setHtml($('newBody'), firstRunHtml({ sample: false }))
+  $('newModal').hidden = false
+  for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = true
+  return $('newBody').querySelector('[data-first-address]').focus()
+}
+function closeNewProject() {
+  if (!newProjectOpen()) return
+  $('newModal').hidden = true
+  for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = false
+  // The form is dropped, so a half-typed address or an old error is not there next time.
+  setHtml($('newBody'), '')
+  $('menuOpen').focus()
+}
+$('newClose').onclick = () => closeNewProject()
+$('newModal').addEventListener('click', event => event.target === $('newModal') && closeNewProject())
 $('stateCard').onclick = event => {
   if (event.target.closest('[data-look]')) go(0)
   if (event.target.closest('[data-go-on]')) goOn()
@@ -2463,6 +2501,10 @@ document.addEventListener('keydown', event => {
   }
   if (!$('viewer').hidden) {
     if (key === 'Escape') $('viewer').hidden = true
+    return
+  }
+  if (newProjectOpen()) {
+    if (key === 'Escape') closeNewProject()
     return
   }
   if (!$('helpModal').hidden) {

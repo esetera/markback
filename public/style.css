@@ -340,6 +340,7 @@ body.answers-open:not(.panels) .insp-head { display: none; }
 .sheet-item .what b { font-weight: 600; }
 .sheet-item .st { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--soft); white-space: nowrap; overflow: hidden; }
 .modal.small { width: min(420px, calc(100vw - 32px)); }
+.modal.new-project { width: min(560px, calc(100vw - 32px)); }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .modal h2 { margin: 0 0 6px; font-size: 16px; }
 .modal-head h2 { margin: 0; }
