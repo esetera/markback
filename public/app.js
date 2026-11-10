@@ -150,6 +150,8 @@ const state = {
   changesOn: true,
   // On a phone: the marking tools are out, and a finger on the picture draws. Otherwise a finger moves the picture.
   marking: false,
+  // Opened on a phone through Tailscale: what runs things on the computer, or only it can do, is not offered.
+  remote: false,
   // Who listens and what waits unheard, as the server last said. Unset with a server from before it said so.
   listening: null,
 }
@@ -259,7 +261,8 @@ const liveScreen = s => state.apps.find(a => a.slug === s.appSlug)?.screens.find
 
 async function loadQueue() {
   const res = await fetch('/api/queue', { cache: 'no-store' })
-  const { apps, listening, phone: phoneNow } = await res.json()
+  const { apps, listening, phone: phoneNow, remote } = await res.json()
+  state.remote = remote === true
   setListening(listening)
   const text = JSON.stringify(apps)
   state.loaded = true
@@ -1203,8 +1206,8 @@ function renderMenu() {
   setHtml($('menu'), `
     <button data-menu="sheet" role="menuitem"${a ? '' : ' disabled'}><span>All screens of this review</span><span class="kbd">O</span></button>
     <button data-menu="list" role="menuitem"><span>Apps and screens</span><span class="kbd">L</span></button>
-    <button data-menu="new" role="menuitem"><span>New project</span></button>
-    <button data-menu="work" role="menuitem"><span>Ideas and queue</span><span class="kbd">W</span></button>
+    ${state.remote ? '' : `<button data-menu="new" role="menuitem"><span>New project</span></button>
+    <button data-menu="work" role="menuitem"><span>Ideas and queue</span><span class="kbd">W</span></button>`}
     <button data-menu="rest" role="menuitem"${left ? '' : ' disabled'}><span>Looks good for the rest${left ? ` (${left})` : ''}</span><span class="kbd">⇧⌘↩</span></button>
     <button data-menu="aside-one" role="menuitem"${a ? '' : ' disabled'}><span>Set ${group ? `this ${placeOf(a).noun.trim() || 'one'}` : 'this'} aside</span></button>
     ${group ? '<button data-menu="aside-group" role="menuitem"><span>Set this group aside</span></button>' : ''}
@@ -1214,10 +1217,10 @@ function renderMenu() {
     ${panels() ? `<button data-menu="strip" role="menuitem"><span>${document.body.classList.contains('no-strip') ? 'Show' : 'Hide'} the screens</span></button><button data-menu="details" role="menuitem"><span>${document.body.classList.contains('no-details') ? 'Show' : 'Hide'} the details</span></button>` : ''}
     <button data-menu="full" role="menuitem"><span>Full screen</span><span class="kbd">F</span></button>
     <button data-menu="notices" role="menuitem"><span>${noticesLabel()}</span></button>
-    ${desktopWake() ? `<button data-menu="wake" role="menuitem"><span>Wake Codex Desktop for this review: ${desktopWake().on ? 'on' : 'off'}</span></button>` : projectWake() ? `<button data-menu="wake" role="menuitem"><span>Wake my agent when work waits: ${projectWake().on ? 'on' : 'off'}</span></button><div class="menu-note">It runs <code>${esc(projectWake().run)}</code> in ${esc(projectWake().in)}</div>` : ''}
-    <button data-menu="phone" role="menuitem"><span>Review from your phone${phone.status.on ? ': on' : ''}</span></button>
+    ${state.remote ? '' : desktopWake() ? `<button data-menu="wake" role="menuitem"><span>Wake Codex Desktop for this review: ${desktopWake().on ? 'on' : 'off'}</span></button>` : projectWake() ? `<button data-menu="wake" role="menuitem"><span>Wake my agent when work waits: ${projectWake().on ? 'on' : 'off'}</span></button><div class="menu-note">It runs <code>${esc(projectWake().run)}</code> in ${esc(projectWake().in)}</div>` : ''}
+    ${state.remote ? '' : `<button data-menu="phone" role="menuitem"><span>Review from your phone${phone.status.on ? ': on' : ''}</span></button>
     <hr>
-    <button data-menu="keys" role="menuitem"><span>Keyboard shortcuts</span><span class="kbd">?</span></button>`)
+    <button data-menu="keys" role="menuitem"><span>Keyboard shortcuts</span><span class="kbd">?</span></button>`}`)
 }
 const closeMenu = () => {
   $('menu').hidden = true

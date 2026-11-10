@@ -141,7 +141,8 @@ async function handle(req, res, fromPhone = false) {
   try {
     if (req.method === 'GET' && url.pathname === '/api/queue') {
       const apps = listApps()
-      return json(res, 200, { apps, listening: listening(apps), phone: phone.status() })
+      // `remote`: asked through the phone's door, so the page offers only what a phone may do.
+      return json(res, 200, { apps, listening: listening(apps), phone: phone.status(), ...(fromPhone ? { remote: true } : {}) })
     }
     if (req.method === 'GET' && url.pathname === '/api/phone') return json(res, 200, phone.status())
     if (req.method === 'POST' && url.pathname === '/api/phone') {

@@ -2485,6 +2485,12 @@ test('review from a phone: the page opened at the tailnet name, on a phone, mark
     await page.waitForFunction(() => document.getElementById('overall').innerText === '2 of 2')
     await page.locator('#footActions [data-act=good]').tap()
     assert.equal((await waitFor(() => r.read('Afar').find(x => x.screenId === 'two'))).verdict, 'approved')
+    // The menu is there, a finger wide, and offers only what a phone can do.
+    await page.locator('#menuOpen').tap()
+    const entries = await page.locator('#menu [role=menuitem]').allInnerTexts()
+    assert.ok(entries.some(text => /Apps and screens/.test(text)), entries.join(' | '))
+    for (const computerOnly of [/New project/, /Ideas and queue/, /Wake/, /Review from your phone/, /Keyboard shortcuts/]) assert.equal(entries.some(text => computerOnly.test(text)), false, `${computerOnly} is not offered`)
+    await page.locator('#menuOpen').tap()
     // From the phone, nothing that runs things on the computer.
     assert.equal(await page.evaluate(async () => (await fetch('/api/show', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'http://localhost:1/' }) })).status), 403)
     // A page that renamed itself to the door, without the secret the proxy adds: nothing.
