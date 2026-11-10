@@ -92,6 +92,7 @@ test('a reading lands on the answer it read: with two on one picture, --answer s
   assert.match(refused, /Home has 2 answers on this picture: say which with --answer\./)
   assert.ok(refused.includes(`${first.sentAt} (2 marks)`) && refused.includes(`${second.sentAt} (1 mark)`), refused)
   // review read prints each answer's name beside its marks, the earlier one too.
+  assert.deepEqual(JSON.parse(cli('read', '--app', 'Two', '--json')).map(r => r.answer), [first.sentAt, second.sentAt], 'the JSON names each answer too')
   const read = cli('read', '--app', 'Two', '--latest')
   assert.ok(read.includes(`Answer: ${second.sentAt}`) && read.includes(`Answer: ${first.sentAt}`), read)
   cli('inferred', '--app', 'Two', '--screen', 'Home', '--answer', first.sentAt, '--mark', '2', '--text', 'For the first answer')

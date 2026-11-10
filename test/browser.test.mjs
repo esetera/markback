@@ -973,13 +973,65 @@ test('a line said again while the person writes in its box: the words and the ke
   await page.keyboard.type(', go bigger')
   assert.equal(await page.locator('[data-correct]').inputValue(), 'Not up, go bigger')
   assert.equal(await at(page), 1)
-  // The box taken away under the words some other way: the rest of them work nothing.
+  // The box taken away under the words by something the page could not help: a notice takes the keyboard, and holds it.
   await page.evaluate(() => document.querySelector('[data-correct]').closest('.reading').remove())
+  await page.waitForTimeout(1600)
   await page.keyboard.type('gn')
   await settled(page)
+  assert.equal(await page.locator('#keptTrap').isVisible(), true)
+  assert.match(await page.locator('#keptTrap').innerText(), /Your words: “Not up, go bigger”/)
   assert.equal(await at(page), 1, 'G did not answer the screen')
   assert.equal(await page.locator('#notes').inputValue(), '')
+  await page.waitForTimeout(1600)
+  await page.keyboard.type('g')
+  assert.equal(await at(page), 1, 'no clock lets it go')
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('#keptTrap').isVisible(), false)
   assert.equal(read('Lines').length, 1, 'nothing more was sent')
+  assert.deepEqual(errors, [])
+})
+
+test('a new picture while the person writes in a box: the box, its words and the keyboard stay, it says so, and Enter still sends', { skip }, async () => {
+  const { page, errors, push, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Not the')
+  await page.waitForTimeout(1600)
+  push('Lines', ['One'])
+  await page.locator('.reading.kept').waitFor({ timeout: 8000 })
+  await page.waitForTimeout(1600)
+  await page.keyboard.type(' footer, go fbm')
+  await settled(page)
+  assert.match(await page.locator('.reading.kept').innerText(), /A new picture came\. Your words are kept/)
+  assert.equal(await page.locator('.reading.kept [data-correct]').inputValue(), 'Not the footer, go fbm')
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('.kept [data-correct]')), true)
+  assert.equal(await at(page), 1)
+  assert.equal(await page.evaluate(() => !!document.fullscreenElement), false, 'F made nothing full screen')
+  assert.equal(await page.locator('.tool.on[data-tool]').getAttribute('data-tool'), 'box', 'no tool was picked')
+  assert.deepEqual(read('Lines').map(r => r.round), [1], 'the new picture was not answered')
+  await page.keyboard.press('Enter')
+  await page.locator('.reading.kept').waitFor({ state: 'detached' })
+  await waitFor(() => read('Lines')[0].inferred[0].reply?.text === 'Not the footer, go fbm')
+  assert.deepEqual(errors, [])
+})
+
+test('Esc closes the box, and a G straight after is a Looks good; Tab goes to the notes and every word typed there lands', { skip }, async () => {
+  const { page, errors } = await twoReadings()
+  // The last line's box: Tab from it goes on to the notes.
+  await page.locator('.reading[data-reading$="|2"] [data-no]').click()
+  await page.keyboard.type('The footer')
+  await page.keyboard.press('Tab')
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'notes')
+  const sentence = 'Also make the whole page lighter please, it is far too dark'
+  await page.keyboard.type(sentence, { delay: 20 })
+  assert.equal(await page.locator('#notes').inputValue(), sentence)
+  assert.equal(await page.locator('[data-correct]').inputValue(), 'The footer')
+  await page.locator('#notes').fill('')
+  await page.locator('[data-correct]').focus()
+  await page.keyboard.press('Escape')
+  // This screen was answered with marks: a Looks good on it asks first, so the question coming up is G at work.
+  await page.keyboard.press('g')
+  await page.locator('#confirmModal').waitFor()
+  assert.match(await page.locator('#confirmTitle').innerText(), /good/i)
   assert.deepEqual(errors, [])
 })
 
@@ -994,20 +1046,77 @@ test('Yes on one line keeps a half-written box on another, with its words', { sk
   assert.deepEqual(errors, [])
 })
 
+/** Each line on show: its buttons can be pressed where they are (nothing over them, inside the window), and no two lines overlap. */
+const linesReachable = page => page.evaluate(() => {
+  const cards = [...document.querySelectorAll('.reading')].filter(c => c.getClientRects().length).map(c => {
+    const b = c.getBoundingClientRect()
+    const pressable = [...c.querySelectorAll('button')].every(x => {
+      const k = x.getBoundingClientRect()
+      const hit = document.elementFromPoint(k.left + k.width / 2, k.top + k.height / 2)
+      // A row of the list scrolled out of its box is not on show: it is reached by scrolling the list.
+      const list = c.closest('.list')?.getBoundingClientRect()
+      const middle = k.top + k.height / 2
+      if (list && (middle < list.top || middle > list.bottom)) return true
+      return k.left >= 0 && k.right <= innerWidth && (hit === x || x.contains(hit))
+    })
+    return { n: c.querySelector('.rn').textContent, l: b.left, r: b.right, t: b.top, b: b.bottom, pressable }
+  })
+  const overlaps = []
+  for (const [i, a] of cards.entries()) for (const z of cards.slice(i + 1)) if (a.l < z.r - 1 && a.r > z.l + 1 && a.t < z.b - 1 && a.b > z.t + 1) overlaps.push(`${a.n}/${z.n}`)
+  return { shown: cards.length, unpressable: cards.filter(c => !c.pressable).map(c => c.n), overlaps }
+})
+const TEN = [[0, 0, 0.08, 0.06], [0.92, 0, 1, 0.06], [0, 0.94, 0.08, 1], [0.92, 0.94, 1, 1], [0.02, 0.45, 0.98, 0.55], [0.4, 0.3, 0.45, 0.33], [0.41, 0.31, 0.46, 0.34], [0.42, 0.32, 0.47, 0.35], [0.43, 0.33, 0.48, 0.36], [0.44, 0.34, 0.49, 0.37]]
+
 for (const [width, height, colorScheme] of [[1500, 960, 'light'], [520, 800, 'dark'], [380, 760, 'light']]) {
-  test(`every line can be reached at ${width} wide, ${colorScheme}: a mark across the picture too`, { skip }, async () => {
-    const { page, errors } = await twoReadings({ width, height, colorScheme, marks: [[0.1, 0.1, 0.3, 0.3], [0.02, 0.75, 0.95, 0.85], [0.75, 0.3, 0.9, 0.4]] })
-    const stage = await page.locator('#stage').boundingBox()
-    for (const button of await page.locator('.reading button').all()) {
-      const b = await button.boundingBox()
-      assert.ok(b.x >= stage.x && b.x + b.width <= Math.min(stage.x + stage.width, width) + 1, `${JSON.stringify(b)} inside ${JSON.stringify(stage)}`)
-      assert.ok(b.y >= stage.y - 1 && b.y + b.height <= stage.y + stage.height + 1, `${JSON.stringify(b)} inside ${JSON.stringify(stage)}`)
-    }
-    await page.locator('.reading[data-reading$="|2"] [data-yes]').click()
-    await page.locator('.reading[data-reading$="|2"] .rs').waitFor()
+  test(`ten lines at ${width} wide, ${colorScheme}: every line on show can be pressed, none overlap, fitted and zoomed in`, { skip }, async () => {
+    const { page, errors } = await twoReadings({ width, height, colorScheme, marks: TEN })
+    const fitted = await linesReachable(page)
+    assert.ok(fitted.shown > 0)
+    assert.deepEqual([fitted.unpressable, fitted.overlaps], [[], []], 'fitted')
+    if (width < 560) assert.equal(await page.locator('#readings.list').count(), 1, 'a narrow window lists them under the picture')
+    for (let i = 0; i < 3; i++) await page.keyboard.press('=')
+    await page.locator('#scroller').evaluate(e => {
+      e.scrollTop = e.scrollHeight
+      e.scrollLeft = e.scrollWidth
+    })
+    await settled(page)
+    await page.waitForTimeout(100)
+    const zoomed = await linesReachable(page)
+    assert.deepEqual([zoomed.unpressable, zoomed.overlaps], [[], []], 'zoomed in and scrolled')
     assert.deepEqual(errors, [])
   })
 }
+
+test('a line whose mark is out of view is not pulled in: a marker says how many, and a press goes there', { skip }, async () => {
+  const { page, errors } = await twoReadings({ marks: [[0.1, 0.05, 0.2, 0.1], [0.1, 0.9, 0.2, 0.95]] })
+  for (let i = 0; i < 4; i++) await page.keyboard.press('=')
+  await page.locator('#scroller').evaluate(e => {
+    e.scrollTop = 0
+    e.scrollLeft = 0
+  })
+  await page.locator('[data-more-lines=below]').waitFor()
+  assert.match(await page.locator('[data-more-lines=below]').innerText(), /1 more line below/)
+  assert.equal(await page.locator('.reading[data-reading$="|2"]').isVisible(), false)
+  await page.locator('[data-more-lines=below]').click()
+  await page.locator('.reading[data-reading$="|2"]').waitFor()
+  // Pointing at a line lights its mark.
+  await page.locator('.reading[data-reading$="|2"]').hover()
+  assert.equal(await page.locator('#readingSpot').isVisible(), true)
+  assert.deepEqual(errors, [])
+})
+
+test('two answers on one picture each with a mark 1: the older one\'s line says earlier 1', { skip }, async () => {
+  const { page, errors, read, env } = await twoReadings({ marks: [[0.1, 0.1, 0.3, 0.3]] })
+  await draw(page, 0.5, 0.6, 0.6, 0.7)
+  await page.keyboard.press('Meta+Enter')
+  const [first, second] = await waitFor(() => read('Lines').length === 2 && read('Lines'))
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'inferred', '--app', 'Lines', '--screen', 'One', '--answer', second.answer, '--mark', '1', '--text', 'The newer one'], { env, stdio: 'ignore' })
+  assert.ok(first.answer)
+  await page.keyboard.press('ArrowLeft')
+  await page.waitForFunction(() => document.querySelectorAll('.reading').length === 2, null, { timeout: 8000 })
+  assert.deepEqual((await page.locator('.reading .rn').allInnerTexts()).sort(), ['1', 'earlier 1'])
+  assert.deepEqual(errors, [])
+})
 
 test('the line that says readings came waits while another is up, and is said after', { skip }, async () => {
   const { page, errors, say, push } = await twoReadings()

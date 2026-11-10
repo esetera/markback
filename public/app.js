@@ -1561,9 +1561,8 @@ function showSentMarks(s) {
 
 /** The reading whose words box is open, as `answer|n`. Only one at a time. */
 let correcting = ''
-/** When a key last went into the words box. Its box gone some other way than Enter or Esc, the next keys answer nothing. */
-let boxKeyAt = 0
-const BOX_GRACE_MS = 1500
+/** A field the person types in. While one has the keyboard, no key of the page's own works: only Esc, and cmd-Enter to send. */
+const isTextField = el => !!el && (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement || el.isContentEditable || (el instanceof HTMLInputElement && !['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file'].includes(el.type)))
 /** The answers that stand for this round, newest first: a Looks good stands alone, so nothing before it counts. */
 function standingAnswers(records, round) {
   const out = []
@@ -1586,23 +1585,30 @@ function readingHtml(r, size) {
   const corrected = !yes && !!r.reply?.text
   const from = esc(shortFrom(r))
   const body = correcting === key
-    ? `<span class="rt">${esc(r.text)}</span><input data-correct value="${esc(r.reply?.text ?? '')}" placeholder="What you meant, then Enter" maxlength="300" aria-label="What you meant by mark ${r.n}">`
+    ? `<span class="rt">${esc(r.text)}</span><input data-correct value="${esc(r.reply?.text ?? '')}" placeholder="What you meant, then Enter" maxlength="300" aria-label="What you meant by mark ${esc(r.label)}">`
     : yes ? `<span class="rt">${esc(r.text)}</span><span class="rs">${ICONS.check}Yes</span><button class="link" data-no>Change</button>`
       : corrected ? `<span class="rt">${esc(r.text)}</span><span class="rc">${esc(r.reply.text)}</span><button class="link" data-no>Change</button>`
         : `<span class="rt"><span class="rf">${from} read:</span>${esc(r.text)}</span><button data-yes>Yes, that</button><button data-no>No</button>`
-  return `<div class="reading${side === 'right' ? '' : ` ${side}`}${yes || corrected ? ' answered' : ''}${corrected ? ' corrected' : ''}" data-reading="${esc(key)}" style="left:${x.toFixed(3)}%;top:${y.toFixed(3)}%" title="What ${from} read mark ${r.n} to mean"><span class="rn">${r.n}</span>${body}</div>`
+  return `<div class="reading${side === 'right' ? '' : ` ${side}`}${yes || corrected ? ' answered' : ''}${corrected ? ' corrected' : ''}" data-reading="${esc(key)}" style="left:${x.toFixed(3)}%;top:${y.toFixed(3)}%" title="What ${from} read mark ${esc(r.label)} to mean"><span class="rn">${esc(r.label)}</span>${body}</div>`
+}
+/** The card before this one, leaving out boxes kept from before: they hold their place, and moving them would lose the keyboard. */
+const cardBefore = el => {
+  let at = el.previousElementSibling
+  while (at?.classList.contains('kept')) at = at.previousElementSibling
+  return at
 }
 function renderReadings(s) {
   const size = state.size
   // Only on the answers standing for this picture, and only once the picture is there to place them on.
   const answers = size && state.shownKey === keyOf(s) + s.after ? standingAnswers(histories.get(historyKey(s)), s.round) : []
-  const readings = answers.flatMap(a => (a.readings ?? []).map(r => ({ ...r, key: `${a.answer}|${r.n}` }))).sort((x, y) => x.box.y - y.box.y)
+  // Two answers on one picture both have a mark 1: the older one's say so.
+  const readings = answers.flatMap((a, i) => (a.readings ?? []).map(r => ({ ...r, key: `${a.answer}|${r.n}`, label: i ? `earlier ${r.n}` : String(r.n) }))).sort((x, y) => x.box.y - y.box.y)
   if (!readings.some(r => r.key === correcting)) correcting = ''
   // Come to look: the line that said they had come has done its work.
   if (readings.length && $('toast').querySelector(`[data-look-at="${CSS.escape(`${s.appSlug}/${s.id}`)}"]`)) hideToast()
   // Card by card, so a card whose words box is open is never rebuilt: what is typed in it, and the keyboard, stay put.
   const layer = $('readings')
-  const old = new Map([...layer.children].map(el => [el.dataset.reading, el]))
+  const old = new Map([...layer.children].filter(el => el.dataset.reading).map(el => [el.dataset.reading, el]))
   let moved = false
   let prev = null
   for (const r of readings) {
@@ -1630,8 +1636,9 @@ function renderReadings(s) {
       // Opened just now: the words go straight in.
       if (r.key === correcting) fresh.querySelector('[data-correct]')?.focus()
     }
+    Object.assign(el, { _box: r.box, _size: size, _screen: s, _after: s.after })
     // Out of order: put back, unless it holds the keyboard, which moving would take away.
-    if (el.previousElementSibling !== prev && !el.contains(document.activeElement)) {
+    if (cardBefore(el) !== prev && !el.contains(document.activeElement)) {
       if (prev) prev.after(el)
       else layer.prepend(el)
       moved = true
@@ -1639,56 +1646,151 @@ function renderReadings(s) {
     prev = el
   }
   for (const el of old.values()) {
-    el.remove()
+    // A box the person is writing in is theirs: whatever changed under it, it stays, with their words, until they say.
+    const input = el.querySelector('[data-correct]')
+    if (input && (input === document.activeElement || input.value.trim() !== input.defaultValue.trim())) keepWords(el, s)
+    else el.remove()
     moved = true
   }
   if (moved) placeReadings()
 }
+/** A box whose line has gone from under it: it keeps the words and the keyboard, says what happened, and waits for the person. */
+function keepWords(el, s) {
+  const input = el.querySelector('[data-correct]')
+  const was = el._screen
+  const why = was && (was.appSlug !== s.appSlug || was.id !== s.id) ? 'This is another screen now.' : was && was.after !== s.after ? 'A new picture came.' : 'That line is not shown now.'
+  el.classList.add('kept')
+  el.dataset.kept = el.dataset.reading
+  delete el.dataset.reading
+  el._html = null
+  // Everything round the box goes; the box itself is not touched, so the keyboard stays in it.
+  for (const child of [...el.children]) if (child !== input) child.remove()
+  input.insertAdjacentHTML('beforebegin', `<span class="rt"><b>${esc(why)}</b> Your words are kept: Enter still sends them, Esc drops them.</span>`)
+  input.insertAdjacentHTML('afterend', '<button data-copy>Copy</button><button data-discard>Discard</button>')
+}
 /**
- * Each line stays inside the part of the picture that can be seen, on both axes, and narrower in a narrow window. Lines that
- * would sit on each other are moved down until they do not, or up when down would take one off the picture.
+ * Lines go beside their marks, inside the part of the picture that can be seen, and never on each other. A line whose mark is
+ * out of view is not pulled in: a small marker says how many are above or below, and a press goes there. When the lines cannot
+ * all stand apart, or the window is narrow, they are a list under the picture instead, one row each.
  */
 function placeReadings() {
-  const cards = [...$('readings').children]
-  if (!cards.length) return
+  const layer = $('readings')
+  const cards = [...layer.children]
+  const more = $('readingsMore')
   const stage = $('stage').getBoundingClientRect()
   const view = $('scroller').getBoundingClientRect()
   const room = { left: Math.max(stage.left, view.left) + 4, right: Math.min(stage.right, view.right, innerWidth) - 4, top: Math.max(stage.top, view.top) + 4, bottom: Math.min(stage.bottom, view.bottom) - 4 }
-  const seen = room.right - room.left > 40 && room.bottom - room.top > 20
-  const placed = []
-  const hits = r => placed.find(p => r.left < p.right && r.right > p.left && r.top < p.bottom && r.bottom > p.top)
-  const shift = (card, by) => {
-    card.style.marginTop = `${(parseFloat(card.style.marginTop) || 0) + by}px`
-    return card.getBoundingClientRect()
+  const unlist = () => {
+    layer.classList.remove('list')
+    for (const p of ['left', 'width', 'top', 'maxHeight']) layer.style[p] = ''
   }
-  for (const card of cards) {
-    card.style.marginTop = ''
-    card.style.marginLeft = ''
-    card.style.maxWidth = seen ? `${Math.max(160, Math.min(340, room.right - room.left))}px` : ''
-    let r = card.getBoundingClientRect()
-    if (seen) {
+  if (!cards.length || room.right - room.left < 40 || room.bottom - room.top < 20) {
+    unlist()
+    setHtml(more, '')
+    return
+  }
+  const markAt = card => {
+    const b = card._box
+    const k = card._size
+    if (!b || !k) return null
+    return { left: stage.left + (b.x / k.w) * stage.width, right: stage.left + ((b.x + b.w) / k.w) * stage.width, top: stage.top + (b.y / k.h) * stage.height, bottom: stage.top + ((b.y + b.h) / k.h) * stage.height }
+  }
+  const beside = () => {
+    unlist()
+    const placed = []
+    const away = { above: [], below: [], aside: [] }
+    const hits = r => placed.find(p => r.left < p.right && r.right > p.left && r.top < p.bottom && r.bottom > p.top)
+    const shift = (card, by) => {
+      card.style.marginTop = `${(parseFloat(card.style.marginTop) || 0) + by}px`
+      return card.getBoundingClientRect()
+    }
+    for (const card of cards) {
+      card.hidden = false
+      card.style.marginTop = ''
+      card.style.marginLeft = ''
+      card.style.maxWidth = `${Math.max(160, Math.min(340, room.right - room.left))}px`
+      const mark = markAt(card)
+      const held = card.classList.contains('kept') || card.contains(document.activeElement)
+      if (mark && !held && (mark.bottom < room.top || mark.top > room.bottom || mark.right < room.left || mark.left > room.right)) {
+        card.hidden = true
+        away[mark.bottom < room.top ? 'above' : mark.top > room.bottom ? 'below' : 'aside'].push(card)
+        continue
+      }
+      let r = card.getBoundingClientRect()
       const dx = r.left < room.left ? room.left - r.left : r.right > room.right ? room.right - r.right : 0
       if (dx) {
         card.style.marginLeft = `${dx}px`
         r = card.getBoundingClientRect()
       }
+      for (let p = hits(r); p; p = hits(r)) r = shift(card, p.bottom - r.top + 4)
+      if (r.bottom > room.bottom) {
+        card.style.marginTop = ''
+        r = card.getBoundingClientRect()
+        for (let p = hits(r); p; p = hits(r)) r = shift(card, p.top - r.bottom - 4)
+      }
+      if (r.top < room.top - 1 || r.bottom > room.bottom + 1 || hits(r)) return null
+      placed.push(r)
     }
-    for (let p = hits(r); p; p = hits(r)) r = shift(card, p.bottom - r.top + 4)
-    if (seen && r.bottom > room.bottom) {
-      card.style.marginTop = ''
-      r = card.getBoundingClientRect()
-      for (let p = hits(r); p; p = hits(r)) r = shift(card, p.top - r.bottom - 4)
-      if (r.bottom > room.bottom) r = shift(card, room.bottom - r.bottom)
-    }
-    if (seen && r.top < room.top) r = shift(card, room.top - r.top)
-    placed.push(r)
+    return away
   }
+  // A narrow window has no room beside the marks.
+  const away = room.right - room.left >= 560 ? beside() : null
+  if (away) {
+    // Over the part of the window the picture is seen in.
+    const center = $('center').getBoundingClientRect()
+    more.style.top = `${view.top - center.top}px`
+    more.style.height = `${view.height}px`
+    setHtml(more, Object.entries(away).filter(([, xs]) => xs.length).map(([where, xs]) => `<button class="more-lines ${where}" data-more-lines="${where}">${xs.length} more ${xs.length === 1 ? 'line' : 'lines'} ${where === 'aside' ? 'to the side' : where}</button>`).join(''))
+    more._away = away
+    return
+  }
+  // The list: under the picture, over its foot, every line in it.
+  setHtml(more, '')
+  const center = $('center').getBoundingClientRect()
+  const foot = $('foot').getBoundingClientRect()
+  for (const card of cards) {
+    card.hidden = false
+    for (const p of ['marginTop', 'marginLeft', 'maxWidth']) card.style[p] = ''
+  }
+  layer.classList.add('list')
+  layer.style.left = `${center.left + 8}px`
+  layer.style.width = `${center.width - 16}px`
+  layer.style.maxHeight = `${Math.round(center.height * 0.45)}px`
+  layer.style.top = `${Math.round(foot.top - 8 - Math.min(layer.scrollHeight, center.height * 0.45))}px`
 }
 let placing = 0
 $('scroller').addEventListener('scroll', () => {
   cancelAnimationFrame(placing)
   placing = requestAnimationFrame(placeReadings)
 }, { passive: true })
+addEventListener('resize', () => {
+  cancelAnimationFrame(placing)
+  placing = requestAnimationFrame(placeReadings)
+})
+/** Where a mark is, lit on the picture while its line is pointed at or has the keyboard. */
+function lightMark(card) {
+  const spot = $('readingSpot')
+  const b = card?._box
+  const k = card?._size
+  spot.hidden = !b || !k || card.classList.contains('kept')
+  if (spot.hidden) return
+  Object.assign(spot.style, { left: `${(b.x / k.w) * 100}%`, top: `${(b.y / k.h) * 100}%`, width: `${(b.w / k.w) * 100}%`, height: `${(b.h / k.h) * 100}%` })
+}
+$('readings').addEventListener('pointerover', event => lightMark(event.target.closest('.reading')))
+$('readings').addEventListener('pointerleave', () => lightMark(document.activeElement?.closest?.('.reading')))
+$('readings').addEventListener('focusin', event => lightMark(event.target.closest('.reading')))
+$('readings').addEventListener('focusout', () => lightMark(null))
+$('readingsMore').addEventListener('click', event => {
+  const where = event.target.closest('[data-more-lines]')?.dataset.moreLines
+  const card = where && $('readingsMore')._away?.[where]?.[0]
+  if (!card?._box) return
+  // The first of them to the middle of the window.
+  const stage = $('stage').getBoundingClientRect()
+  const view = $('scroller').getBoundingClientRect()
+  const x = stage.left + ((card._box.x + card._box.w / 2) / card._size.w) * stage.width
+  const y = stage.top + ((card._box.y + card._box.h / 2) / card._size.h) * stage.height
+  $('scroller').scrollBy({ left: x - (view.left + view.width / 2), top: y - (view.top + view.height / 2) })
+})
 /** Yes, or a few words back. It shows at once; if the server does not take it, it goes back and says so. */
 async function sayBack(s, key, said) {
   const [answer, n] = [key.slice(0, key.lastIndexOf('|')), Number(key.slice(key.lastIndexOf('|') + 1))]
@@ -1697,17 +1799,30 @@ async function sayBack(s, key, said) {
   if (reading) reading.reply = said.yes ? { yes: true } : { text: said.text }
   // A box half typed on another line stays open with its words.
   if (correcting === key) correcting = ''
-  renderReadings(s)
+  if (screen()) renderReadings(screen())
   try {
     const res = await fetch('/api/reading', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: s.appSlug, id: s.id, answer, n, ...said }) })
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'The server did not take it.')
   } catch (error) {
     if (reading) reading.reply = before
-    if (screen() === s) renderReadings(s)
+    if (screen()) renderReadings(screen())
     toast('What you said back did not go', error.message === 'Failed to fetch' ? 'The server is not answering. Say it again when it is back.' : error.message, { problem: true })
   }
 }
+/** The person let a kept box go: by Enter, Esc or a press. */
+function dropKept(el) {
+  if (el.contains(document.activeElement)) document.activeElement.blur()
+  el.remove()
+  placeReadings()
+}
 $('readings').addEventListener('click', event => {
+  const kept = event.target.closest('.kept')
+  if (kept) {
+    const words = kept.querySelector('[data-correct]')?.value ?? ''
+    if (event.target.closest('[data-copy]')) void navigator.clipboard?.writeText(words).then(() => toast('Your words are copied'), () => toast('This browser would not copy them', 'Select them in the box and copy them yourself'))
+    else if (event.target.closest('[data-discard]')) dropKept(kept)
+    return
+  }
   const card = event.target.closest('[data-reading]')
   const s = screen()
   if (!card || !s) return
@@ -1722,17 +1837,66 @@ $('readings').addEventListener('keydown', event => {
   if (!input) return
   // The keys are for the words: G, N or cmd-Enter here must not answer the screen.
   event.stopPropagation()
+  boxHeld = !['Enter', 'Escape', 'Tab'].includes(event.key)
+  const kept = input.closest('.kept')
+  if (kept) {
+    // Kept from a line that has gone: Enter still sends the words to the answer they were about, and Esc drops them.
+    if (event.key === 'Escape') dropKept(kept)
+    else if (event.key === 'Enter' && input.value.trim()) {
+      const said = input.value.trim()
+      dropKept(kept)
+      void sayBack(kept._screen, kept.dataset.kept, { text: said })
+    }
+    return
+  }
   const s = screen()
-  boxKeyAt = event.key === 'Enter' || event.key === 'Escape' ? 0 : Date.now()
   if (event.key === 'Escape' || (event.key === 'Enter' && !input.value.trim())) {
     correcting = ''
     if (s) renderReadings(s)
   } else if (event.key === 'Enter' && s) void sayBack(s, input.closest('[data-reading]').dataset.reading, { text: input.value.trim() })
 })
-// A press anywhere is the person choosing where to go next: their keys are theirs again.
-document.addEventListener('pointerdown', () => {
-  boxKeyAt = 0
+
+/*
+ * The keyboard was in a words box, and the box was taken away by something the page could not help (the picture covered, say).
+ * Then a notice takes the keyboard and holds it: what is typed goes nowhere, until a press or Esc. No clock decides it.
+ */
+let boxHeld = false
+let lastBoxWords = ''
+$('readings').addEventListener('focusin', event => {
+  if (event.target.matches('[data-correct]')) boxHeld = true
+})
+$('readings').addEventListener('input', event => {
+  if (event.target.matches('[data-correct]')) lastBoxWords = event.target.value
+})
+document.addEventListener('focusin', event => {
+  if (!event.target.closest?.('#readings')) boxHeld = false
+})
+document.addEventListener('pointerdown', event => {
+  boxHeld = false
+  if (!$('keptTrap').hidden && !event.target.closest('#keptTrap')) closeTrap()
 }, true)
+/** True when it took the key: the box had the keyboard, and lost it without the person moving it. */
+function trapLostBox(event) {
+  if (!$('keptTrap').hidden) {
+    if (event.key === 'Escape') closeTrap()
+    event.preventDefault()
+    return true
+  }
+  if (!boxHeld || isTextField(document.activeElement)) return false
+  boxHeld = false
+  setHtml($('keptTrap'), `<b>The box you were writing in was closed.</b><span>${lastBoxWords.trim() ? `Your words: “${esc(lastBoxWords.trim())}”. ` : ''}What you type now goes nowhere. Press Esc or click to go on.</span>${lastBoxWords.trim() ? '<button class="link" data-trap-copy>Copy</button>' : ''}`)
+  $('keptTrap').hidden = false
+  $('keptTrap').focus()
+  event.preventDefault()
+  return true
+}
+function closeTrap() {
+  $('keptTrap').hidden = true
+  if (document.activeElement === $('keptTrap')) $('keptTrap').blur()
+}
+$('keptTrap').addEventListener('click', event => {
+  if (event.target.closest('[data-trap-copy]')) void navigator.clipboard?.writeText(lastBoxWords.trim()).catch(() => undefined)
+})
 
 function updateButtons() {
   const a = app()
@@ -2786,12 +2950,8 @@ $('scroller').addEventListener('wheel', event => {
 new ResizeObserver(() => state.fitted && fit()).observe($('scroller'))
 
 document.addEventListener('keydown', event => {
-  // Words were going into a reading's box, and the box went away under them: the rest of those words must not work the page.
-  if (boxKeyAt && Date.now() - boxKeyAt < BOX_GRACE_MS && !event.target.closest?.('[data-correct]')) {
-    boxKeyAt = Date.now()
-    return event.preventDefault()
-  }
-  const typing = event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement
+  if (trapLostBox(event)) return
+  const typing = isTextField(event.target)
   const mod = event.metaKey || event.ctrlKey
   const key = event.key
   // Windows first: they take the keys while open.
@@ -2819,6 +2979,8 @@ document.addEventListener('keydown', event => {
     if (key === 'Escape' || ((key === 'o' || key === 'O') && !mod)) closeSheet()
     return
   }
+  // Typing: the keys are the words. Only Esc, and cmd-Enter to send, are the page's.
+  if (typing && key !== 'Escape' && !(mod && key === 'Enter')) return
   // A change of review waits for a press. Nothing else gets past it: not G, not a held G, not a quick one.
   if (segmentUp()) {
     if (event.repeat) return event.preventDefault()
@@ -2863,7 +3025,6 @@ document.addEventListener('keydown', event => {
     if (typing) return event.target.blur()
     return undefined
   }
-  if (typing) return
   if (mod && key.toLowerCase() === 'z') {
     event.preventDefault()
     return event.shiftKey ? redo() : undo()
