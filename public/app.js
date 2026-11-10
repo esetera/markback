@@ -20,6 +20,7 @@ const ICONS = {
   arrow: svg('<path d="M3 13 13 3M6.5 3H13v6.5"/>'),
   pen: svg('<path d="M2.5 13.5 3 10.5 11 2.5l2.5 2.5-8 8z"/><path d="M9.5 4l2.5 2.5"/>'),
   text: svg('<path d="M3 4V3h10v1M8 3v10M6 13h4"/>'),
+  speak: svg('<rect x="3.5" y="1.5" width="4" height="6.5" rx="2"/><path d="M1.8 6.5a3.7 3.7 0 0 0 7.4 0M5.5 10.2v2.3"/><path d="M9.5 8.5l5 2-2.1.9-.9 2.1z" fill="currentColor" stroke-width="1"/>'),
   words: svg('<path d="M4.5 10 8 2.5l3.5 7.5M5.7 7.5h4.6"/><path d="M2.5 13.5h11" stroke-width="2.2"/>'),
   pan: svg('<path d="M8 1.5v13M1.5 8h13M8 1.5 6.2 3.3M8 1.5l1.8 1.8M8 14.5l-1.8-1.8M8 14.5l1.8-1.8M1.5 8l1.8-1.8M1.5 8l1.8 1.8M14.5 8l-1.8-1.8M14.5 8l-1.8 1.8"/>'),
   undo: svg('<path d="M5.5 3 2.5 6l3 3"/><path d="M2.5 6H10a3.5 3.5 0 0 1 0 7H6"/>'),
@@ -50,6 +51,7 @@ const TOOLS = [
   { id: 'pen', tip: 'Draw freehand', key: 'P' },
   { id: 'text', tip: 'Write on the picture', key: 'T' },
   { id: 'words', tip: 'Select the words themselves', key: 'E' },
+  { id: 'speak', tip: 'Speak at a spot: click, then say it', key: 'D' },
   { id: 'pan', tip: 'Drag the picture around', key: 'M' },
 ]
 const VIEWS = [
@@ -84,7 +86,8 @@ const KEYS = [
   ]],
   ['Answering', [
     [['N'], 'Write notes on this screen'],
-    [['D'], 'Speak your notes'],
+    [['D'], 'Speak at a spot: click on the picture, then say it'],
+    [['⇧', 'D'], 'Speak your notes into the notes box'],
     [['G'], 'Looks good, then on to the next'],
     [['⌘', '↩'], 'Send, then on to the next'],
     [['U'], 'Undo the last answer, while it says so'],
@@ -576,36 +579,176 @@ function renderKind(s) {
 
 /* ---------- speaking ---------- */
 
-const mic = { route: null, listener: null, pointer: null, hearing: null }
+const mic = { route: null, listener: null }
 
-/**
- * Spoken words on the picture: a short arrow to where the pointer was, so they cover nothing of it, and the words at its tail,
- * in lines that stay on the picture. Below the place, or above it near the foot.
- */
-function spokenMarks(words, place) {
-  const size = textFor(markWidth())
-  const ctx = $('canvas').getContext('2d')
-  ctx.font = `600 ${size}px -apple-system, system-ui, sans-serif`
-  const reach = size * 2.6
-  const below = place[1] + reach + size * 3 < state.size.h
-  const tail = [Math.min(place[0] + reach * 0.7, state.size.w * 0.78), below ? place[1] + reach : place[1] - reach]
-  const left = tail[0] + size * 0.4
-  const room = state.size.w - left - size
+/* ---------- speaking at a spot: a pin where you click, and what you say beside it ---------- */
+
+/** How long a silence ends a pin: after some words, and with none at all. */
+const PIN_PAUSE_MS = Number(new URLSearchParams(location.search).get('pause')) || 2500
+const PIN_EMPTY_MS = PIN_PAUSE_MS * 3
+/** The pin that listens now, if any: { at, n, color, text, timer, startedMic }. Its words are a mark only once it ends. */
+const pin = { active: null }
+/** The listener writes into a text box. A pin has one of its own, off the page, so the same listener serves both. */
+const pinBox = document.createElement('textarea')
+pinBox.addEventListener('input', () => {
+  const p = pin.active
+  if (!p) return
+  p.text = pinBox.value.trim()
+  restPin()
+  paint()
+})
+const isPin = m => m.tool === 'pin'
+function restPin() {
+  const p = pin.active
+  if (!p) return
+  clearTimeout(p.timer)
+  p.timer = setTimeout(() => endPin(), p.text ? PIN_PAUSE_MS : PIN_EMPTY_MS)
+}
+function showGlow() {
+  const glow = $('pinGlow')
+  const p = pin.active
+  glow.hidden = !p || !state.size
+  if (glow.hidden) return
+  glow.style.left = `${(p.at[0] / state.size.w) * 100}%`
+  glow.style.top = `${(p.at[1] / state.size.h) * 100}%`
+  glow.style.setProperty('--pin', p.color)
+  // As wide as the pin is on the screen now, whatever the zoom.
+  glow.style.setProperty('--r', `${Math.round(textFor(markWidth()) * 0.8 * state.zoom) + 4}px`)
+}
+/** Ends the pin that listens. With words it becomes a mark; with none it leaves nothing. */
+function endPin({ keepMic = false } = {}) {
+  const p = pin.active
+  if (!p) return
+  clearTimeout(p.timer)
+  pin.active = null
+  pinBox.value = ''
+  showGlow()
+  if (p.startedMic && !keepMic && mic.listener?.on) mic.listener.stop()
+  // A mark with a place and its words. The far corner only says it is a real mark to the shared drawing code.
+  if (p.text) commit({ tool: 'pin', a: p.at, b: [p.at[0] + 24, p.at[1] + 24], color: p.color, text: p.text, n: p.n })
+  else paint()
+}
+/** Lets the listening pin go without a mark: the screen it was on has gone. */
+function dropPin() {
+  const p = pin.active
+  if (!p) return
+  clearTimeout(p.timer)
+  pin.active = null
+  pinBox.value = ''
+  showGlow()
+  if (p.startedMic && mic.listener?.on) mic.listener.stop()
+}
+/** A press with the speak tool: the pin that listened ends there, and a new one listens here. */
+async function startPin(at) {
+  const kept = pin.active?.startedMic
+  endPin({ keepMic: true })
+  const s = screen()
+  if (!s || !state.size) return
+  const wasOn = !!mic.listener?.on
+  if (!wasOn && !(await startMic())) return
+  if (screen() !== s) return
+  pin.active = { at, n: draftOf(s).marks.filter(isPin).length + 1, color: state.colour, text: '', timer: null, startedMic: kept || !wasOn }
+  pinBox.value = ''
+  restPin()
+  showGlow()
+  paint()
+}
+/** The words of a pin in lines that fit a width. */
+function linesOf(ctx, text, room) {
   const lines = []
-  for (const word of words.split(' ')) {
+  for (const word of text.split(/\s+/).filter(Boolean)) {
     const next = lines.length ? `${lines[lines.length - 1]} ${word}` : word
     if (lines.length && ctx.measureText(next).width <= room) lines[lines.length - 1] = next
     else lines.push(word)
   }
-  const top = below ? tail[1] - size * 0.2 : tail[1] - size * 1.3 * lines.length + size * 0.2
-  return [
-    { tool: 'arrow', a: tail, b: place, color: state.colour, w: strokeFor(markWidth()) },
-    ...lines.map((text, n) => ({ tool: 'text', at: [left, top + n * size * 1.3], text, color: state.colour, size })),
-  ]
+  return lines
 }
-function placeSpoken(run) {
-  if (!state.size) return
-  for (const mark of spokenMarks(run.text, run.at)) commit(mark)
+/**
+ * Pins on the picture: a round mark with a microphone and its number, and what was said in a box beside it, to the right
+ * where there is room and to the left where there is not. The pin that listens shows a line saying how to stop.
+ */
+function paintPins(ctx, pins, wide, listening = null) {
+  const size = textFor(wide)
+  const r = size * 0.8
+  const line = Math.max(2, Math.round(size / 9))
+  const picture = { w: ctx.canvas.width, h: ctx.canvas.height }
+  for (const m of pins) {
+    const [x, y] = m.a ?? m.at
+    const live = m === listening
+    // The box of words.
+    ctx.font = `600 ${size}px -apple-system, system-ui, sans-serif`
+    const pad = size * 0.5
+    const gap = r * 1.5
+    const most = Math.min(size * 19, picture.w * 0.5)
+    const right = picture.w - (x + gap) - size * 0.5
+    const onRight = right >= Math.min(most, size * 9)
+    const room = Math.max(size * 6, Math.min(most, onRight ? right : x - gap - size * 0.5) - pad * 2)
+    const lines = linesOf(ctx, m.text, room)
+    const hint = live ? 'Listening · click, Esc or a pause stops' : ''
+    ctx.font = `500 ${size * 0.72}px -apple-system, system-ui, sans-serif`
+    const hintWide = hint ? ctx.measureText(hint).width : 0
+    ctx.font = `600 ${size}px -apple-system, system-ui, sans-serif`
+    const wideBox = Math.max(...lines.map(l => ctx.measureText(l).width), hintWide, size * 2) + pad * 2
+    const tall = Math.max(1, lines.length) * size * 1.3 + (hint ? size * 1.05 : 0) + pad * 1.4
+    if (lines.length || live) {
+      const left = onRight ? x + gap : x - gap - wideBox
+      const top = Math.max(line, Math.min(picture.h - tall - line, y - r))
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(left, top, wideBox, tall)
+      ctx.strokeStyle = m.color
+      ctx.lineWidth = line
+      ctx.strokeRect(left, top, wideBox, tall)
+      ctx.textBaseline = 'top'
+      ctx.fillStyle = '#1c1c1e'
+      lines.forEach((text, n) => ctx.fillText(text, left + pad, top + pad * 0.7 + n * size * 1.3))
+      if (hint) {
+        ctx.font = `500 ${size * 0.72}px -apple-system, system-ui, sans-serif`
+        ctx.fillStyle = '#6b6b70'
+        ctx.fillText(hint, left + pad, top + pad * 0.7 + Math.max(1, lines.length) * size * 1.3)
+      }
+    }
+    // The pin: a disc in the mark's colour with a white microphone.
+    ctx.fillStyle = m.color
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = '#ffffff'
+    ctx.fillStyle = '#ffffff'
+    ctx.lineWidth = Math.max(1.5, r * 0.13)
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.roundRect(x - r * 0.17, y - r * 0.48, r * 0.34, r * 0.6, r * 0.17)
+    ctx.fill()
+    ctx.beginPath()
+    ctx.arc(x, y + r * 0.02, r * 0.32, 0.15 * Math.PI, 0.85 * Math.PI)
+    ctx.moveTo(x, y + r * 0.34)
+    ctx.lineTo(x, y + r * 0.52)
+    ctx.stroke()
+    // Its number, on a small white disc at its shoulder.
+    const br = r * 0.44
+    const bx = x + r * 0.78
+    const by = y - r * 0.78
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath()
+    ctx.arc(bx, by, br, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = m.color
+    ctx.lineWidth = Math.max(1, line * 0.7)
+    ctx.stroke()
+    ctx.fillStyle = m.color
+    ctx.font = `700 ${br * 1.25}px -apple-system, system-ui, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(String(m.n), bx, by + br * 0.06)
+    ctx.textAlign = 'start'
+  }
+  ctx.textBaseline = 'alphabetic'
+}
+/** What goes to the agent for a pin: where it is and what was said there. */
+function pinShape(m, wide) {
+  const colour = COLOURS.find(c => c.value === m.color)
+  const r = Math.round(textFor(wide) * 0.8)
+  return { type: 'pin', colour: colour ? colour.id : m.color, box: { x: Math.round(m.a[0] - r), y: Math.round(m.a[1] - r), w: r * 2, h: r * 2 }, at: { x: Math.round(m.a[0]), y: Math.round(m.a[1]) }, text: m.text, n: m.n }
 }
 function renderMic() {
   const button = $('micBtn')
@@ -621,46 +764,60 @@ function renderMic() {
   button.innerHTML = `${ICONS.mic}${words ? `<span>${words}</span>` : ''}`
   button.dataset.tip = on ? 'Stop listening' : route.route === 'none' ? route.why : cloud ? `Speak your notes: the sound goes to ${route.goesTo}` : route.route === 'install' ? 'Speak your notes: fetches a language pack once' : 'Speak your notes: stays on this computer'
 }
+/** The foot mic: on and off. With no pin listening, what is said goes to the notes box. */
 async function pressMic() {
+  if (mic.listener?.on) {
+    endPin({ keepMic: true })
+    return mic.listener.stop()
+  }
+  return startMic()
+}
+/** Turns listening on, asking what it must ask first. True when it is on. */
+async function startMic() {
   const route = mic.route
-  if (!route) return
-  if (route.route === 'none') return toast(route.why)
-  if (mic.listener?.on) return mic.listener.stop()
+  if (!route) return false
+  if (route.route === 'none') {
+    toast(route.why)
+    return false
+  }
+  if (mic.listener?.on) return true
   if (route.route === 'install') {
-    if (!(await ask('Fetch a language pack?', 'About 60 MB, once, from Google. After that, speech stays on this computer.', 'Fetch it', 'Not now'))) return
+    if (!(await ask('Fetch a language pack?', 'About 60 MB, once, from Google. After that, speech stays on this computer.', 'Fetch it', 'Not now'))) return false
     toast('Fetching the language pack…')
     try {
       await installPack(route.lang)
     } catch (error) {
-      return toast('The language pack did not come', error.message, { problem: true })
+      toast('The language pack did not come', error.message, { problem: true })
+      return false
     }
     mic.route = { ...route, route: 'device' }
     renderMic()
   }
   if (mic.route.route === 'cloud' && prefs.get('mic-cloud') !== 'on') {
-    if (!(await ask(`Send your voice to ${route.goesTo}?`, `This browser sends the sound to ${route.goesTo} to turn it into words. Nothing else on this page goes with it.`, 'Turn it on', 'Keep it off'))) return
+    if (!(await ask(`Send your voice to ${route.goesTo}?`, `This browser sends the sound to ${route.goesTo} to turn it into words. Nothing else on this page goes with it.`, 'Turn it on', 'Keep it off'))) return false
     prefs.set('mic-cloud', 'on')
   }
   mic.listener ??= createListener({
-    box: () => $('notes'),
+    // The pin that listens takes the words. With none, they are notes.
+    box: () => (pin.active ? pinBox : $('notes')),
     local: mic.route.route === 'device',
     lang: route.lang,
     onCommand: command => {
+      endPin()
       if (command === 'good') void looksGood(true)
       else if (command === 'next') go(state.index + 1)
       else if (command === 'back') go(state.index - 1)
       else if (command === 'send') sendCurrent()
     },
-    onState: renderMic,
-    onProblem: words => toast(words, '', { problem: true }),
-    pointAt: () => mic.pointer,
-    onPlaced: placeSpoken,
-    onHearing: (words, place) => {
-      mic.hearing = words && place && state.size ? spokenMarks(words, place) : null
-      paint()
+    onState: on => {
+      // Listening stopped from anywhere: the pin that was listening ends with it.
+      if (!on) endPin({ keepMic: true })
+      renderMic()
     },
+    onProblem: words => toast(words, '', { problem: true }),
   })
   mic.listener.start()
+  return true
 }
 void findRoute().then(route => {
   mic.route = route
@@ -1248,7 +1405,9 @@ function paint() {
   if (state.changesOn && changes.boxes?.length) paintChanged(ctx, changes.boxes, state.size.w, state.size.h)
   const all = [...draftOf(s).marks, ...(draft ? [draft] : [])]
   paintWords(ctx, all.filter(isWords))
-  paintMarks(ctx, [...all.filter(m => !isWords(m)), ...(mic.hearing ?? [])])
+  paintMarks(ctx, all.filter(m => !isWords(m) && !isPin(m)))
+  paintPins(ctx, [...all.filter(isPin), ...(pin.active ? [pin.active] : [])], markWidth(), pin.active)
+  showGlow()
 }
 
 /** What lists a screen's state, after a draft starts or stops counting. */
@@ -1391,6 +1550,7 @@ $('canvas').addEventListener('pointerdown', event => {
     // The mark is drawn from the events that arrive.
   }
   const p = at(event)
+  if (state.tool === 'speak') return void startPin(p)
   const w = strokeFor(markWidth())
   const words = state.tool === 'words' ? wordsNow() : null
   if (words) {
@@ -1404,7 +1564,6 @@ $('canvas').addEventListener('pointerdown', event => {
   else draft = { tool: state.tool === 'words' ? 'box' : state.tool, a: p, b: p, color: state.colour, w }
 })
 $('canvas').addEventListener('pointermove', event => {
-  if (state.size) mic.pointer = at(event)
   if (pan) {
     $('scroller').scrollLeft = pan.left - (event.clientX - pan.x)
     $('scroller').scrollTop = pan.top - (event.clientY - pan.y)
@@ -1429,9 +1588,6 @@ const finish = () => {
 }
 $('canvas').addEventListener('click', event => {
   if (state.size && state.tool === 'text' && !textEntry) openTextEntry(event)
-})
-$('canvas').addEventListener('pointerleave', () => {
-  mic.pointer = null
 })
 $('canvas').addEventListener('pointerup', finish)
 $('canvas').addEventListener('pointercancel', finish)
@@ -1463,6 +1619,9 @@ function openTextEntry(event) {
  * drawn too: the screen may be about to change, with the press still down.
  */
 function closeTextEntry(keep) {
+  // The pin that listens belongs to the screen it is on: kept there with its words, or let go when the screen has already gone.
+  if (keep) endPin()
+  else dropPin()
   if (keep) finish()
   if (!textEntry) return
   const { input, point, colour } = textEntry
@@ -1487,9 +1646,12 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
   const list = d.marks
   const words = d.notes
   const marks = verdict === 'approved' ? [] : list.filter(isReal)
-  const out = verdict === 'approved' || !img ? null : burnCanvas(img, marks.filter(m => !isWords(m)))
+  const out = verdict === 'approved' || !img ? null : burnCanvas(img, marks.filter(m => !isWords(m) && !isPin(m)))
   const ctx = (out ?? document.createElement('canvas')).getContext('2d')
+  // The width the marks were sized for when drawn. A pin's size is worked out as it is painted, so it is fixed here.
+  const wide = size && state.size && size.w === state.size.w ? markWidth() : (size?.w ?? 0)
   if (out) paintWords(ctx, marks.filter(isWords))
+  if (out) paintPins(ctx, marks.filter(isPin), wide)
   const png = out ? out.toDataURL('image/png') : null
   const body = {
     appSlug: s.appSlug,
@@ -1498,7 +1660,7 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
     round: s.round,
     verdict,
     notes: noComment ? 'No comment.' : verdict === 'approved' ? '' : words,
-    shapes: marks.map(m => (isWords(m) ? wordsShape(m) : shapeOf(m, ctx))),
+    shapes: marks.map(m => (isWords(m) ? wordsShape(m) : isPin(m) ? pinShape(m, wide) : shapeOf(m, ctx))),
     imageSize: size,
     png,
   }
@@ -2027,6 +2189,7 @@ function stepApp(by) {
   render()
 }
 function setTool(tool) {
+  if (tool !== 'speak') endPin()
   state.tool = tool
   prefs.set('tool', tool)
   render()
@@ -2326,6 +2489,7 @@ document.addEventListener('keydown', event => {
     if (drawerOpen()) return closeDrawer()
     if (document.body.classList.contains('answers-open')) return document.body.classList.remove('answers-open')
     if (moreOpen()) return toggleMore()
+    if (pin.active) return endPin()
     if (draft) {
       draft = null
       return paint()
@@ -2363,11 +2527,11 @@ document.addEventListener('keydown', event => {
     $('notes').focus()
   } else if (key === 'v' || key === 'V') cycleView()
   else if ((key === 'c' || key === 'C') && !event.repeat) toggleChanges()
-  else if (key === 'd' || key === 'D') pressMic()
+  else if ((key === 'd' || key === 'D') && event.shiftKey) pressMic()
   else if ((key === 'i' || key === 'I') && !event.repeat) toggleMore()
   else if (/^[1-4]$/.test(key)) setColour(COLOURS[Number(key) - 1].value)
   else {
-    const tool = { b: 'box', a: 'arrow', p: 'pen', t: 'text', m: 'pan', e: 'words' }[key.toLowerCase()]
+    const tool = { b: 'box', a: 'arrow', p: 'pen', t: 'text', m: 'pan', e: 'words', d: 'speak' }[key.toLowerCase()]
     if (tool) setTool(tool)
   }
 })

@@ -159,7 +159,7 @@ For voice notes, start with Google Chrome and allow the microphone for the revie
 | Firefox | Speech recognition is off by default. Use typed notes and drawing, or open the review URL in Chrome for voice notes. |
 | Others, or a window with the microphone blocked | No microphone: it says to open the page in Chrome. |
 
-Point as you speak: words said with the pointer on the picture land there, with an arrow to the spot. Words said with it off the picture go to the notes.
+**Speak at a spot** (the speak tool in the bar, or **D**): click on the picture and say it. A pin with a microphone lands where you clicked, a ring round it shows that it listens, and your words are written in a box beside it. Click somewhere else for the next pin; **Esc** or a pause ends one. Each pin goes to your agent as what you said and where. The microphone at the foot (**⇧D**) only fills the notes box.
 
 A phrase that is only "looks good", "next", "back", "send" or "stop listening" acts. Any other words are notes, and you can correct them as you go.
 
@@ -206,6 +206,8 @@ Moving into another review is never quiet. A full overlay says what was finished
 | Q | Panel view |
 | F | Full screen |
 | B A P T M | Box, arrow, pen, text, move |
+| D | Speak at a spot: click on the picture, then say it |
+| ⇧D | Speak your notes into the notes box |
 | E | Select the words themselves, where the picture has a word list |
 | 1–4 | Red, amber, blue, black |
 | ⌘Z / ⇧⌘Z | Undo / redo a mark |
@@ -269,7 +271,8 @@ Inbox: `~/.review-wizard/inbox/<app>/<screen>-<mode>-<time>.{png,json}`. The JSO
     { "type": "box", "colour": "red", "box": { "x": 100, "y": 80, "w": 120, "h": 50 } },
     { "type": "arrow", "colour": "red", "box": { … }, "from": { "x": 400, "y": 700 }, "to": { "x": 800, "y": 300 } },
     { "type": "text", "colour": "red", "box": { … }, "text": "Make this bigger" },
-    { "type": "freehand", "colour": "red", "box": { … }, "points": [[x, y], …] }
+    { "type": "freehand", "colour": "red", "box": { … }, "points": [[x, y], …] },
+    { "type": "pin", "colour": "red", "box": { … }, "at": { "x": 620, "y": 210 }, "n": 1, "text": "The title should be bigger" }
   ],
   "imageSize": { "w": 1290, "h": 835 },
   "annotatedImage": "…/inbox/myapp/home-light-….png",

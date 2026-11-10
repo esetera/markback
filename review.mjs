@@ -88,7 +88,7 @@ function describe(r) {
   if (r.notes) lines.push(`  Notes: ${r.notes.replace(/\n/g, '\n         ')}`)
   for (const [i, s] of r.shapes.entries()) {
     const box = `x ${s.box.x}, y ${s.box.y}, ${s.box.w}x${s.box.h}`
-    const what = s.type === 'text' ? `text "${s.text}"` : s.type === 'arrow' ? `arrow from ${s.from.x},${s.from.y} to ${s.to.x},${s.to.y}` : s.type === 'words' ? `words "${s.text}"` : s.type
+    const what = s.type === 'text' ? `text "${s.text}"` : s.type === 'arrow' ? `arrow from ${s.from.x},${s.from.y} to ${s.to.x},${s.to.y}` : s.type === 'words' ? `words "${s.text}"` : s.type === 'pin' ? `said at pin ${s.n ?? ''} "${s.text}"`.replace('  ', ' ') : s.type
     // A mark's words came from a page or a file. Printed with no new lines and no codes, they cannot pass for a line of this report.
     lines.push(`  ${i + 1}. ${printable(`${what} (${s.colour ?? s.color}) at ${box}${sayWords(s)}`)}`)
   }

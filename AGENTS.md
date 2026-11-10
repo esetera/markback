@@ -133,7 +133,7 @@ Each answer has:
 - `verdict`: `changes` or `approved`. Approved means leave that screen alone.
 - `kind`: `qa` or `proposal`.
 - `notes`: what they typed or spoke.
-- `shapes`: each with `type` (box, arrow, text, freehand, words) and `box` in the picture's own pixels. An arrow has `from` and `to`. Text has `text`.
+- `shapes`: each with `type` (box, arrow, text, freehand, words, pin) and `box` in the picture's own pixels. An arrow has `from` and `to`. Text has `text`. A pin is something said at a spot: `at` is the spot and `text` is what was said.
 - `words` on a shape: the words under that mark, when the picture was pushed with its words. `element` is the element they are all in. Search the code for them to find what the mark is about. A shape of type `words` is words the person chose, in `text`.
 - `annotatedImage`: the picture with the marks burned in. **Open it before you change anything.** A box round something says more than its numbers.
 - `afterImage`, `beforeImage`, `round`.

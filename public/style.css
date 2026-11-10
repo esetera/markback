@@ -193,6 +193,13 @@ body.covered .marking, body.covered #views, body.covered #zoomValue, body.covere
 .scroller.tool-pen canvas, .scroller.tool-box canvas, .scroller.tool-arrow canvas { cursor: crosshair; }
 .scroller.tool-text canvas { cursor: text; }
 .scroller.tool-words canvas { cursor: text; }
+.scroller.tool-speak canvas { cursor: crosshair; }
+/* The pin that listens: a soft ring that breathes round it, so it is plain which one hears. Drawn over the picture, never in it. */
+.pin-glow { position: absolute; width: 0; height: 0; pointer-events: none; }
+.pin-glow::before, .pin-glow::after { content: ""; position: absolute; left: calc(var(--r, 22px) * -1); top: calc(var(--r, 22px) * -1); width: calc(var(--r, 22px) * 2); height: calc(var(--r, 22px) * 2); border-radius: 50%; border: 2px solid var(--pin, #d32f2f); opacity: 0.55; }
+.pin-glow::after { animation: pin-glow 1.4s ease-out infinite; }
+@keyframes pin-glow { from { transform: scale(0.8); opacity: 0.6; } to { transform: scale(1.9); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .pin-glow::after { animation: none; transform: scale(1.4); opacity: 0.3; } }
 .tool.unlit { opacity: 0.45; }
 .text-entry { position: absolute; z-index: 3; min-width: 180px; padding: 3px 5px; border: 1px solid var(--accent); border-radius: 2px; background: #fff; font: 600 16px -apple-system, system-ui, sans-serif; outline: none; }
 
