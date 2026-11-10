@@ -1602,6 +1602,11 @@ function askedNow(s) {
 const askedShown = s => !!s && state.view === 'after' && !state.askedShut.has(keyOf(s)) && askedNow(s).rows.length > 0
 const askedBeside = () => $('scroller').clientWidth - 14 - (ASKED_WIDE + 16) >= ASKED_MIN_PICTURE
 const askedRoom = () => (askedShown(screen()) && askedBeside() ? ASKED_WIDE + 16 : 0)
+/** Beside the picture, or under it in a narrow window: set as soon as the list shows, before the picture has come. */
+function placeAsked(below = !askedBeside()) {
+  $('pair').classList.toggle('asked-below', below)
+  $('asked').style.width = `${below ? Math.max(0, Math.min(ASKED_WIDE * 2, $('scroller').clientWidth - 30)) : ASKED_WIDE}px`
+}
 
 /** With no before, held marks are compared with the last round's picture. Worked out only when there are some. */
 const lastChanges = { key: '', boxes: null }
@@ -1639,6 +1644,7 @@ function renderAsked(s) {
   box.hidden = !askedShown(s)
   $('sideCol').hidden = box.hidden && $('checks').hidden
   if (box.hidden) return
+  placeAsked()
   const row = a => {
     const back = asked.back.includes(a)
     const word = said[a.n] ?? ''
@@ -1815,8 +1821,7 @@ function placeChecks() {
   const spare = room.width - shown - 16
   state.sideChecks = items.length > 0 && ((asking && !below) || spare >= 220)
   $('checks').hidden = !state.sideChecks
-  $('pair').classList.toggle('asked-below', below)
-  $('asked').style.width = `${below ? Math.max(0, Math.min(ASKED_WIDE * 2, box.clientWidth - 30)) : ASKED_WIDE}px`
+  placeAsked(below)
   $('sideCol').style.maxHeight = below ? '' : `${room.height}px`
   $('sideCol').hidden = $('checks').hidden && !asking
   if (state.sideChecks) {
