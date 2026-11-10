@@ -8,8 +8,9 @@ import { createServer } from 'node:http'
 import { readFileSync, existsSync, statSync } from 'node:fs'
 import { extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HOME, IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
+import { HOME, IMAGES, INBOX, PORT, STORE_ID, WHERE, listApps, readInbox, receive, setAside } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
+import { linkIn, LINK_OUT } from './lib/home.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
@@ -96,7 +97,10 @@ const server = createServer(async (req, res) => {
   // Only this computer's own pages: another site open in the browser must not write here, or read by renaming itself.
   if (!isLocal(req)) return json(res, 403, { error: 'Only this computer can use this.' })
   try {
-    if (req.method === 'GET' && url.pathname === '/api/queue') return json(res, 200, { apps: listApps() })
+    // Which store this page shows: a command on the same port can then tell whether its pushes are here.
+    if (req.method === 'GET' && url.pathname === '/api/queue') return json(res, 200, { apps: listApps(), store: STORE_ID })
+    // A store a project's .markback named may hold no link: one added while the page runs would send this write anywhere.
+    if (req.method === 'POST' && WHERE.from === 'file' && linkIn(HOME)) return json(res, 409, { error: `Not saved: ${LINK_OUT}.` })
     if (req.method === 'GET' && url.pathname.startsWith('/images/')) {
       const path = inside(IMAGES, decodeURIComponent(url.pathname.slice('/images/'.length)))
       // Pushed pictures are never changed in place (a new push makes a new name), so they can be kept.
@@ -167,6 +171,11 @@ const server = createServer(async (req, res) => {
     json(res, 500, { error: error instanceof Error ? error.message : String(error) })
   }
 })
+
+if (WHERE.problem) {
+  console.error(`Not starting: ${WHERE.problem}`)
+  process.exit(1)
+}
 
 server.on('error', error => {
   if (error.code !== 'EADDRINUSE') throw error

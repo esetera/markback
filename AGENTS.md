@@ -67,12 +67,13 @@ Some agents run commands in a sandbox that drops environment variables, cannot w
 review project --store .markback-store
 ```
 
-It writes `.markback`, a small file that names the store. Every `review` command in this folder, or below it, then uses that store, with no setting needed. Add `--port 5760` to name the port too.
+It writes `.markback`, a small file that names the store. Every `review` command in this folder, or below it, then uses that store and a port of its own, with no setting needed.
 
 - Push your own screenshots with `review push`. Without Chrome, `review see` and `review project` stop at once and say so.
 - You cannot start the page from the sandbox, and you do not need to. Pushing writes files, and says so. Ask the person to run `review start` in the project's folder, outside the sandbox. The page then shows everything you pushed.
 - `review wait` and `review read` work as usual: they read the same files.
 - When it says the store is not in `.gitignore`, add it there, or tell the person.
+- If it says the page on that port shows another store, ask the person to run `review start` in the project's folder. It moves this store to a free port and says the address.
 - `--home <folder>` with any command names the store for that command. It wins over `REVIEW_HOME`, which wins over `.markback`.
 
 ### Push one screen at a time

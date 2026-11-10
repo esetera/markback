@@ -50,8 +50,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { HOME, INBOX, PORT, WHERE, clearApp, isSetAside, listApps, listScreens, push, readInbox, rememberPort, slug } from './lib/store.mjs'
-import { ignoreHint, writeProjectFile } from './lib/home.mjs'
+import { createServer } from 'node:net'
+import { HOME, INBOX, PORT, STORE_ID, WHERE, clearApp, isSetAside, listApps, listScreens, push, readInbox, rememberPort, slug } from './lib/store.mjs'
+import { ignoreHint, ignoreHintOnce, projectPort, shellWord, writeProjectFile } from './lib/home.mjs'
 import { NO_CHROME, canTakePictures, pushSample, showApp } from './lib/first.mjs'
 import { showPdf } from './lib/pdf.mjs'
 import { PAGE_SCRIPT, printable, readWords, sayWords } from './lib/words.mjs'
@@ -64,18 +65,19 @@ import { addNote, closeRequest, listWork, openRequests, postIdea, pushedFor, set
 
 const args = process.argv.slice(2)
 // The store reads --home itself (lib/home.mjs), so it can come before the command or after it. It is taken out here.
-const homeAt = args.indexOf('--home')
+const homeAt = args.findIndex(arg => arg === '--home' || arg.startsWith('--home='))
 if (homeAt >= 0) {
-  if (!args[homeAt + 1] || args[homeAt + 1].startsWith('--')) {
+  const joined = args[homeAt].startsWith('--home=')
+  const value = joined ? args[homeAt].slice('--home='.length) : args[homeAt + 1]
+  if (!value || value.startsWith('--')) {
     console.error('--home takes a folder: review --home .markback-store push ...')
     process.exit(1)
   }
-  args.splice(homeAt, 2)
+  args.splice(homeAt, joined ? 1 : 2)
 }
 const [command, ...rest] = args
-// Where the store is when a project file chose it, a file that was ignored, and a store git would commit: on stderr, so
-// --json stays plain.
-for (const line of [...WHERE.say, ignoreHint(HOME)].filter(Boolean)) console.error(line)
+// Where the store is when a project file chose it, and a file that was skipped: on stderr, so --json stays plain.
+for (const line of WHERE.say) console.error(line)
 const flags = {}
 for (let i = 0; i < rest.length; i++) {
   const arg = rest[i]
@@ -101,6 +103,8 @@ const fail = message => {
   process.exit(1)
 }
 const need = key => flags[key] || fail(`Missing --${key}`)
+// A store a project's .markback named that holds a link is not written to at all. Naming another store still works.
+if (WHERE.problem && !(command === 'project' && flags.store)) fail(`Not using ${HOME}: ${WHERE.problem}`)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
@@ -108,13 +112,31 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
  * be seen from here, say what was kept and how the person sees it: by starting Markback on the same store, outside the sandbox.
  */
 async function pageHint() {
-  if (await up(PORT)) return
+  const page = await pageOn(PORT)
+  if (page === 'ours') return
   const port = process.env.REVIEW_PORT ? ` --port ${PORT}` : ''
-  const how = WHERE.from === 'file' ? `"review start${port}" in ${WHERE.file.root}` : WHERE.from === 'default' ? `"review start${port}"` : `"review start --home ${HOME}${port}"`
+  const how = WHERE.from === 'file' ? `"review start${port}" in ${shellWord(WHERE.file.root)}` : WHERE.from === 'default' ? `"review start${port}"` : `"review start --home ${shellWord(HOME)}${port}"`
   // After --json output this goes to stderr, so what comes out on stdout still reads as JSON.
   const say = flags.json ? console.error : console.log
-  say(`The review page is not running, or cannot be seen from here. It is saved in ${HOME}, and shows once the person runs ${how} outside any sandbox.`)
+  say(page === 'other'
+    ? `The review page on port ${PORT} shows another store, so it does not show this. It is saved in ${HOME}, and shows once the person runs ${how}.`
+    : `The review page is not running, or cannot be seen from here. It is saved in ${HOME}, and shows once the person runs ${how} outside any sandbox.`)
 }
+
+/** Whose page answers on a port: this store's ('ours'), another store's ('other'), or none that can be seen ('none'). */
+async function pageOn(port) {
+  const queue = await fetch(`http://127.0.0.1:${port}/api/queue`, { signal: AbortSignal.timeout(1500) }).then(r => (r.ok ? r.json() : null), () => null).catch(() => null)
+  if (!queue) return 'none'
+  // A page from before pages said their store cannot be told apart, so it is not taken for this one.
+  return queue.store === STORE_ID ? 'ours' : 'other'
+}
+
+/** Nothing holds this port now. */
+const portFree = port => new Promise(resolve => {
+  const probe = createServer()
+  probe.once('error', () => resolve(false))
+  probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(true)))
+})
 
 /** One feedback record as a change request someone can act on. */
 function describe(r) {
@@ -223,10 +245,19 @@ const ourServer = pid => {
 }
 /** Runs the server on its own, so it outlasts this command. Nothing leaves this computer. */
 async function start() {
-  const port = Number(flags.port || PORT)
-  if (await up(port)) {
+  let port = Number(flags.port || PORT)
+  const page = await pageOn(port)
+  if (page === 'ours') {
     if (flags.port) rememberPort(port)
     return console.log(`Already running: http://localhost:${port}`)
+  }
+  if (page === 'other') {
+    // Two stores on one port would each hide the other's screens. A project's store moves to a port of its own and keeps it.
+    if (WHERE.from !== 'file' || flags.port) fail(`The review page on port ${port} shows another store. Choose another port: review start --port ${port + 1}`)
+    port = await projectPort(portFree)
+    if (!(await portFree(port))) fail('No port near 5760 is free. Choose one: review start --port <number>')
+    flags.port = String(port)
+    console.log(`Port ${PORT} has another store's page, so this store's page goes on port ${port}.`)
   }
   // A sandbox can stop this command reaching the page while the page runs. Its process still says so.
   if (ourServer(readPid()) && !flags.port) return console.log(`Already running: http://localhost:${port}`)
@@ -270,6 +301,10 @@ if (command === 'push') {
   // Long words go unread, and they cost time before anyone can act.
   if ([entry.note, ...(entry.check ?? [])].some(words => words.trim().split(/\s+/).length > 10)) console.error('Too long: say what to look at in ten words or fewer. Only the first sentence shows; the rest waits behind More.')
   console.log(`Queued ${entry.app} / ${entry.screen}${entry.mode ? ` (${entry.mode})` : ''}, round ${entry.round}: ${all.length} screen${all.length === 1 ? '' : 's'} for ${entry.app}. Open http://localhost:${PORT}/#${entry.appSlug}${isSetAside(entry.appSlug) ? `\nThis review is set aside: it is not offered until the reviewer brings it back.` : ''}`)
+  if (WHERE.from === 'file') {
+    const hint = ignoreHintOnce(HOME)
+    if (hint) console.error(hint)
+  }
   await pageHint()
 } else if (command === 'list') {
   const apps = listApps().filter(a => !flags.app || a.slug === slug(flags.app))
@@ -321,8 +356,8 @@ if (command === 'push') {
   // One step for a sandboxed agent: the store and port go in a file, so no setting has to reach later commands.
   if (typeof flags.store !== 'string') fail('--store takes a folder inside this project, for example --store .markback-store')
   try {
-    const written = writeProjectFile(process.cwd(), { home: flags.store, port: flags.port ? Number(flags.port) : undefined })
-    console.log(`Wrote ${written.path}. Markback commands in this folder now keep screens and marks in ${written.home}.`)
+    const written = await writeProjectFile(process.cwd(), { home: flags.store, port: flags.port ? Number(flags.port) : undefined, free: portFree })
+    console.log(`Wrote ${written.path}. Markback commands in this folder now keep screens and marks in ${written.home}, and the review page is on port ${written.port}.`)
     const hint = ignoreHint(written.home)
     if (hint) console.log(hint)
     console.log('Push screenshots with review push. The person sees them once they run review start in this folder.')
@@ -330,6 +365,8 @@ if (command === 'push') {
     fail(error.message)
   }
 } else if (command === 'project') {
+  // Said first, with nothing started or written: without Chrome, nothing here can take its pictures.
+  if (!canTakePictures(pathToFileURL(process.cwd()))) fail(NO_CHROME)
   await start()
   // Where Codex and Cursor look in a project. Without this computer's paths: the folder may be committed.
   const agentSkills = join(process.cwd(), '.agents', 'skills')
@@ -342,8 +379,6 @@ if (command === 'push') {
     console.warn('Project skill files are read-only in this session. Continuing to the review.')
   }
   const found = await findApp(process.cwd())
-  // Said before an app is started or anything is waited for.
-  if ((found.running || found.run || found.file) && !canTakePictures(found.running ? new URL(found.running) : pathToFileURL(process.cwd()))) fail(NO_CHROME)
   let url = found.running
   if (!url && found.run) {
     let yes = !!flags.yes
@@ -378,7 +413,9 @@ if (command === 'push') {
   if (opened) console.log(`(The page is ${page} if you need it.)`)
 } else if (command === 'open') {
   const page = `http://localhost:${PORT}/${typeof flags.app === 'string' ? `#${slug(flags.app)}` : ''}`
-  if (!(await up(PORT))) fail('The review page is not running. Start it with: review start')
+  const running = await pageOn(PORT)
+  if (running === 'none') fail('The review page is not running. Start it with: review start')
+  if (running === 'other') fail(`The review page on port ${PORT} shows another store. Start this store's page with: review start`)
   console.log((await openPage(page)) ? `I've opened it in your browser. (${page})` : `Open ${page}`)
 } else if (command === 'install-skills') {
   // --codex: into this project, where Codex finds them, and without this computer's paths, since the folder may be committed.

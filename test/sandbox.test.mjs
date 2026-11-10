@@ -9,7 +9,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { writePicture } from './helpers.mjs'
 
@@ -51,6 +51,8 @@ const queued = (store, app) => existsSync(join(store, 'queue', app)) ? readdirSy
 test('variables dropped and .markback present: a push lands in the project store, says so, and starts no page', async () => {
   const port = await freePort()
   const dir = project({ home: '.markback-store', port })
+  // Found from a folder below, up to the top of the project's repository.
+  mkdirSync(join(dir, '.git'))
   const sub = join(dir, 'src', 'deep')
   mkdirSync(sub, { recursive: true })
   const started = Date.now()
@@ -105,7 +107,8 @@ test('a .markback that is not valid is ignored, in one plain line, and the usual
     [project([]), /not a JSON object/],
   ]
   for (const [dir, why] of cases) {
-    const home = join(dir, 'own-home')
+    // Beside the project, not in it: a project inside the home folder's own folder would be above home.
+    const home = `${dir}-home`
     mkdirSync(home)
     const out = await run(['push', '--app', 'Bad', '--screen', 'One', '--after', join(dir, 'shot.png')], { cwd: dir, env: dropped({ HOME: home }) })
     assert.equal(out.code, 0, out.stderr)
@@ -190,7 +193,7 @@ test('review project --store writes .markback in one step, keeps its port, and r
   const port = await freePort()
   const first = await run(['project', '--store', '.markback-store', '--port', String(port)], { cwd: dir })
   assert.equal(first.code, 0, first.stderr)
-  assert.match(first.stdout, /Wrote .*\.markback\. Markback commands in this folder now keep screens and marks in .*\.markback-store\./)
+  assert.match(first.stdout, new RegExp(`Wrote .*\\.markback\\. Markback commands in this folder now keep screens and marks in .*\\.markback-store, and the review page is on port ${port}\\.`))
   assert.deepEqual(JSON.parse(readFileSync(join(dir, '.markback'), 'utf8')), { home: '.markback-store', port })
   assert.equal((await run(['project', '--store', 'reviews/store'], { cwd: dir })).code, 0)
   assert.deepEqual(JSON.parse(readFileSync(join(dir, '.markback'), 'utf8')), { home: 'reviews/store', port }, 'the port it named stays')
@@ -201,19 +204,11 @@ test('review project --store writes .markback in one step, keeps its port, and r
   const installed = project()
   mkdirSync(join(installed, '.markback'))
   assert.equal((await run(['project', '--store', '.markback/store'], { cwd: installed })).code, 0)
-  assert.deepEqual(JSON.parse(readFileSync(join(installed, '.markback', 'config.json'), 'utf8')), { home: '.markback/store' })
+  const written = JSON.parse(readFileSync(join(installed, '.markback', 'config.json'), 'utf8'))
+  assert.equal(written.home, '.markback/store')
+  assert.ok(written.port >= 5760 && written.port < 5800 && written.port !== 5793, 'a port of its own, not the usual one')
   assert.equal((await run(['push', '--app', 'Npm', '--screen', 'One', '--after', join(installed, 'shot.png')], { cwd: installed })).code, 0)
   assert.deepEqual(queued(join(installed, '.markback', 'store'), 'npm'), ['one.json'])
-})
-
-test('a store inside a git repository that git does not ignore gets one line suggesting .gitignore, and .gitignore is not touched', async () => {
-  const dir = project({ home: '.markback-store' })
-  execFileSync('git', ['init', '-q'], { cwd: dir })
-  const out = await run(['list'], { cwd: dir })
-  assert.match(out.stderr, /^The store is inside a git repository\. Add \.markback-store\/ to \.gitignore, so screens and marks are not committed\.$/m)
-  assert.equal(existsSync(join(dir, '.gitignore')), false)
-  writeFileSync(join(dir, '.gitignore'), '.markback-store/\n')
-  assert.doesNotMatch((await run(['list'], { cwd: dir })).stderr, /gitignore/)
 })
 
 test('plugins in a store a .markback named are never run: a project cannot bring its own', async () => {
@@ -222,7 +217,7 @@ test('plugins in a store a .markback named are never run: a project cannot bring
   mkdirSync(plugin, { recursive: true })
   writeFileSync(join(plugin, 'plugin.json'), JSON.stringify({ name: 'hello', version: '1.0.0', description: 'Says hello', commands: { hello: 'hello.js' } }))
   writeFileSync(join(plugin, 'hello.js'), `import { writeFileSync } from 'node:fs'\nexport default () => writeFileSync(${JSON.stringify(join(dir, 'ran'))}, 'yes')\n`)
-  const home = join(dir, 'own-home')
+  const home = `${dir}-home`
   mkdirSync(home)
   const out = await run(['hello'], { cwd: dir, env: dropped({ HOME: home }) })
   assert.equal(out.code, 1)
@@ -230,4 +225,245 @@ test('plugins in a store a .markback named are never run: a project cannot bring
   // Named by the person, with --home, the same folder's plugins are theirs.
   assert.equal((await run(['hello', '--home', join(dir, '.markback-store')], { cwd: dir, env: dropped({ HOME: home }) })).code, 0)
   assert.equal(readFileSync(join(dir, 'ran'), 'utf8'), 'yes')
+})
+
+test('a store a .markback named that holds a link is never written through: push and start refuse in one line', async () => {
+  const outside = join(base, 'outside-links')
+  mkdirSync(outside)
+  writeFileSync(join(outside, 'victim.txt'), 'mine')
+  const dir = project({ home: 'store', port: await freePort() })
+  mkdirSync(join(dir, 'store'))
+  symlinkSync(join(outside), join(dir, 'store', 'images'))
+  symlinkSync(join(outside, 'victim.txt'), join(dir, 'store', 'port'))
+  for (const args of [['push', '--app', 'Evil', '--screen', 'One', '--after', join(dir, 'shot.png')], ['start', '--port', String(await freePort())], ['demo']]) {
+    const out = await run(args, { cwd: dir })
+    assert.equal(out.code, 1, args[0])
+    const said = out.stderr.split('\n').filter(line => line && !line.startsWith('Store:'))
+    assert.equal(said.length, 1, out.stderr)
+    assert.match(said[0], /the store holds a link that leads outside it/)
+  }
+  assert.deepEqual(readdirSync(outside), ['victim.txt'])
+  assert.equal(readFileSync(join(outside, 'victim.txt'), 'utf8'), 'mine')
+  // The page refuses too, and checks again before each write: a link added while it runs sends nothing anywhere.
+  const server = await import('node:child_process').then(({ spawn }) => spawn(process.execPath, [join(ROOT, 'server.mjs')], { cwd: dir, env: dropped(), stdio: ['ignore', 'ignore', 'pipe'] }))
+  let said = ''
+  server.stderr.on('data', part => (said += part))
+  await new Promise(resolve => server.once('exit', resolve))
+  assert.match(said, /Not starting: the store holds a link/)
+})
+
+test('a store port file that holds no number is passed over, never localhost:NaN', async () => {
+  const dir = project({ home: 'store', port: await freePort() })
+  mkdirSync(join(dir, 'store'))
+  writeFileSync(join(dir, 'store', 'port'), 'not a port')
+  const out = await run(['push', '--app', 'Nan', '--screen', 'One', '--after', join(dir, 'shot.png')], { cwd: dir })
+  assert.doesNotMatch(out.stdout, /NaN/)
+  assert.match(out.stdout, /localhost:\d+\//)
+})
+
+test('two stores, one port: a push says the page there is another store\'s, and start moves this store to a port of its own', async () => {
+  const port = await freePort()
+  const other = join(base, 'other-store')
+  // The person's usual page, for another store, already on the port the project names.
+  const { spawn } = await import('node:child_process')
+  const theirs = spawn(process.execPath, [join(ROOT, 'server.mjs')], { env: { ...process.env, REVIEW_HOME: other, REVIEW_PORT: String(port) }, stdio: 'ignore' })
+  try {
+    for (let i = 0; i < 100 && !(await queueAt(port)); i++) await new Promise(r => setTimeout(r, 100))
+    const dir = project({ home: '.markback-store', port })
+    const env = { ...process.env, HOME: base }
+    delete env.REVIEW_HOME
+    delete env.REVIEW_PORT
+    const pushed = await run(['push', '--app', 'Mine', '--screen', 'Home', '--after', join(dir, 'shot.png')], { cwd: dir, env })
+    assert.match(pushed.stdout, new RegExp(`The review page on port ${port} shows another store, so it does not show this\\.`))
+    const start = await run(['start'], { cwd: dir, env })
+    assert.equal(start.code, 0, start.stderr)
+    const moved = Number(/goes on port (\d+)/.exec(start.stdout)?.[1])
+    assert.ok(moved && moved !== port, start.stdout)
+    try {
+      assert.match(start.stdout, new RegExp(`Open http://localhost:${moved}`))
+      assert.deepEqual((await queueAt(moved)).apps.map(a => a.name), ['Mine'])
+      assert.deepEqual((await queueAt(port)).apps, [], 'the other store is untouched')
+      assert.equal(readFileSync(join(dir, '.markback-store', 'port'), 'utf8'), String(moved), 'kept for later commands')
+      const again = await run(['push', '--app', 'Mine', '--screen', 'Two', '--after', join(dir, 'shot.png')], { cwd: dir, env })
+      assert.match(again.stdout, new RegExp(`Open http://localhost:${moved}/#mine`))
+      assert.doesNotMatch(again.stdout, /another store|not running/)
+    } finally {
+      await run(['stop'], { cwd: dir, env })
+    }
+  } finally {
+    theirs.kill()
+  }
+})
+
+test('the port in .markback is only for the store it names: --home and REVIEW_HOME stores keep their own', async () => {
+  const filePort = await freePort()
+  const ownPort = await freePort()
+  const dir = project({ home: 'store', port: filePort })
+  const flagStore = join(base, 'flag-port-store')
+  mkdirSync(flagStore)
+  writeFileSync(join(flagStore, 'port'), String(ownPort))
+  for (const opts of [{ args: ['--home', flagStore] }, { env: dropped({ REVIEW_HOME: flagStore }) }]) {
+    const out = await run(['push', '--app', 'Ports', '--screen', 'One', '--after', join(dir, 'shot.png'), ...(opts.args ?? [])], { cwd: dir, ...(opts.env ? { env: opts.env } : {}) })
+    assert.match(out.stdout, new RegExp(`localhost:${ownPort}/`), out.stdout)
+  }
+})
+
+test('a .markback is looked for only where the person keeps their own work', async () => {
+  const { findProjectFile } = await import('../lib/home.mjs')
+  const home = join(base, 'look-home')
+  const repo = join(home, 'code', 'repo')
+  mkdirSync(join(repo, '.git'), { recursive: true })
+  mkdirSync(join(repo, 'src'))
+  writeFileSync(join(home, '.markback'), '{"home": "store"}')
+  writeFileSync(join(home, 'code', '.markback'), '{"home": "store"}')
+  assert.equal(findProjectFile(join(repo, 'src'), { home }), null, 'not above the top of the repository')
+  writeFileSync(join(repo, '.markback'), '{"home": "store"}')
+  assert.equal(findProjectFile(join(repo, 'src'), { home }).root, repo)
+  const loose = join(home, 'notes', 'deep')
+  mkdirSync(loose, { recursive: true })
+  assert.equal(findProjectFile(loose, { home }), null, 'not in the home folder itself')
+  writeFileSync(join(home, 'notes', '.markback'), '{"home": "store"}')
+  assert.equal(findProjectFile(loose, { home }).root, join(home, 'notes'), 'up to the home folder, without git')
+  // Outside the home folder, only the folder itself.
+  const away = join(base, 'away', 'inner')
+  mkdirSync(away, { recursive: true })
+  writeFileSync(join(base, 'away', '.markback'), '{"home": "store"}')
+  assert.equal(findProjectFile(away, { home }), null)
+  // A folder anyone can write to, and a file someone else owns, are skipped and said so.
+  const open = join(base, 'open')
+  mkdirSync(open)
+  writeFileSync(join(open, '.markback'), '{"home": "store"}')
+  chmodSync(open, 0o777)
+  assert.match(findProjectFile(open, { home }).skipped[0], /anyone can write in/)
+  chmodSync(open, 0o755)
+  assert.match(findProjectFile(open, { home, uid: 424242 }).skipped[0], /belongs to someone else/)
+  const out = await run(['list'], { cwd: open, env: dropped({ HOME: `${open}-home` }) })
+  assert.doesNotMatch(out.stderr, /Skipping/, 'its own file, in its own folder, is used')
+  assert.match(out.stderr, /^Store: /m)
+  chmodSync(open, 0o777)
+  try {
+    const skipped = await run(['list'], { cwd: open, env: dropped({ HOME: join(base, 'open-home') }) })
+    assert.match(skipped.stderr, /^Skipping .*\.markback: anyone can write in /m)
+  } finally {
+    chmodSync(open, 0o755)
+  }
+})
+
+test('the .gitignore hint: only for a .markback store, on writing the file and on its first push, and git is never run', async () => {
+  const dir = project()
+  mkdirSync(join(dir, '.git'))
+  // A git that leaves a mark if anything runs it.
+  const bin = join(dir, 'bin')
+  mkdirSync(bin)
+  writeFileSync(join(bin, 'git'), `#!/bin/sh\ntouch ${JSON.stringify(join(dir, 'git-ran'))}\nexit 1\n`)
+  chmodSync(join(bin, 'git'), 0o755)
+  const env = dropped({ PATH: `${bin}:${process.env.PATH}` })
+  const hint = /^The store is inside a git repository\. Add \.markback-store\/ to \.gitignore, so screens and marks are not committed\.$/m
+  assert.match((await run(['project', '--store', '.markback-store'], { cwd: dir, env })).stdout, hint)
+  const push = () => run(['push', '--app', 'Git', '--screen', 'One', '--after', join(dir, 'shot.png')], { cwd: dir, env })
+  assert.match((await push()).stderr, hint)
+  assert.doesNotMatch((await push()).stderr, /gitignore/, 'once')
+  assert.doesNotMatch((await run(['list'], { cwd: dir, env })).stderr, /gitignore/)
+  assert.equal(existsSync(join(dir, '.gitignore')), false, '.gitignore is not touched')
+  const ignored = project()
+  mkdirSync(join(ignored, '.git'))
+  writeFileSync(join(ignored, '.gitignore'), '/.markback-store/\n')
+  assert.doesNotMatch((await run(['project', '--store', '.markback-store'], { cwd: ignored, env })).stdout, /gitignore/)
+  // A home folder that is a repository, with no .markback: nothing said.
+  const repoHome = join(base, 'repo-home')
+  mkdirSync(join(repoHome, '.git'), { recursive: true })
+  const plain = project()
+  assert.doesNotMatch((await run(['push', '--app', 'Plain', '--screen', 'One', '--after', join(plain, 'shot.png')], { cwd: plain, env: dropped({ HOME: repoHome, PATH: env.PATH }) })).stderr, /gitignore/)
+  assert.equal(existsSync(join(dir, 'git-ran')), false)
+})
+
+test('inside Codex\'s sandbox, the small browser goes in the .markback store, and the place is checked before the person is asked', { skip: process.platform !== 'darwin' }, async () => {
+  const dir = project({ home: '.markback-store' })
+  writeFileSync(join(dir, 'index.html'), '<h1>Hi</h1>')
+  const env = dropped({ CODEX_SANDBOX: 'seatbelt' })
+  const asked = await run(['see', pathToFileURL(join(dir, 'index.html')).href], { cwd: dir, env })
+  assert.equal(asked.code, 1)
+  assert.match(asked.stderr, /needs a small Chrome from Google.*Ask the person first/)
+  assert.ok(existsSync(join(dir, '.markback-store', 'browser')), 'kept in the store, where the sandbox can write')
+  const locked = join(base, 'locked-store')
+  mkdirSync(join(locked, 'browser'), { recursive: true })
+  chmodSync(join(locked, 'browser'), 0o500)
+  try {
+    const cannot = await run(['see', pathToFileURL(join(dir, 'index.html')).href, '--home', locked], { cwd: dir, env })
+    assert.match(cannot.stderr, /this sandbox cannot write there/)
+    assert.doesNotMatch(cannot.stderr, /Ask the person/, 'nothing to say yes to')
+  } finally {
+    chmodSync(join(locked, 'browser'), 0o700)
+  }
+})
+
+test('review project without Chrome stops at once: nothing started, nothing written, the Chrome line', async () => {
+  const dir = project({ home: '.markback-store', port: await freePort() })
+  writeFileSync(join(dir, 'index.html'), '<h1>Hi</h1>')
+  const started = Date.now()
+  const out = await run(['project'], { cwd: dir, env: dropped({ REVIEW_CHROME: join(dir, 'no-chrome') }) })
+  assert.equal(out.code, 1)
+  assert.ok(Date.now() - started < 5000)
+  assert.match(out.stderr, /^No Chrome or Edge here/m)
+  assert.equal(existsSync(join(dir, '.agents')), false)
+  assert.equal(existsSync(join(dir, '.markback-store')), false)
+})
+
+test('the small things: a dangling store link, paths with spaces, --home=, a kept port, unreadable and huge files', async () => {
+  const dangling = project({ home: 'store' })
+  symlinkSync(join(base, 'nowhere'), join(dangling, 'store'))
+  const home = `${dangling}-home`
+  mkdirSync(home)
+  const out = await run(['list'], { cwd: dangling, env: dropped({ HOME: home }) })
+  assert.equal(out.code, 0)
+  assert.match(out.stderr, /^Ignoring .*: "home" .* is a link that leads nowhere\./m)
+  assert.doesNotMatch(out.stderr, /ENOENT|\n\s+at /)
+
+  const spaced = join(base, 'with space')
+  mkdirSync(spaced)
+  writePicture(join(spaced, 'shot.png'), 40, 30)
+  writeFileSync(join(spaced, '.markback'), JSON.stringify({ home: 'store', port: await freePort() }))
+  const pushed = await run(['push', '--app', 'Space', '--screen', 'One', '--after', join(spaced, 'shot.png')], { cwd: spaced })
+  assert.match(pushed.stdout, new RegExp(`"review start" in '${spaced}'`))
+  const flagged = join(base, 'equals store')
+  assert.equal((await run(['push', `--home=${flagged}`, '--app', 'Eq', '--screen', 'One', '--after', join(spaced, 'shot.png')], { cwd: spaced })).code, 0)
+  assert.deepEqual(queued(flagged, 'eq'), ['one.json'])
+  const env = await run(['push', '--app', 'Eq', '--screen', 'One', '--after', join(spaced, 'shot.png')], { cwd: spaced, env: dropped({ REVIEW_HOME: flagged, REVIEW_PORT: String(await freePort()) }) })
+  assert.match(env.stdout, new RegExp(`"review start --home '${flagged}' --port \\d+"`))
+
+  const kept = project({ home: 'store', port: 5777, extra: 1 })
+  assert.equal((await run(['project', '--store', 'store2'], { cwd: kept })).code, 0)
+  assert.deepEqual(JSON.parse(readFileSync(join(kept, '.markback'), 'utf8')), { home: 'store2', port: 5777 })
+
+  const unreadable = project({ home: 'store' })
+  chmodSync(join(unreadable, '.markback'), 0o000)
+  try {
+    assert.match((await run(['list'], { cwd: unreadable, env: dropped({ HOME: home }) })).stderr, /it cannot be read/)
+  } finally {
+    chmodSync(join(unreadable, '.markback'), 0o600)
+  }
+  const huge = project(`{"home": "store", "port": 5760${' '.repeat(10000)}}`)
+  assert.match((await run(['list'], { cwd: huge, env: dropped({ HOME: home }) })).stderr, /it is larger than 4 KB/)
+})
+
+test('a link added to a .markback store while the page runs: the page saves nothing until it is gone', async () => {
+  const port = await freePort()
+  const dir = project({ home: 'store', port })
+  mkdirSync(join(dir, 'store'))
+  const { spawn } = await import('node:child_process')
+  const server = spawn(process.execPath, [join(ROOT, 'server.mjs')], { cwd: dir, env: dropped(), stdio: 'ignore' })
+  try {
+    for (let i = 0; i < 100 && !(await queueAt(port)); i++) await new Promise(r => setTimeout(r, 100))
+    const sample = () => fetch(`http://127.0.0.1:${port}/api/sample`, { method: 'POST' })
+    assert.equal((await sample()).status, 200)
+    const outside = join(base, 'outside-later')
+    mkdirSync(outside)
+    symlinkSync(outside, join(dir, 'store', 'inbox'))
+    const refused = await sample()
+    assert.equal(refused.status, 409)
+    assert.match((await refused.json()).error, /the store holds a link that leads outside it/)
+    assert.deepEqual(readdirSync(outside), [])
+  } finally {
+    server.kill()
+  }
 })

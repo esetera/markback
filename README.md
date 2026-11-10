@@ -33,7 +33,7 @@ Open your project in a local Claude Code or Codex session and ask in the chat.
 
 Your agent runs the setup and opens the review. As it reaches a visible change, it pushes the updated screenshots and waits for your feedback. You can draw and press **Send**, or press **Looks good**. Keep the agent session running while you review.
 
-In a fresh Codex project, the agent can use `npm install --prefix .markback github:esetera/markback` to install locally and read `.markback/node_modules/markback/AGENTS.md` in the current session. The agent keeps `REVIEW_HOME` in a writable project folder and uses that same folder for each review command. Where the sandbox drops variables, it runs `review project --store .markback/store` once instead (see [Agents in a sandbox](#agents-in-a-sandbox)). `review project` can start the review even when Codex protects `.agents/skills` from edits.
+In a fresh Codex project, the agent can use `npm install --prefix .markback github:esetera/markback` to install locally and read `.markback/node_modules/markback/AGENTS.md` in the current session. The agent keeps `REVIEW_HOME` in a writable project folder and uses that same folder for each review command. Where the sandbox drops variables, it runs `review project --store .markback/store` once instead. That install makes `.markback` a folder, so Markback's file goes in `.markback/config.json` (see [Agents in a sandbox](#agents-in-a-sandbox)). `review project` can start the review even when Codex protects `.agents/skills` from edits.
 
 ### Manual installation
 
@@ -129,14 +129,16 @@ Some agents run commands in a sandbox that drops environment variables, cannot w
 review project --store .markback-store
 ```
 
-It writes `.markback`, a small JSON file such as `{ "home": ".markback-store", "port": 5760 }`. Every `review` command in that folder, or below it, then uses that store with no setting needed. Add `--port 5760` to name the port too.
+It writes `.markback`, a small JSON file such as `{ "home": ".markback-store", "port": 5760 }`. Every `review` command in that folder, or below it, then uses that store with no setting needed. It picks a free port near 5760, so the project's page does not share the usual one. Add `--port 5760` to choose the port yourself.
 
 - The agent pushes its own screenshots with `review push`. `review see` and `review project` need Chrome, and say so at once.
 - Pushing only writes files, so it works with no page running, and says so. You run `review start` in the project's folder, outside the sandbox, and the page shows everything the agent pushed. `review wait` and `review read` in the sandbox read your answers from the same files.
 - The store is the first of: `--home <folder>` on the command, `REVIEW_HOME`, `.markback`, then `~/.review-wizard`.
-- Markback says which store it uses whenever `.markback` chose it. It suggests adding the store to `.gitignore` when git would commit it, and does not change `.gitignore` itself.
-- A `.markback` can only name a folder inside the folder that holds it. One that is not valid is ignored, in one line.
-- Plugins and the small browser never come from a store that `.markback` named, because a project could bring its own.
+- If another store's page holds the port, a push says so. `review start` then moves this store to a free port, keeps it, and says the address.
+- Markback says which store it uses whenever `.markback` chose it. Once, when the file is written and on the first push, it suggests adding the store to `.gitignore` if no `.gitignore` leaves it out. It never changes `.gitignore` itself.
+- Markback looks for `.markback` in this folder and the ones above it: up to the top of the git repository, or up to your home folder, not including it. It skips a file in a folder anyone can write to, or one that belongs to someone else, and says so.
+- A `.markback` can only name a folder inside the folder that holds it. One that is not valid is ignored, in one line. The store it names may hold no links: if it does, Markback writes nothing and says so.
+- Plugins never come from a store that `.markback` named, because a project could bring its own. In Codex's sandbox the small browser is kept in that store, the one place the sandbox can write.
 - When Markback is installed in a `.markback` folder with npm, the file is `.markback/config.json`.
 
 **Kimi Code** takes the skills with `--skills-dir`, in place of your others for that run: `kimi --skills-dir ~/markback/skills`, with `-S` to go back into a session.
