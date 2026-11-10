@@ -74,7 +74,7 @@ async function rig() {
   const read = app => JSON.parse(execFileSync('node', [join(ROOT, 'review.mjs'), 'read', '--app', app, '--json'], { env, encoding: 'utf8' }))
   const queue = async slug => (await (await fetch(`http://127.0.0.1:${port}/api/queue`)).json()).apps.find(a => a.slug === slug)
   /** `undo` is how long an answer can be taken back. Long: it stays here. Short: it goes at once. */
-  const open = async (app, { undo = 40, width = 1500, height = 960, colorScheme = 'light', seed = null } = {}) => {
+  const open = async (app, { undo = 40, width = 1500, height = 960, colorScheme = 'light', seed = null, film = 0 } = {}) => {
     const context = await browser.newContext({ viewport: { width, height }, colorScheme })
     const page = await context.newPage()
     const errors = []
@@ -84,7 +84,8 @@ async function rig() {
     if (seed) await page.addInitScript(values => {
       for (const [key, value] of Object.entries(values)) if (localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify(value))
     }, seed)
-    await page.goto(`http://127.0.0.1:${port}/?undo=${undo}#${app}`)
+    // `film` is how long a step of the film stays, so a test need not wait out the real seconds.
+    await page.goto(`http://127.0.0.1:${port}/?undo=${undo}${film ? `&film=${film}` : ''}#${app}`)
     await page.locator('#canvas').waitFor()
     await page.waitForFunction(() => document.getElementById('canvas').width > 300)
     return { page, errors, url: page.url() }
@@ -1694,6 +1695,248 @@ test('the first minute: the sample, from an empty page', { skip }, async () => {
   assert.match(await page.locator('#crumbs').innerText(), /Sample/)
 })
 
+test('New project in the menu: the same two ways in as the first screen, Esc closes, focus goes back, and a wrong address is said there', { skip }, async () => {
+  const r = await rig()
+  r.push('Garden', ['Home', 'Bookings'], null)
+  const { page, errors } = await r.open('garden')
+  const grounds = []
+  for (const scheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: scheme })
+    // By keyboard: the menu, then its entry.
+    await page.locator('#menuOpen').focus()
+    await page.keyboard.press('Enter')
+    await page.getByRole('menuitem', { name: 'New project' }).focus()
+    await page.keyboard.press('Enter')
+    const modal = page.locator('#newModal')
+    assert.equal(await modal.isVisible(), true)
+    assert.equal(await page.evaluate(() => document.activeElement.matches('#newModal [data-first-address]')), true, 'the address takes the keys')
+    // The same form as the first screen, without the sample, and with no id said twice.
+    assert.match(await modal.innerText(), /1\. Your app's address/)
+    assert.match(await modal.innerText(), /\/markback a recipe box for my family/)
+    assert.equal(await modal.locator('[data-first-sample]').count(), 0)
+    assert.equal(await page.evaluate(() => { const ids = [...document.querySelectorAll('[id]')].map(e => e.id); return ids.length === new Set(ids).size }), true)
+    grounds.push(await modal.locator('.modal').evaluate(el => getComputedStyle(el).backgroundColor))
+    await page.keyboard.press('Escape')
+    assert.equal(await modal.isVisible(), false, 'Esc closes it')
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'menuOpen', 'focus goes back to the menu')
+  }
+  assert.notEqual(grounds[0], grounds[1], 'light and dark each have their own')
+  // A wrong address is said in the window, which stays.
+  await page.locator('#menuOpen').click()
+  await page.getByRole('menuitem', { name: 'New project' }).click()
+  await page.locator('#newModal [data-first-address]').fill('not a place at all')
+  await page.keyboard.press('Enter')
+  await page.locator('#newModal [data-first-said]').getByText('is not an address').waitFor({ timeout: 8000 })
+  assert.equal(await page.locator('#newModal').isVisible(), true)
+  await page.locator('#newClose').click()
+  assert.equal((await r.queue('garden')).screens.length, 2, 'the project there is untouched')
+  // A narrow window: the form fits.
+  const narrow = await r.open('garden', { width: 380, height: 760 })
+  await narrow.page.locator('#menuOpen').click()
+  await narrow.page.getByRole('menuitem', { name: 'New project' }).click()
+  const box = await narrow.page.locator('#newModal .modal').boundingBox()
+  assert.ok(box.x >= 0 && box.x + box.width <= 380, `inside the window: ${box.x}, ${box.width}`)
+  assert.equal(await narrow.page.locator('#newModal .modal').evaluate(el => el.scrollWidth <= el.clientWidth), true)
+  // The wrong address is a 400, which the browser logs; nothing else may be.
+  assert.deepEqual([...errors, ...narrow.errors].filter(e => !/400 .*\/api\/show/.test(e)), [])
+})
+
+test('New project from the menu makes a second project beside the first, and goes to it', { skip }, async t => {
+  const driving = process.env.REVIEW_CHROME
+  delete process.env.REVIEW_CHROME
+  const chrome = (await import('../lib/first.mjs')).findChrome()
+  if (driving) process.env.REVIEW_CHROME = driving
+  if (!chrome) return t.skip('no Chrome on this computer')
+  const r = await rig()
+  r.push('Garden', ['Home', 'Bookings'], null)
+  const { page, errors } = await r.open('garden')
+  await page.locator('#menuOpen').click()
+  await page.getByRole('menuitem', { name: 'New project' }).click()
+  await page.locator('#newModal [data-first-address]').fill(`127.0.0.1:${r.port}/work.html`)
+  await page.getByRole('button', { name: 'Show it' }).click()
+  await page.locator('#newModal').waitFor({ state: 'hidden', timeout: 50000 })
+  await page.locator('#crumbs').getByText('127.0.0.1').waitFor({ timeout: 8000 })
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'menuOpen')
+  assert.equal((await r.queue('garden')).screens.length, 2, 'the first project is as it was')
+  const apps = (await (await fetch(`http://127.0.0.1:${r.port}/api/queue`)).json()).apps
+  assert.equal(apps.length, 2)
+  await page.keyboard.press('l')
+  assert.match(await page.locator('#drawerList').innerText(), /Garden[\s\S]*127\.0\.0\.1|127\.0\.0\.1[\s\S]*Garden/)
+  await page.keyboard.press('Escape')
+  // The same address again is not a new project, and the server says so.
+  await openNewProject(page)
+  await page.locator('#newModal [data-first-address]').fill(`127.0.0.1:${r.port}/work.html`)
+  await page.getByRole('button', { name: 'Show it' }).click()
+  await page.locator('#toast').getByText(`That address is already the project 127.0.0.1:${r.port}. This made round 2 of it.`).waitFor({ timeout: 50000 })
+  assert.equal((await (await fetch(`http://127.0.0.1:${r.port}/api/queue`)).json()).apps.length, 2)
+  assert.deepEqual(errors, [])
+})
+
+const openNewProject = async page => {
+  await page.locator('#menuOpen').click()
+  await page.getByRole('menuitem', { name: 'New project' }).click()
+}
+/** The server's answer to Show it, held back as long as a slow picture would be. */
+const slowShow = (page, answer, wait = 1200, status = 200) => page.route('**/api/show', async route => {
+  await new Promise(r => setTimeout(r, wait))
+  await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(answer) })
+})
+
+test('a picture that comes after New project was closed only says so: the page stays, words stay, a newer window stays', { skip }, async () => {
+  const r = await rig()
+  r.push('Garden', ['Home', 'Bookings'], null)
+  r.push('Kitchen', ['Stove'], null)
+  const { page, errors } = await r.open('garden')
+  await slowShow(page, { appSlug: 'kitchen', name: 'Kitchen', round: 1, existed: false })
+  await openNewProject(page)
+  await page.locator('#newModal [data-first-address]').fill('localhost:9')
+  await page.keyboard.press('Enter')
+  assert.match(await page.locator('#newModal [data-first-said]').innerText(), /Closing this does not stop it/)
+  await page.keyboard.press('Escape')
+  await page.locator('#notes').click()
+  await page.keyboard.type('half a thought')
+  await page.locator('#toast').getByText('New: Kitchen').waitFor({ timeout: 8000 })
+  assert.match(await page.locator('#crumbs').innerText(), /Garden/, 'the page did not move')
+  assert.equal(await page.locator('#notes').inputValue(), 'half a thought')
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'notes', 'the words keep the keys')
+  await page.locator('#toast').getByRole('button', { name: 'Go there' }).click()
+  assert.match(await page.locator('#crumbs').innerText(), /Kitchen/)
+  // Closed and opened again while the first picture is still being taken: the late answer leaves the new window alone.
+  await openNewProject(page)
+  await page.locator('#newModal [data-first-address]').fill('localhost:9')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Escape')
+  await openNewProject(page)
+  assert.match(await page.locator('#newModal [data-first-said]').innerText(), /Taking a picture of localhost:9/, 'the new window says the first is still being taken')
+  await page.locator('#newModal [data-first-address]').fill('localhost:3000/half-typed')
+  await page.locator('#toast').getByText('New: Kitchen').waitFor({ timeout: 8000 })
+  assert.equal(await page.locator('#newModal').isVisible(), true)
+  assert.equal(await page.locator('#newModal [data-first-address]').inputValue(), 'localhost:3000/half-typed')
+  await page.keyboard.press('Escape')
+  // A failure after the window closed is said too.
+  await page.unroute('**/api/show')
+  await slowShow(page, { error: 'Nothing answers at http://localhost:9/. Is your app running?' }, 600, 400)
+  await openNewProject(page)
+  await page.locator('#newModal [data-first-address]').fill('localhost:9')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Escape')
+  await page.locator('#toast').getByText('No new project was made').waitFor({ timeout: 8000 })
+  assert.match(await page.locator('#toast').innerText(), /Is your app running\?/)
+  assert.deepEqual(errors.filter(e => !/400 .*\/api\/show/.test(e)), [])
+})
+
+test('New project opened again while a picture is taken says so and keeps Show it off, and Go there waits for a window to close', { skip }, async () => {
+  const r = await rig()
+  r.push('Garden', ['Home'], null)
+  r.push('Kitchen', ['Stove'], null)
+  const { page, errors } = await r.open('garden')
+  let asked = 0
+  await page.route('**/api/show', async route => {
+    asked++
+    await new Promise(r => setTimeout(r, 1500))
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ appSlug: 'kitchen', name: 'Kitchen', round: 1, existed: false }) })
+  })
+  await openNewProject(page)
+  await page.locator('#newModal [data-first-address]').fill('localhost:9')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Escape')
+  await openNewProject(page)
+  const said = page.locator('#newModal [data-first-said]')
+  assert.equal(await said.isVisible(), true)
+  assert.match(await said.innerText(), /Taking a picture of localhost:9/)
+  assert.equal(await page.locator('#newModal [data-first-show]').isDisabled(), true, 'one picture at a time')
+  await page.keyboard.press('Enter')
+  await page.locator('#toast').getByText('New: Kitchen').waitFor({ timeout: 8000 })
+  assert.equal(asked, 1, 'only one round was asked for')
+  assert.equal(await page.locator('#newModal [data-first-show]').isDisabled(), false, 'on again once it is done')
+  assert.equal(await said.isVisible(), false)
+  // The window is still up: Go there leaves the page as it is.
+  await page.locator('#toast [data-toast-go]').evaluate(el => el.click())
+  assert.match(await page.locator('#crumbs').innerText(), /Garden/)
+  assert.equal(await page.locator('#newModal').isVisible(), true)
+  await page.keyboard.press('Escape')
+  await page.locator('#toast').getByRole('button', { name: 'Go there' }).click()
+  assert.match(await page.locator('#crumbs').innerText(), /Kitchen/)
+  assert.deepEqual(errors, [])
+})
+
+test('New project: a drag out of the address box, or into it, does not close it, and a typed address is kept until a project is made', { skip }, async () => {
+  const r = await rig()
+  r.push('Garden', ['Home'], null)
+  const { page, errors } = await r.open('garden')
+  await openNewProject(page)
+  const input = page.locator('#newModal [data-first-address]')
+  await input.fill('localhost:4000/typed')
+  const box = await input.boundingBox()
+  await page.mouse.move(box.x + 20, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(10, 700, { steps: 4 })
+  await page.mouse.up()
+  assert.equal(await page.locator('#newModal').isVisible(), true, 'a drag that ends outside is not a close')
+  // Pressed outside and let go inside: not a close either.
+  await page.mouse.move(10, 700)
+  await page.mouse.down()
+  await page.mouse.move(box.x + 20, box.y + box.height / 2, { steps: 4 })
+  await page.mouse.up()
+  assert.equal(await page.locator('#newModal').isVisible(), true, 'a drag that ends inside is not a close')
+  await page.mouse.click(10, 700)
+  assert.equal(await page.locator('#newModal').isVisible(), false, 'a press outside is')
+  await openNewProject(page)
+  assert.equal(await input.inputValue(), 'localhost:4000/typed', 'closing by mistake loses nothing')
+  await slowShow(page, { appSlug: 'localhost-4000', name: 'localhost:4000', round: 1, existed: false }, 0)
+  await page.keyboard.press('Enter')
+  await page.locator('#newModal').waitFor({ state: 'hidden' })
+  await openNewProject(page)
+  assert.equal(await input.inputValue(), '', 'made, so it starts empty')
+  assert.deepEqual(errors, [])
+})
+
+test('New project with the address of a project that is here says so, and which round it made, even when on it', { skip }, async () => {
+  const r = await rig()
+  r.push('Garden', ['Home'], null)
+  r.push('Kitchen', ['Stove'], null)
+  const { page, errors } = await r.open('garden')
+  await slowShow(page, { appSlug: 'garden', name: 'Garden', round: 2, existed: true }, 0)
+  await openNewProject(page)
+  await page.locator('#newModal [data-first-address]').fill('localhost:9')
+  await page.keyboard.press('Enter')
+  await page.locator('#toast').getByText('That address is already the project Garden. This made round 2 of it.').waitFor({ timeout: 4000 })
+  assert.match(await page.locator('#crumbs').innerText(), /Garden/)
+  // From another project it goes there and says the same.
+  await page.locator('#listOpen').click()
+  await page.locator('[data-go-app=kitchen]').first().click()
+  await page.locator('#crumbs').getByText('Kitchen').waitFor()
+  await openNewProject(page)
+  await page.locator('#newModal [data-first-address]').fill('localhost:9')
+  await page.keyboard.press('Enter')
+  await page.locator('#toast').getByText('This made round 2 of it.').waitFor({ timeout: 4000 })
+  assert.match(await page.locator('#crumbs').innerText(), /Garden/)
+  assert.deepEqual(errors, [])
+})
+
+test('a long error wraps in a narrow window, in New project and on the first screen', { skip }, async () => {
+  const r = await rig()
+  const long = `Nothing answers at http://localhost:3000/${'a'.repeat(120)}. Is your app running?`
+  const inside = async (page, scope) => {
+    await page.locator(`${scope} [data-first-said]`).getByText('Is your app running?').waitFor({ timeout: 4000 })
+    const [said, card] = await Promise.all([page.locator(`${scope} [data-first-said]`).boundingBox(), page.locator(scope).boundingBox()])
+    assert.ok(said.x + said.width <= card.x + card.width + 0.5 && card.x + card.width <= 380, `${scope}: ${said.x + said.width} in ${card.x + card.width}`)
+  }
+  const first = await (await browser.newContext({ viewport: { width: 380, height: 760 } })).newPage()
+  await slowShow(first, { error: long }, 0, 400)
+  await first.goto(`http://127.0.0.1:${r.port}/`)
+  await first.locator('#firstAddress').fill('localhost:3000')
+  await first.keyboard.press('Enter')
+  await inside(first, '#stateCard')
+  r.push('Garden', ['Home'], null)
+  const { page } = await r.open('garden', { width: 380, height: 760 })
+  await slowShow(page, { error: long }, 0, 400)
+  await openNewProject(page)
+  await page.locator('#newModal [data-first-address]').fill('localhost:3000')
+  await page.keyboard.press('Enter')
+  await inside(page, '#newModal .modal')
+})
+
 test('speak at a spot: a click drops a pin that listens, its words are written beside it, and each goes as what was said and where', { skip }, async () => {
   const r = await rig()
   r.push('Point', ['A', 'B'], null)
@@ -1983,6 +2226,297 @@ test('select the words themselves: where a picture has a word list, the words to
   await page.mouse.up()
   await settled(page)
   assert.equal((await saved(page, 'words', 'without')).marks[0].tool, 'box')
+  assert.deepEqual(errors, [])
+})
+
+/* ---------- the film of one screen ---------- */
+
+/** An answer as the page sends it, for rounds a test does not need to draw by hand. */
+const answerAs = async (r, appSlug, id, { marks = 0, verdict = 'changes', notes = '' } = {}) => {
+  const { readFileSync } = await import('node:fs')
+  const entry = (await r.queue(appSlug)).screens.find(s => s.id === id)
+  const shapes = Array.from({ length: marks }, () => ({ type: 'box', colour: 'red', box: { x: 10, y: 10, w: 40, h: 30 } }))
+  const png = verdict === 'approved' ? null : `data:image/png;base64,${readFileSync(join(r.home, 'p.png')).toString('base64')}`
+  const res = await fetch(`http://127.0.0.1:${r.port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug, id, after: entry.after, round: entry.round, verdict, notes, shapes, imageSize: { w: 1600, h: 900 }, png }) })
+  assert.equal(res.ok, true)
+}
+/** Three rounds of Home: marks on the first two, then Looks good. Other is there to be the screen behind. */
+const threeRounds = async (r, app) => {
+  r.push(app, ['Home', 'Other'], null)
+  await answerAs(r, app.toLowerCase(), 'home', { marks: 2, notes: 'Move it up' })
+  r.push(app, ['Home'], null)
+  await answerAs(r, app.toLowerCase(), 'home', { marks: 1 })
+  r.push(app, ['Home'], null)
+  await answerAs(r, app.toLowerCase(), 'home', { verdict: 'approved' })
+}
+const filmShows = page => page.locator('#filmImg').getAttribute('alt')
+
+test('the film of a screen: R opens it over the page, and Play shows every round in order, its picture and then its marks, to the finished screen', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Film')
+  const { page, errors } = await r.open('film/home', { film: 150 })
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  assert.equal(await page.locator('#filmTitle').innerText(), 'Home: from first mark to finished')
+  assert.equal(await page.locator('#filmLength').innerText(), '3 rounds · 7 seconds')
+  assert.deepEqual(await page.locator('.film-round').allInnerTexts(), ['Round 1', 'Round 2', 'Finished'])
+  assert.equal(await page.locator('.film-round').first().getAttribute('title'), 'Round 1: Changes, 2 marks. Move it up')
+  // It opens on the first marks, and waits for a press.
+  assert.equal(await filmShows(page), 'Round 1, as marked')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Play')
+  assert.equal(await page.locator('.film-round.current').innerText(), 'Round 1')
+  await page.waitForTimeout(400)
+  assert.equal(await filmShows(page), 'Round 1, as marked', 'it does not play by itself')
+  // Each step as it comes: what it is, and whether the picture is the pushed one or the marked one from the inbox.
+  await page.evaluate(() => {
+    window.SEEN = []
+    const img = document.getElementById('filmImg')
+    new MutationObserver(() => {
+      const now = `${img.alt}: ${new URL(img.src).pathname.split('/')[1]}`
+      if (window.SEEN.at(-1) !== now) window.SEEN.push(now)
+    }).observe(img, { attributes: true, attributeFilter: ['alt'] })
+  })
+  await page.locator('#filmPlay').click()
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Pause')
+  await page.waitForFunction(() => document.getElementById('filmPlay').textContent === 'Play')
+  assert.deepEqual(await page.evaluate(() => window.SEEN), ['Round 1: images', 'Round 1, as marked: inbox', 'Round 2: images', 'Round 2, as marked: inbox', 'Finished: images'])
+  assert.equal(await page.locator('.film-round.current').innerText(), 'Finished')
+  assert.equal(await page.locator('#filmImg').evaluate(img => img.complete && img.naturalWidth), 1600)
+  // Space plays again from the first picture, and Space again pauses: one press is never two.
+  await page.keyboard.press('Space')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Pause')
+  assert.equal(await filmShows(page), 'Round 1')
+  await page.keyboard.press('Space')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Play')
+  const stopped = await filmShows(page)
+  await page.waitForTimeout(400)
+  assert.equal(await filmShows(page), stopped, 'paused, it stays')
+  assert.deepEqual(errors, [])
+})
+
+test('the film steps: the arrows go one step at a time, a round in the strip shows as it was left, and Play goes on from there', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Steps')
+  // A step that stays long: nothing moves here unless a key or a press moves it.
+  const { page, errors } = await r.open('steps/home', { film: 60000 })
+  await page.locator('#menuOpen').click()
+  await page.locator('#menu [data-menu=film]').click()
+  await page.locator('#film').waitFor()
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'filmPlay')
+  await page.keyboard.press('ArrowRight')
+  assert.equal(await filmShows(page), 'Round 2')
+  assert.equal(await page.locator('.film-round.current').innerText(), 'Round 2')
+  await page.keyboard.press('ArrowRight')
+  assert.equal(await filmShows(page), 'Round 2, as marked')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft')
+  assert.equal(await filmShows(page), 'Round 1')
+  await page.keyboard.press('ArrowLeft')
+  assert.equal(await filmShows(page), 'Round 1', 'the first step is the first')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Play', 'stepping does not play')
+  for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowRight')
+  assert.equal(await filmShows(page), 'Finished', 'the last step is the last')
+  // A round from the strip: as it was left, with its marks. Play then starts at that round's own picture.
+  await page.locator('.film-round').nth(1).click()
+  assert.equal(await filmShows(page), 'Round 2, as marked')
+  assert.match(await page.locator('#filmImg').getAttribute('src'), /^\/inbox\/steps\/home-/)
+  // The round has the focus now, and Space is still Play: not a press of the round.
+  await page.keyboard.press('Space')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Pause')
+  assert.equal(await filmShows(page), 'Round 2')
+  assert.match(await page.locator('#filmImg').getAttribute('src'), /^\/images\/steps\/home-after-/)
+  // An arrow while it plays stops it on the step it goes to.
+  await page.keyboard.press('ArrowRight')
+  assert.equal(await page.locator('#filmPlay').innerText(), 'Play')
+  assert.equal(await filmShows(page), 'Round 2, as marked')
+  assert.deepEqual(errors, [])
+})
+
+test('the film takes the keys: none reaches the screen behind it, the focus stays in it, and Esc, R and the cross close it', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Behind')
+  // The screen behind is one that still waits: a G there would answer it.
+  const { page, errors } = await r.open('behind/other', { film: 60000 })
+  assert.equal(await at(page), 2)
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  assert.equal(await page.locator('#filmTitle').innerText(), 'Other: from first mark to now', 'not finished: it says so')
+  assert.equal(await page.locator('#filmLength').innerText(), '1 round · 2 seconds')
+  assert.deepEqual(await page.locator('.film-round').allInnerTexts(), ['Round 1'])
+  for (const key of ['g', 'ArrowLeft', 'n', 's', '[', 'o', 'l', 'q', 'b', '?', 'x', 'Meta+Enter']) await page.keyboard.press(key)
+  await settled(page)
+  assert.equal(await at(page), 2, 'the screen behind did not move')
+  assert.equal((await r.queue('behind')).screens.find(s => s.id === 'other').status, 'waiting', 'and was not answered')
+  assert.equal(await saved(page, 'behind', 'other'), null, 'nothing was said on it')
+  for (const id of ['sheetModal', 'helpModal', 'drawer', 'stateCard', 'toast']) assert.equal(await page.locator(`#${id}`).isHidden(), true, `${id} stayed shut`)
+  assert.equal(await page.evaluate(() => document.body.classList.contains('panels')), false)
+  assert.equal(await page.evaluate(() => document.getElementById('bar').inert && document.getElementById('workspace').inert), true)
+  for (let i = 0; i < 8; i++) await page.keyboard.press('Shift+Tab')
+  assert.equal(await page.evaluate(() => !!document.activeElement?.closest('#film')), true, 'the focus stays in the film')
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('#film').isHidden(), true)
+  assert.equal(await page.evaluate(() => document.getElementById('bar').inert || document.getElementById('workspace').inert), false)
+  // R opens and R closes. Closed, the keys are the page's again.
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  await page.keyboard.press('r')
+  assert.equal(await page.locator('#film').isHidden(), true)
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  await page.locator('#filmClose').click()
+  assert.equal(await page.locator('#film').isHidden(), true)
+  await page.keyboard.press('ArrowLeft')
+  assert.equal(await at(page), 1)
+  assert.deepEqual(errors, [])
+})
+
+test('Save the film: the server makes a video with ffmpeg, and without ffmpeg the page says so in plain words', { skip }, async () => {
+  const { chmodSync, writeFileSync } = await import('node:fs')
+  const r = await rig()
+  await threeRounds(r, 'Saving')
+  // No ffmpeg on this computer.
+  r.env.REVIEW_FFMPEG = join(r.home, 'no-such-ffmpeg')
+  await r.stop()
+  await r.start()
+  const first = await r.open('saving/home', { film: 60000 })
+  await first.page.keyboard.press('r')
+  await first.page.locator('#filmSave').click()
+  await first.page.locator('#toast').getByText('The film was not saved').waitFor()
+  assert.match(await first.page.locator('#toast').innerText(), /Saving a film needs ffmpeg on this computer\. The film still plays in the review page\./)
+  assert.equal(await first.page.locator('#film').isVisible(), true, 'the film stays up, and still plays')
+  assert.equal(await first.page.locator('#filmSave').isEnabled(), true)
+  await first.page.close()
+  // A stand-in for ffmpeg: it writes what it was asked for where the film should go, with the list of steps it was given.
+  const tool = join(r.home, 'ffmpeg-stand-in.cjs')
+  writeFileSync(tool, '#!/usr/bin/env node\nconst fs = require(\'node:fs\')\nconst words = process.argv.slice(2)\nfs.writeFileSync(words.at(-1), words.includes(\'concat\') ? fs.readFileSync(words[words.indexOf(\'-i\') + 1], \'utf8\') : \'\')\n')
+  chmodSync(tool, 0o755)
+  r.env.REVIEW_FFMPEG = tool
+  await r.stop()
+  await r.start()
+  const res = await fetch(`http://127.0.0.1:${r.port}/api/film/file?app=saving&id=home`)
+  assert.equal(res.headers.get('content-type'), 'video/mp4')
+  assert.equal(res.headers.get('content-disposition'), 'attachment; filename="saving-home-film.mp4"')
+  const list = await res.text()
+  assert.equal(list.match(/^duration /gm).length, 5, 'five steps: two rounds with marks, and the finished one')
+  assert.equal((await fetch(`http://127.0.0.1:${r.port}/api/film/file?app=saving&id=nothing`)).status, 404)
+  const { page, errors } = await r.open('saving/home', { film: 60000 })
+  // The file is not kept by the test: the page hands it over under this name.
+  await page.evaluate(() => {
+    HTMLAnchorElement.prototype.click = function () {
+      window.SAVED = this.download
+    }
+  })
+  await page.keyboard.press('r')
+  await page.locator('#filmSave').click()
+  await page.locator('#toast').getByText('Film saved').waitFor()
+  assert.equal(await page.evaluate(() => window.SAVED), 'saving-home-film.mp4')
+  assert.deepEqual(errors, [])
+})
+
+test('a narrow window: the film\'s head fits, its title keeps room and is cut short, the cross stays inside, and nothing goes sideways', { skip }, async () => {
+  const r = await rig()
+  r.push('Narrow', ['The home page with a rather long name that cannot fit'])
+  const { page, errors } = await r.open('narrow', { width: 375, height: 700, colorScheme: 'dark' })
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  const head = await page.evaluate(() => {
+    const parts = [...document.querySelector('.film-head').children].filter(el => el.checkVisibility())
+    const title = document.getElementById('filmTitle')
+    return {
+      outside: parts.filter(el => el.getBoundingClientRect().left < 0 || el.getBoundingClientRect().right > innerWidth).map(el => el.id),
+      title: title.getBoundingClientRect().width,
+      cut: title.scrollWidth > title.clientWidth && getComputedStyle(title).textOverflow === 'ellipsis',
+      close: document.getElementById('filmClose').getBoundingClientRect().right,
+      film: document.getElementById('film').getBoundingClientRect().width,
+      width: innerWidth,
+    }
+  })
+  assert.deepEqual(head.outside, [], 'every part of the head is inside the window')
+  assert.ok(head.title > 200, `the title has room: ${head.title}px`)
+  assert.equal(head.cut, true, 'and a long one ends in an ellipsis')
+  assert.ok(head.close <= head.width - 8, 'the cross is inside, with a margin')
+  assert.equal(head.film, head.width)
+  await page.mouse.move(200, 300)
+  await page.mouse.wheel(400, 0)
+  await page.mouse.move(200, 30)
+  await page.mouse.wheel(400, 0)
+  await settled(page)
+  assert.deepEqual(await page.evaluate(() => [scrollX, document.documentElement.scrollLeft, document.querySelector('.film-head').scrollLeft]), [0, 0, 0], 'nothing scrolls sideways')
+  assert.deepEqual(errors, [])
+})
+
+test('the film shuts the page from the press on: R then G at once answers nothing, Esc while it loads gives up, and another screen by then drops it', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Quick')
+  const { page, errors } = await r.open('quick/other', { film: 60000 })
+  // The film is slow to come, as on a busy computer.
+  await page.route('**/api/film?*', async route => {
+    await new Promise(resolve => setTimeout(resolve, 400))
+    await route.continue()
+  })
+  await page.keyboard.press('r')
+  for (const key of ['g', 'ArrowLeft', 'b', 'Meta+Enter']) await page.keyboard.press(key)
+  await page.locator('#film').waitFor()
+  assert.equal(await page.locator('#filmTitle').innerText(), 'Other: from first mark to now', 'the film of the screen R was pressed on')
+  assert.equal(await at(page), 2, 'the screen behind did not move')
+  assert.equal((await r.queue('quick')).screens.find(s => s.id === 'other').status, 'waiting', 'and was not answered')
+  await page.keyboard.press('Escape')
+  // Esc while it loads: it never opens, and the page is the page's again.
+  await page.keyboard.press('r')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(600)
+  assert.equal(await page.locator('#film').isHidden(), true)
+  assert.equal(await page.evaluate(() => document.getElementById('bar').inert || document.getElementById('workspace').inert), false)
+  // Another screen before the film came: it is not opened over a screen it is not the film of.
+  await page.keyboard.press('r')
+  await page.evaluate(() => document.getElementById('back').click())
+  await page.waitForTimeout(600)
+  assert.equal(await at(page), 1)
+  assert.equal(await page.locator('#film').isHidden(), true)
+  assert.equal(await page.evaluate(() => document.getElementById('bar').inert || document.getElementById('workspace').inert), false)
+  await page.keyboard.press('ArrowRight')
+  assert.equal(await at(page), 2, 'the keys are the page\'s again')
+  assert.deepEqual(errors, [])
+})
+
+test('closed, the film gives the focus back where it was: to the menu\'s button from the menu, and to a button that had it', { skip }, async () => {
+  const r = await rig()
+  await threeRounds(r, 'Focus')
+  const { page, errors } = await r.open('focus/home', { film: 60000 })
+  await page.locator('#menuOpen').click()
+  await page.locator('#menu [data-menu=film]').click()
+  await page.locator('#film').waitFor()
+  await page.keyboard.press('Escape')
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'menuOpen')
+  await page.locator('#next').focus()
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'filmPlay')
+  await page.locator('#filmClose').click()
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'next')
+  // With nowhere to go back to, the focus does not stay on a button nobody sees.
+  await page.evaluate(() => document.activeElement.blur())
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  await page.keyboard.press('Escape')
+  assert.equal(await page.evaluate(() => !!document.activeElement?.closest('#film')), false)
+  assert.deepEqual(errors, [])
+})
+
+test('the film of a sketch plays, and says in place of Save that it cannot be saved as a file', { skip }, async () => {
+  const { writeFileSync } = await import('node:fs')
+  const r = await rig()
+  const sheet = join(r.home, 'sheet.svg')
+  writeFileSync(sheet, '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><rect width="1600" height="900" fill="#eee"/></svg>')
+  r.push('Sketch', ['Flow'], null, [], sheet)
+  r.push('Sketch', ['Flow'], null, [], sheet)
+  const { page, errors } = await r.open('sketch/flow', { film: 60000 })
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  assert.deepEqual(await page.locator('.film-round').allInnerTexts(), ['Round 1', 'Round 2'])
+  assert.equal(await page.locator('#filmSave').isHidden(), true)
+  assert.match(await page.locator('#filmLength').innerText(), /Plays here only: a film of a sketch cannot be saved as a file$/)
   assert.deepEqual(errors, [])
 })
 

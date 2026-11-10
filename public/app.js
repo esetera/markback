@@ -76,6 +76,7 @@ const KEYS = [
     [['V'], 'After, side by side, before'],
     [['C'], 'Show or hide where it changed'],
     [['I'], 'The rest of the words'],
+    [['R'], 'The film of this screen: each round and its marks, in order'],
     [['Q'], 'Panel view'],
     [['F'], 'Full screen'],
     [['Esc'], 'Close or cancel. Words stay'],
@@ -645,6 +646,202 @@ function closeSheet() {
   for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = false
 }
 
+/* ---------- the film of one screen: each round's picture, then its marks, on to the newest, over the whole page ---------- */
+
+/** How long a step stays, when a test says so. The film's own times come with it, in seconds. */
+const FILM_MS = Number(new URLSearchParams(location.search).get('film')) || 0
+/** `at` is the step on show. `picked` is true when a round was chosen and not reached by playing or stepping. */
+/** `loading` is the ask on its way, from the press until the film comes. `back` has the focus to go back to when it closes. */
+const film = { data: null, of: null, names: [], at: 0, playing: false, timer: null, picked: true, loading: null, back: null }
+const filmOpen = () => !$('film').hidden
+/** The step on show: the picture comes in over the last one, the strip says which round, and the button says what it does. */
+function showFilm() {
+  const { data, names } = film
+  const step = data.steps[film.at]
+  const top = $('filmImg')
+  const under = $('filmUnder')
+  if (top.getAttribute('src') !== step.url) {
+    // The last picture stays under the new one while it comes in, so nothing flashes between them.
+    under.hidden = !top.getAttribute('src') || matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (!under.hidden) under.src = top.src
+    top.classList.remove('fresh')
+    top.src = step.url
+    // Read once, so the browser starts the fade again from the beginning.
+    void top.offsetWidth
+    top.classList.add('fresh')
+  }
+  top.alt = `${names[step.at]}${step.marked ? ', as marked' : ''}`
+  for (const [i, el] of [...$('filmStrip').children].entries()) {
+    el.classList.toggle('current', i === step.at)
+    if (i === step.at) el.setAttribute('aria-current', 'true')
+    else el.removeAttribute('aria-current')
+  }
+  $('filmStrip').children[step.at]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  $('filmPlay').textContent = film.playing ? 'Pause' : 'Play'
+}
+/** Waits as long as the step on show stays, then goes to the next. It stops by itself on the last. */
+function runFilm() {
+  clearTimeout(film.timer)
+  if (!film.playing) return
+  film.timer = setTimeout(() => {
+    if (film.at >= film.data.steps.length - 1) film.playing = false
+    else film.at++
+    showFilm()
+    runFilm()
+  }, FILM_MS || film.data.steps[film.at].seconds * 1000)
+}
+function pauseFilm() {
+  clearTimeout(film.timer)
+  film.playing = false
+}
+function playFilm() {
+  if (!filmOpen()) return
+  if (film.playing) {
+    pauseFilm()
+    return showFilm()
+  }
+  const { steps } = film.data
+  // At the end, it plays again from the first picture. A round chosen in the strip plays from its own picture, before the marks.
+  if (film.at >= steps.length - 1) film.at = 0
+  else if (film.picked) film.at = steps.findIndex(step => step.at === steps[film.at].at)
+  film.picked = false
+  film.playing = true
+  showFilm()
+  runFilm()
+}
+/** One step back or on: a picture, then the same picture as marked, then the next round's picture. */
+function stepFilm(by) {
+  pauseFilm()
+  film.picked = false
+  film.at = Math.max(0, Math.min(film.data.steps.length - 1, film.at + by))
+  showFilm()
+}
+/** A round from the strip, as it was left: marked, when it was marked. */
+function pickFilmRound(round) {
+  pauseFilm()
+  film.picked = true
+  film.at = film.data.steps.findLastIndex(step => step.at === round)
+  showFilm()
+}
+/** The page behind the film, shut or open again: nothing there takes the focus, a key or a press while it is shut. */
+function shutBehindFilm(shut) {
+  for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = shut
+}
+/** The focus goes back where it was before the film: a press in the menu goes back to the menu's button. */
+function focusBeforeFilm() {
+  const back = film.back
+  film.back = null
+  if (back && back !== document.body && back.isConnected && back.checkVisibility() && !back.closest('[inert]')) back.focus({ preventScroll: true })
+  // Nowhere to go back to: the focus leaves the shut film, so no key lands on a button nobody sees.
+  else if (document.activeElement?.closest('#film')) document.activeElement.blur()
+}
+async function openFilm() {
+  const s = screen()
+  if (filmOpen()) return closeFilm()
+  if (!s || film.loading) return
+  const was = document.activeElement
+  film.back = was?.closest('#menu') ? $('menuOpen') : was
+  closeTextEntry(true)
+  closeMenu()
+  closeDrawer()
+  endPin()
+  // Shut from the press on, not from when the film comes: G pressed while it loads would answer the screen behind unseen.
+  shutBehindFilm(true)
+  const asked = {}
+  film.loading = asked
+  let data = null
+  try {
+    const res = await fetch(`/api/film?app=${encodeURIComponent(s.appSlug)}&id=${encodeURIComponent(s.id)}`, { cache: 'no-store' })
+    data = res.ok ? (await res.json()).film : null
+  } catch {
+    data = null
+  }
+  // Esc while it loaded, or another screen by now: the film is dropped. It would open over a screen it is not the film of.
+  const now = screen()
+  const wanted = film.loading === asked && now?.appSlug === s.appSlug && now?.id === s.id
+  if (film.loading === asked) film.loading = null
+  if (!wanted || !data?.steps?.length) {
+    shutBehindFilm(false)
+    focusBeforeFilm()
+    return wanted ? toast('No film of this screen', 'Its pictures are not in the store.', { problem: true }) : undefined
+  }
+  const last = data.rounds.length - 1
+  Object.assign(film, { data, of: { appSlug: s.appSlug, id: s.id }, names: data.rounds.map((r, i) => (data.finished && i === last ? 'Finished' : `Round ${r.round}`)), playing: false, picked: true })
+  const name = `${data.screen}${data.mode ? ` (${data.mode})` : ''}`
+  const seconds = Math.round(data.seconds)
+  $('filmTitle').textContent = `${name}: from first mark to ${data.finished ? 'finished' : 'now'}`
+  $('filmTitle').title = $('filmTitle').textContent
+  // A sketch is a drawing, and ffmpeg makes films of pictures: it plays here, and the page says so in place of the button.
+  const why = data.save?.why ?? ''
+  $('filmLength').textContent = `${data.rounds.length} round${data.rounds.length === 1 ? '' : 's'} · ${seconds} second${seconds === 1 ? '' : 's'}${data.missing > 0 ? ` · ${data.missing} older ${data.missing === 1 ? 'picture is' : 'pictures are'} gone` : ''}${why ? ' · Plays here only: a film of a sketch cannot be saved as a file' : ''}`
+  $('filmLength').title = why || $('filmLength').textContent
+  $('filmSave').hidden = !!why
+  // A long story is saved as its newest rounds. The button says so before it is pressed, and the note after.
+  $('filmSave').dataset.tip = `Save the film as a video file${data.save?.leftOut ? `. ${data.save.leftOut}` : ''}`
+  // What was said in a round is words, and not in its picture: it is on the round's name, for a pointer that rests there.
+  const said = r => (r.answer ? `: ${answerWords(r.answer)}${r.answer.notes && !r.answer.noComment ? `. ${r.answer.notes}` : ''}` : '')
+  $('filmStrip').innerHTML = data.rounds.map((r, i) => `<button class="film-round" data-round="${i}" title="${esc(`${film.names[i]}${said(r)}`)}"><span class="thumb"><img src="${esc(r.url)}" alt="" decoding="async"></span><span>${esc(film.names[i])}</span></button>`).join('')
+  // Every picture is asked for now, so each is there when its step comes.
+  for (const step of data.steps) new Image().src = step.url
+  $('filmImg').removeAttribute('src')
+  $('filmUnder').hidden = true
+  $('film').hidden = false
+  document.body.classList.add('film-open')
+  // It opens on the first round as it was left: the first marks.
+  film.at = data.steps.findLastIndex(step => step.at === 0)
+  showFilm()
+  $('filmPlay').focus()
+  return undefined
+}
+/** Esc while the film loads: it does not open, and the page is as it was. */
+function cancelFilm() {
+  film.loading = null
+  shutBehindFilm(false)
+  focusBeforeFilm()
+}
+function closeFilm() {
+  pauseFilm()
+  $('film').hidden = true
+  document.body.classList.remove('film-open')
+  shutBehindFilm(false)
+  focusBeforeFilm()
+}
+/** The film as a video file. The server makes it with ffmpeg, when this computer has it, and says so plainly when it has not. */
+async function saveFilm() {
+  const s = film.of
+  if (!s || $('filmSave').disabled) return
+  $('filmSave').disabled = true
+  try {
+    const res = await fetch(`/api/film/file?app=${encodeURIComponent(s.appSlug)}&id=${encodeURIComponent(s.id)}`, { cache: 'no-store' })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'The server did not make it.')
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(await res.blob())
+    link.download = `${s.appSlug}-${s.id}-film.mp4`
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000)
+    // A long story is saved as its newest rounds: the note says the older ones are not in the file.
+    toast('Film saved', `${link.download}${film.data.save?.leftOut ? `. ${film.data.save.leftOut}` : ''}`)
+  } catch (error) {
+    toast('The film was not saved', error.message, { problem: true })
+  } finally {
+    $('filmSave').disabled = false
+  }
+}
+$('filmPlay').onclick = playFilm
+$('filmSave').onclick = () => void saveFilm()
+$('filmClose').onclick = closeFilm
+$('filmStrip').onclick = event => {
+  const round = event.target.closest('[data-round]')
+  if (round) pickFilmRound(Number(round.dataset.round))
+}
+$('filmImg').addEventListener('animationend', () => {
+  $('filmUnder').hidden = true
+})
+/* Some browsers press a button when Space comes up, whatever was done when it went down. */
+document.addEventListener('keyup', event => {
+  if (filmOpen() && event.key === ' ') event.preventDefault()
+})
+
 /* The strip, in the panel view only: fifty thumbnails nobody is looking at would slow every swap. */
 function renderStrip(a) {
   if (!panels() || !a) {
@@ -1177,7 +1374,9 @@ function renderMenu() {
   const group = a ? placeOf(a).group : null
   setHtml($('menu'), `
     <button data-menu="sheet" role="menuitem"${a ? '' : ' disabled'}><span>All screens of this review</span><span class="kbd">O</span></button>
+    <button data-menu="film" role="menuitem"${screen() && !onDonePage() ? '' : ' disabled'}><span>The film of this screen</span><span class="kbd">R</span></button>
     <button data-menu="list" role="menuitem"><span>Apps and screens</span><span class="kbd">L</span></button>
+    <button data-menu="new" role="menuitem"><span>New project</span></button>
     <button data-menu="work" role="menuitem"><span>Ideas and queue</span><span class="kbd">W</span></button>
     <button data-menu="rest" role="menuitem"${left ? '' : ' disabled'}><span>Looks good for the rest${left ? ` (${left})` : ''}</span><span class="kbd">⇧⌘↩</span></button>
     <button data-menu="aside-one" role="menuitem"${a ? '' : ' disabled'}><span>Set ${group ? `this ${placeOf(a).noun.trim() || 'one'}` : 'this'} aside</span></button>
@@ -2209,8 +2408,8 @@ function hideToast() {
   $('toast').hidden = true
   $('toast').classList.remove('fading')
 }
-function toast(text, sub = '', { undo = false, problem = false } = {}) {
-  setHtml($('toast'), `<span>${esc(text)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${undo ? '<button class="link" data-undo>Undo</button>' : ''}`)
+function toast(text, sub = '', { undo = false, problem = false, go = '' } = {}) {
+  setHtml($('toast'), `<span>${esc(text)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${undo ? '<button class="link" data-undo>Undo</button>' : ''}${go ? `<button class="link" data-toast-go="${esc(go)}">Go there</button>` : ''}`)
   $('toast').classList.remove('fading')
   $('toast').classList.toggle('problem', problem)
   $('toast').hidden = false
@@ -2219,11 +2418,17 @@ function toast(text, sub = '', { undo = false, problem = false } = {}) {
   toastTimer = setTimeout(() => {
     $('toast').classList.add('fading')
     toastTimer = setTimeout(hideToast, 200)
-  }, undo ? UNDO_MS - 200 : 3000)
+  }, undo ? UNDO_MS - 200 : go ? 8000 : 3000)
 }
 $('toast').onclick = event => {
+  const go = event.target.closest('[data-toast-go]')?.dataset.toastGo
   if (event.target.closest('[data-undo]')) undoAnswer()
-  else if ($('toast').classList.contains('problem')) hideToast()
+  else if (go) {
+    // A window up holds the page: it must not change under it. The notice stays until its time is up.
+    if (windowUp()) return
+    hideToast()
+    if (state.apps.some(a => a.slug === go)) pickApp(go)
+  } else if ($('toast').classList.contains('problem')) hideToast()
 }
 
 let tipTimer = null
@@ -2382,7 +2587,7 @@ function cycleView() {
   if (state.fitted) fit()
 }
 
-for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', sheetClose: 'close', viewerClose: 'close' })) $(id).innerHTML = ICONS[icon]
+for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', newClose: 'close', sheetClose: 'close', viewerClose: 'close', filmClose: 'close' })) $(id).innerHTML = ICONS[icon]
 
 $('listOpen').onclick = openDrawer
 $('back').onclick = () => go(state.index - 1)
@@ -2391,6 +2596,7 @@ $('menuOpen').onclick = toggleMenu
 $('menu').onclick = event => {
   const what = event.target.closest('[data-menu]')?.dataset.menu
   if (what === 'list') openDrawer()
+  else if (what === 'new') openNewProject()
   else if (what === 'work') location.href = '/work.html'
   else if (what === 'rest') openSubmit()
   else if (what === 'stop') stopHere()
@@ -2403,6 +2609,7 @@ $('menu').onclick = event => {
   else if (what === 'notices') void toggleNotices()
   else if (what === 'wake') void toggleWake()
   else if (what === 'sheet') openSheet()
+  else if (what === 'film') void openFilm()
   else if (what === 'keys') showHelp(true)
 }
 $('helpClose').onclick = () => showHelp(false)
@@ -2464,47 +2671,131 @@ $('drawerList').addEventListener('keydown', event => {
 $('center').addEventListener('click', event => {
   if (event.target.closest('[data-more]')) toggleMore()
 })
-/* The first minute: your own app, or one sentence to your agent, or a sample. */
-function firstRunHtml() {
+/* The first minute: your own app, or one sentence to your agent, or a sample. New project in the menu shows the same form,
+   without the sample, so there is one wording for both. */
+function firstRunHtml({ sample = true } = {}) {
+  // The ids are for the first screen only; the menu's copy is found through its form, so the two never share an id.
+  const id = name => (sample ? ` id="first${name}"` : '')
   return `<form class="first" data-first>
-    <h2>Two ways to start.</h2>
+    ${sample ? '<h2>Two ways to start.</h2>' : ''}
     <div class="first-or">1. Your app's address, on this computer or online</div>
-    <div class="first-row"><input id="firstAddress" placeholder="http://localhost:3000" aria-label="Your app's address" autocomplete="off"><button class="btn primary" id="firstShow">Show it</button></div>
-    <p class="first-said" id="firstSaid" hidden></p>
+    <div class="first-row"><input${id('Address')} data-first-address placeholder="http://localhost:3000" aria-label="Your app's address" autocomplete="off"><button class="btn primary"${id('Show')} data-first-show>Show it</button></div>
+    <p class="first-said"${id('Said')} data-first-said hidden></p>
     <div class="first-or">2. In your agent, in your project: it finds the app and opens it here</div>
-    <div class="first-row"><code id="firstAsk">/markback</code><button type="button" class="btn" data-first-copy>Copy</button></div>
+    <div class="first-row"><code${id('Ask')} data-first-ask>/markback</code><button type="button" class="btn" data-first-copy>Copy</button></div>
     <p class="first-said">No app yet? Say what you want after it: <b>/markback a recipe box for my family</b>. In a terminal, <b>markback</b> in the project's folder does the same, once installed: <b>npm install -g github:esetera/markback</b></p>
-    <div class="first-or">Just looking</div>
-    <div class="first-row"><button type="button" class="btn" data-first-sample>Try the sample</button></div>
+    ${sample ? '<div class="first-or">Just looking</div>\n    <div class="first-row"><button type="button" class="btn" data-first-sample>Try the sample</button></div>' : ''}
   </form>`
 }
-async function firstRun(path, body) {
-  const said = $('firstSaid')
+async function firstRun(form, path, body) {
+  const said = form.querySelector('[data-first-said]')
+  const show = form.querySelector('[data-first-show]')
+  // A picture can take most of a minute. The window may be closed by then, and the person busy on another screen.
+  const watching = form.closest('#newModal') ? newWindow : null
+  const late = () => (watching ? !watching.open : !form.isConnected)
   said.hidden = false
-  said.textContent = path === '/api/show' ? 'Taking a picture…' : ''
-  $('firstShow').disabled = true
+  if (watching && path === '/api/show') newCapture = body.url
+  said.textContent = path !== '/api/show' ? '' : watching ? capturingWords() : 'Taking a picture…'
+  show.disabled = true
   try {
     const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     const got = await res.json()
     if (!res.ok) throw new Error(got.error)
+    // The server says when the address was a project already: the window is called New project, so say it was not new.
+    const again = got.existed ? `That address is already the project ${got.name}. This made round ${got.round} of it.` : ''
+    if (late()) {
+      // Too late to move the page: it may be on another screen, with words half written. Only say so, with a way there.
+      await loadQueue()
+      const input = form.querySelector('[data-first-address]')
+      if (watching && !newProjectOpen() && input?.value === body.url) setHtml($('newBody'), '')
+      return void toast(again || `New: ${got.name ?? got.appSlug}`, '', { go: got.appSlug })
+    }
+    if (watching) {
+      setHtml($('newBody'), '')
+      closeNewProject()
+    }
     location.hash = got.appSlug
     await loadQueue()
+    // With projects already here, the address alone does not move the page: go to the new one, beside the others.
+    if (state.apps.length > 1 && state.apps.some(a => a.slug === got.appSlug)) {
+      if (state.appSlug !== got.appSlug || again) pickApp(got.appSlug)
+      toast(again || `Now: ${placeWords(placeOf(app()))}`)
+    }
   } catch (error) {
+    if (late()) return void toast('No new project was made', error.message, { problem: true })
     said.textContent = error.message
-    $('firstShow').disabled = false
+    show.disabled = false
+  } finally {
+    if (watching) {
+      newCapture = ''
+      // A window opened again while it ran kept Show it off. The notice says how it ended; the window can start the next.
+      if (late() && newProjectOpen()) {
+        said.hidden = true
+        show.disabled = false
+      }
+    }
   }
 }
-$('stateCard').addEventListener('submit', event => {
-  event.preventDefault()
-  void firstRun('/api/show', { url: $('firstAddress').value || $('firstAddress').placeholder })
+for (const holder of [$('stateCard'), $('newModal')]) {
+  holder.addEventListener('submit', event => {
+    event.preventDefault()
+    const input = event.target.querySelector('[data-first-address]')
+    void firstRun(event.target, '/api/show', { url: input.value || input.placeholder })
+  })
+  holder.addEventListener('click', event => {
+    const form = event.target.closest('[data-first]')
+    if (event.target.closest('[data-first-sample]')) void firstRun(form, '/api/sample', {})
+    if (event.target.closest('[data-first-copy]')) {
+      void navigator.clipboard?.writeText(form.querySelector('[data-first-ask]').textContent)
+      event.target.textContent = 'Copied'
+    }
+  })
+}
+/* New project, from the menu: the first screen's two ways in, over the page, with the projects there left as they are. */
+const newProjectOpen = () => !$('newModal').hidden
+/** A window over the page: while one is up, nothing behind it may change. */
+const windowUp = () => newProjectOpen() || sheetOpen() || filmOpen() || ['helpModal', 'confirmModal', 'submitModal', 'viewer'].some(id => !$(id).hidden)
+// One for each time the window is open: an answer that comes after it closed knows it is late.
+let newWindow = { open: false }
+// The address of a picture the window started that is still being taken. One at a time: a second press would make two rounds.
+let newCapture = ''
+const capturingWords = () => `Taking a picture of ${newCapture}… Closing this does not stop it: the new project is said when it is ready.`
+function openNewProject() {
+  closeMenu()
+  // With no project yet, the first screen is already this form.
+  if (!state.apps.length) return $('firstAddress')?.focus()
+  closeTextEntry(true)
+  closeDrawer()
+  newWindow = { open: true }
+  // A typed address stays from last time until a project is made from it. A picture still being taken goes on by itself.
+  if (!$('newBody').querySelector('[data-first]')) setHtml($('newBody'), firstRunHtml({ sample: false }))
+  const said = $('newBody').querySelector('[data-first-said]')
+  said.hidden = !newCapture
+  if (newCapture) said.textContent = capturingWords()
+  $('newBody').querySelector('[data-first-show]').disabled = !!newCapture
+  $('newModal').hidden = false
+  for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = true
+  return $('newBody').querySelector('[data-first-address]').focus()
+}
+function closeNewProject() {
+  if (!newProjectOpen()) return
+  newWindow.open = false
+  $('newModal').hidden = true
+  for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = false
+  $('menuOpen').focus()
+}
+$('newClose').onclick = () => closeNewProject()
+// Only a press that starts and ends outside closes it: a drag out of the address box, or into it, is not a close.
+// A click that starts and ends in different places goes to what holds both, the backdrop, so the release is checked too.
+let pressedOutside = false
+let releasedOutside = false
+$('newModal').addEventListener('pointerdown', event => {
+  pressedOutside = event.target === $('newModal')
 })
-$('stateCard').addEventListener('click', event => {
-  if (event.target.closest('[data-first-sample]')) void firstRun('/api/sample', {})
-  if (event.target.closest('[data-first-copy]')) {
-    void navigator.clipboard?.writeText($('firstAsk').textContent)
-    event.target.textContent = 'Copied'
-  }
+$('newModal').addEventListener('pointerup', event => {
+  releasedOutside = event.target === $('newModal')
 })
+$('newModal').addEventListener('click', event => event.target === $('newModal') && pressedOutside && releasedOutside && closeNewProject())
 $('stateCard').onclick = event => {
   if (event.target.closest('[data-look]')) go(0)
   if (event.target.closest('[data-go-on]')) goOn()
@@ -2598,12 +2889,35 @@ document.addEventListener('keydown', event => {
     if (key === 'Escape') $('viewer').hidden = true
     return
   }
+  if (newProjectOpen()) {
+    if (key === 'Escape') closeNewProject()
+    return
+  }
   if (!$('helpModal').hidden) {
     if (key === 'Escape' || key === '?') showHelp(false)
     return
   }
   if (sheetOpen()) {
     if (key === 'Escape' || ((key === 'o' || key === 'O') && !mod)) closeSheet()
+    return
+  }
+  // While the film loads, no key reaches the screen behind it either. Esc gives up waiting.
+  if (film.loading) {
+    if (!mod) event.preventDefault()
+    if (key === 'Escape') cancelFilm()
+    return
+  }
+  // The film takes every key while it is up: none reaches the screen behind it.
+  if (filmOpen()) {
+    if (key === 'Escape' || ((key === 'r' || key === 'R') && !mod)) closeFilm()
+    else if (key === 'ArrowLeft' || key === 'ArrowRight') {
+      event.preventDefault()
+      stepFilm(key === 'ArrowLeft' ? -1 : 1)
+    } else if (key === ' ' && !event.repeat) {
+      // Space plays and pauses wherever the focus is: it is never a press of the round or the button that has it.
+      event.preventDefault()
+      playFilm()
+    }
     return
   }
   // A change of review waits for a press. Nothing else gets past it: not G, not a held G, not a quick one.
@@ -2682,6 +2996,7 @@ document.addEventListener('keydown', event => {
   else if ((key === 'c' || key === 'C') && !event.repeat) toggleChanges()
   else if ((key === 'd' || key === 'D') && event.shiftKey) pressMic()
   else if ((key === 'i' || key === 'I') && !event.repeat) toggleMore()
+  else if ((key === 'r' || key === 'R') && !event.repeat) void openFilm()
   else if (/^[1-4]$/.test(key)) setColour(COLOURS[Number(key) - 1].value)
   else {
     const tool = { b: 'box', a: 'arrow', p: 'pen', t: 'text', m: 'pan', e: 'words', d: 'speak' }[key.toLowerCase()]
