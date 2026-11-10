@@ -148,7 +148,10 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/show') {
       const input = JSON.parse(await body(req))
       try {
-        return json(res, 200, { appSlug: (await showApp(input.url)).appSlug })
+        // Said back, so the page can tell a new project from another round of one that is here.
+        const had = new Set(listApps().map(a => a.slug))
+        const entry = await showApp(input.url)
+        return json(res, 200, { appSlug: entry.appSlug, name: entry.app, round: entry.round, existed: had.has(entry.appSlug) })
       } catch (error) {
         return json(res, 400, { error: error.message })
       }
