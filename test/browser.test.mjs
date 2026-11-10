@@ -2232,6 +2232,41 @@ test('select the words themselves: where a picture has a word list, the words to
   assert.deepEqual(errors, [])
 })
 
+test('a drag along one row takes that row, and a drag down a card stays in the card, whatever order the list is in', { skip }, async () => {
+  const { readFileSync, writeFileSync } = await import('node:fs')
+  const r = await rig()
+  r.push('Order', ['Table'], null)
+  // A dense table, its list a column at a time, as a reader can get it wrong; and two cards beside it whose lines are listed
+  // in among each other.
+  const cells = [['Ana', 'Editor', 'Active'], ['Ben', 'Author', 'Invited'], ['Chen', 'Admin', 'Paused']]
+  const table = [0, 1, 2].flatMap(c => cells.map((row, r) => ({ t: row[c], x: 100 + c * 200, y: 100 + r * 24, w: 120, h: 20 })))
+  const card = (x, lines) => lines.map((t, n) => ({ t, x, y: 400 + n * 22, w: 200, h: 20 }))
+  const left = card(100, ['Starter', 'Free', 'Three'])
+  const right = card(600, ['Team', 'Paid', 'Many'])
+  const list = { size: { w: 1600, h: 900 }, words: [...table, ...left.flatMap((w, n) => [w, right[n]])] }
+  writeFileSync(join(r.home, 'images', 'order', 'table-words-1.json'), JSON.stringify(list))
+  const entry = join(r.home, 'queue', 'order', 'table.json')
+  writeFileSync(entry, JSON.stringify({ ...JSON.parse(readFileSync(entry, 'utf8')), words: 'order/table-words-1.json' }))
+  const { page, errors } = await r.open('order')
+  await page.keyboard.press('e')
+  await page.waitForFunction(() => !document.querySelector('#toolButtons [data-tool=words]').classList.contains('unlit'))
+  const c = await page.locator('#canvas').boundingBox()
+  const k = c.width / 1600
+  const drag = async (x1, y1, x2, y2) => {
+    await page.mouse.move(c.x + x1 * k, c.y + y1 * k)
+    await page.mouse.down()
+    await page.mouse.move(c.x + x2 * k, c.y + y2 * k, { steps: 4 })
+    await page.mouse.up()
+    await settled(page)
+  }
+  // Along the middle row, from Ben to Invited.
+  await drag(150, 134, 550, 134)
+  // Down the left card, from Free to Three.
+  await drag(150, 432, 150, 454)
+  assert.deepEqual((await saved(page, 'order', 'table')).marks.map(m => m.text), ['Ben Author Invited', 'Free Three'])
+  assert.deepEqual(errors, [])
+})
+
 test('with nothing to read words with, a picture without a list has no words tool, and E does nothing there', { skip }, async () => {
   const r = await rig()
   r.push('Bare', ['One'], null)

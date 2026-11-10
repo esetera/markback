@@ -1506,9 +1506,57 @@ function wordAt(words, [x, y], { near = false } = {}) {
   }
   return best
 }
+/** Two boxes on one line: they share more than half the height of the shorter. */
+const onLine = (a, b) => Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > Math.min(a.h, b.h) / 2
+/** Words in lines, top to bottom, each line left to right: a word is on the line its middle is in. */
+function inLines(list) {
+  const lines = []
+  for (const w of [...list].sort((a, b) => a.y + a.h / 2 - (b.y + b.h / 2))) {
+    const line = lines[lines.length - 1]
+    if (line && w.y + w.h / 2 <= line.bottom) {
+      line.words.push(w)
+      line.bottom = Math.max(line.bottom, w.y + w.h * 0.75)
+    } else lines.push({ words: [w], bottom: w.y + w.h })
+  }
+  return lines.map(line => line.words.sort((a, b) => a.x - b.x))
+}
+/**
+ * The words a drag from one word to another means, in the order they read. A list read off a picture can have its order wrong
+ * on a dense table or an odd layout, so where the picture itself says what is meant, the picture decides: along one line, the
+ * words on that line between the two ends; down one column or card, line by line inside it. Only a drag from one column to
+ * another goes by the list's order.
+ */
+function wordsBetween(words, from, to) {
+  const a = words[from]
+  const b = words[to]
+  const middleIn = (w, left, right) => w.x + w.w / 2 >= left && w.x + w.w / 2 <= right
+  if (onLine(a, b)) {
+    const left = Math.min(a.x, b.x)
+    const right = Math.max(a.x + a.w, b.x + b.w)
+    return words.filter(w => onLine(w, a) && middleIn(w, left, right)).sort((p, q) => p.x - q.x)
+  }
+  const [first, last] = a.y < b.y ? [a, b] : [b, a]
+  // The words in the rows the drag runs over, cut into blocks where nothing is written down the whole of them.
+  const rows = words.filter(w => w.y + w.h / 2 >= first.y && w.y + w.h / 2 <= last.y + last.h)
+  const tall = [...rows.map(w => w.h)].sort((p, q) => p - q)[rows.length >> 1]
+  const blocks = []
+  for (const w of [...rows].sort((p, q) => p.x - q.x)) {
+    const block = blocks[blocks.length - 1]
+    if (block && w.x - block.right < tall * 1.5) {
+      block.words.push(w)
+      block.right = Math.max(block.right, w.x + w.w)
+    } else blocks.push({ words: [w], right: w.x + w.w })
+  }
+  const block = blocks.find(one => one.words.includes(first))
+  if (!block || !block.words.includes(last)) return words.slice(Math.min(from, to), Math.max(from, to) + 1)
+  const lines = inLines(block.words)
+  const top = lines.findIndex(line => line.includes(first))
+  const foot = lines.findIndex(line => line.includes(last))
+  return lines.slice(top, foot + 1).flatMap((line, n) => line.filter(w => (n > 0 || w.x + w.w / 2 >= first.x) && (top + n < foot || w.x + w.w / 2 <= last.x + last.w)))
+}
 /** The words from one to another as a mark: what they say, a box round each line of them, and the box round them all. */
 function wordsMark(words, from, to, color) {
-  const picked = words.slice(Math.min(from, to), Math.max(from, to) + 1)
+  const picked = wordsBetween(words, from, to)
   const rects = []
   for (const w of picked) {
     const last = rects[rects.length - 1]

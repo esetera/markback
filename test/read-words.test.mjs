@@ -348,3 +348,72 @@ test('a server that stops stops the reader it was running, even one that will no
     }
   }
 })
+
+test('reading order in dense tables (rows 22, 24 and 28 pixels apart) is a row at a time, and a side list beside a form stays apart at 1x and 2x', () => {
+  const rows = 'Ana Lopez Editor Active 12 Mar 2026 Ben Okafor Author Invited 3 Apr 2026 Chen Wei Reviewer Active 19 May 2026 Dara Singh Author Paused 2 Jun 2026 Eli Moss Admin Active 27 Jul 2026 Fay Grant Reviewer Invited 8 Aug 2026 Gus Hale Author Active 9 Sep 2026 Hana Ito Editor Paused 1 Oct 2026'
+  for (const name of ['dense22', 'dense24', 'dense28']) assert.equal(say(readingOrder(shuffled(name))), `Acme Journal Dashboard People People ${rows}`, name)
+  const form = 'Acme Journal Dashboard Submissions People Settings New submission Title Short title Soil carbon in old orchards Soil carbon First author Email Ana Lopez ana@example.org Section Keywords Research article soil, carbon, orchards Your submission is saved as a draft until you press Submit.'
+  for (const name of ['form1x', 'form2x']) assert.equal(say(readingOrder(shuffled(name))), form, name)
+})
+
+test('a read that finds few words is read again in halves, then by tesseract if it is here, and the most words win', async () => {
+  const picture = join(work, 'few.png')
+  writePicture(picture, 800, 600)
+  const log = join(work, 'mac.log')
+  // A stand-in for the Mac's script runner: one word read whole, `halves` words read in halves.
+  const mac = halves => {
+    const path = join(work, `mac-${halves}.mjs`)
+    const words = n => JSON.stringify(Array.from({ length: n }, (_, i) => ({ t: `w${i}`, x: 10 + (i % 10) * 70, y: 10 + Math.floor(i / 10) * 40, w: 60, h: 20 })))
+    writeFileSync(path, `#!/usr/bin/env node\nimport { appendFileSync } from 'node:fs'\nconst mode = process.argv.at(-1)\nappendFileSync(${JSON.stringify(log)}, mode + '\\n')\nprocess.stdout.write('{"size":{"w":800,"h":600},"words":' + (mode === 'halves' ? ${JSON.stringify(words(halves))} : ${JSON.stringify(words(1))}) + '}')\n`, { mode: 0o755 })
+    return path
+  }
+  const tesseract = writeReader(join(work, 'many-reader.mjs'), { w: 800, h: 600 }, Array.from({ length: 12 }, (_, i) => ({ t: `t${i}`, x: 10 + i * 60, y: 300, w: 50, h: 20 })))
+  const runs = () => readFileSync(log, 'utf8').trim().split('\n')
+  try {
+    // Halves find plenty: they win, and tesseract is not asked.
+    process.env.REVIEW_TESSERACT = tesseract
+    writeFileSync(log, '')
+    assert.equal((await readPicture(picture, { mac: mac(40) })).words.length, 40)
+    assert.deepEqual(runs(), ['whole', 'halves'])
+    // Halves find little too: tesseract reads it, and its twelve words win over three.
+    writeFileSync(log, '')
+    assert.equal(say((await readPicture(picture, { mac: mac(3) })).words), Array.from({ length: 12 }, (_, i) => `t${i}`).join(' '))
+    assert.deepEqual(runs(), ['whole', 'halves'])
+    // No tesseract: the most the Mac found.
+    process.env.REVIEW_TESSERACT = join(work, 'no-tesseract')
+    assert.equal((await readPicture(picture, { mac: mac(3) })).words.length, 3)
+  } finally {
+    delete process.env.REVIEW_TESSERACT
+  }
+})
+
+test('the Mac\'s reader, reading in halves, keeps each word once and in the whole picture\'s pixels', { skip: process.platform === 'darwin' ? false : 'only on a Mac' }, async () => {
+  // A short picture with a word in each quarter and one across the middle, read with the halves the retry uses.
+  const picture = join(work, 'quarters.png')
+  execFileSync('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit')
+function run(argv) {
+  const W = 1280, H = 720
+  const rep = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(null, W, H, 8, 4, true, false, $.NSCalibratedRGBColorSpace, 0, 0)
+  $.NSGraphicsContext.saveGraphicsState
+  $.NSGraphicsContext.setCurrentContext($.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep))
+  $.NSColor.whiteColor.set
+  $.NSRectFill($.NSMakeRect(0, 0, W, H))
+  const style = $.NSDictionary.dictionaryWithObjectForKey($.NSFont.systemFontOfSize(16), $.NSFontAttributeName)
+  $('Upper left').drawAtPointWithAttributes($.NSMakePoint(80, H - 120), style)
+  $('Upper right').drawAtPointWithAttributes($.NSMakePoint(900, H - 120), style)
+  $('Across the middle of the page').drawAtPointWithAttributes($.NSMakePoint(520, H / 2 - 8), style)
+  $('Lower left').drawAtPointWithAttributes($.NSMakePoint(80, 100), style)
+  $('Lower right').drawAtPointWithAttributes($.NSMakePoint(900, 100), style)
+  $.NSGraphicsContext.restoreGraphicsState
+  rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $.NSDictionary.dictionary).writeToFileAtomically(argv[0], true)
+}`, picture])
+  // The script itself, asked for halves, as the retry asks it.
+  const source = readFileSync(join(here, '..', 'lib', 'read-words.mjs'), 'utf8')
+  const script = /const MAC_SCRIPT = `([\s\S]*?)`\n/.exec(source)[1].replace(/\\\\/g, '\\')
+  const said = JSON.parse(execFileSync('osascript', ['-l', 'JavaScript', '-e', script, picture, '1600', '200', 'halves'], { encoding: 'utf8' }))
+  const list = readingOrder((await import('../lib/read-words.mjs')).withoutDoubles(said.words))
+  // The reader may run two short words together ("Lowerleft"): that is its reading, not the halves'. Each is there once.
+  assert.equal(say(list).replace(/ /g, ''), 'UpperleftUpperrightAcrossthemiddleofthepageLowerleftLowerright')
+  const across = list.find(word => word.t === 'Across')
+  assert.ok(Math.abs(across.x - 520) < 12 && Math.abs(across.y - 352) < 14, JSON.stringify(across))
+})
