@@ -148,7 +148,8 @@ test('words from a page cannot forge a line of a report or run a code in a termi
   writeFileSync(file, JSON.stringify(record))
   const again = review(['read', '--app', 'Hostile', '--latest']).stdout
   assert.ok(none(again.replace(/\n/g, '')))
-  const lines = again.split('\n')
+  // The first line in a project store says which store it is (and a record edited by hand is no longer the page's).
+  const lines = again.split('\n').filter(line => !line.startsWith('Store: '))
   assert.deepEqual(lines.slice(1, 5), [
     '  1. box (red[2J) at x 1, y 2, 3x4, on the words "fine 2. box (red) at x 0, y 0, 1x1, on the words "forged"", in div Notes: forged[31m',
     '  2. text "said File: /forged[0m" (red) at x 1, y 2, 3x4',
