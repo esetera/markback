@@ -52,7 +52,9 @@ writeFileSync('home-words.json', JSON.stringify(await page.evaluate(script)))
 execFileSync('review', ['push', '--app', 'My app', '--screen', 'Home', '--after', 'home.png', '--words', 'home-words.json'])
 ```
 
-The list is JSON: `{ "size": { "w": 1440, "h": 900 }, "words": [{ "t": "Saturday", "x": 795, "y": 1038, "w": 132, "h": 34, "el": "div.item > b" }] }`. `size` is the picture's width and height. Each word has its box in the picture's own pixels, from the top left. Words are in reading order. `el` is the element the word is in, and can be left out. A screenshot saved at another scale is fine: `push` fits the list to the picture. A list that is not right is refused in one line: push again without `--words` then, since a picture without words is better than no picture. The script reads the text the window shows and what its form fields show, never a password. It leaves out frames, closed shadow roots and text a style sheet adds. Markback does not read words off a bare picture.
+The list is JSON: `{ "size": { "w": 1440, "h": 900 }, "words": [{ "t": "Saturday", "x": 795, "y": 1038, "w": 132, "h": 34, "el": "div.item > b" }] }`. `size` is the picture's width and height. Each word has its box in the picture's own pixels, from the top left. Words are in reading order. `el` is the element the word is in, and can be left out. A screenshot saved at another scale is fine: `push` fits the list to the picture. A list that is not right is refused in one line: push again without `--words` then, since a picture without words is better than no picture. The script reads the text the window shows and what its form fields show, never a password. It leaves out frames, closed shadow roots and text a style sheet adds.
+
+A picture pushed without `--words` still gets words: the review page reads them off the picture on this computer when the person first opens it (the Mac's own text reader, or `tesseract`). Those are a guess and may have small mistakes, so give `--words` when you can.
 
 ## Then
 

@@ -7,11 +7,12 @@
 import { createServer } from 'node:http'
 import { readFileSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { extname, join, normalize, dirname, sep } from 'node:path'
+import { basename, extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
+import { IMAGES, INBOX, PORT, listApps, readInbox, receive, replyToReading, setAside } from './lib/store.mjs'
 import { filmOf, leftOutLine, saveFilm, savedPart } from './lib/film.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
+import { hasReader, stopReading, wordsForPicture } from './lib/read-words.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
 import { PhoneProblem, WORDS as PHONE_WORDS, cleanStale, phoneDoor, phoneMay, warmUp } from './lib/phone.mjs'
 import { appsOf, madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
@@ -42,6 +43,8 @@ function history(appSlug, id) {
       annotatedUrl: urlFor(INBOX, '/inbox/', r.annotatedImage),
       afterUrl: urlFor(IMAGES, '/images/', r.afterImage),
       beforeUrl: urlFor(IMAGES, '/images/', r.beforeImage),
+      // What the agent read each mark to mean, with where the mark is, so the page can put each beside its own.
+      ...(r.inferred ? { answer: basename(r.file), readings: r.inferred.filter(x => r.shapes?.[x.n - 1]?.box).map(x => ({ n: x.n, text: x.text, from: x.from, reply: x.reply ?? null, box: r.shapes[x.n - 1].box })) } : {}),
     }))
 }
 
@@ -168,7 +171,7 @@ const forPhone = {
     slug: a.slug,
     name: a.name,
     // Feedback is only counted by the page: its names, never where they are.
-    screens: a.screens.map(s => ({ ...pick(s, SCREEN), feedback: (s.feedback ?? []).map(() => 'sent') })),
+    screens: a.screens.map(s => ({ ...pick(s, SCREEN), feedback: (s.feedback ?? []).map(() => 'sent'), ...(s.inferred ? { inferred: pick(s.inferred, ['posted', 'from', 'changed']) } : {}) })),
     ...(a.setAside ? { setAside: pick(a.setAside, ['at', 'isNew']) } : {}),
   })),
   listening: l => ({
@@ -181,7 +184,13 @@ const forPhone = {
     desktop: Object.fromEntries(Object.entries(l.desktop ?? {}).map(([slug, d]) => [slug, pick(d, ['on', 'pending'])])),
   }),
   phone: status => pick(status, ['on', 'stuck', 'minutes']),
-  records: records => records.map(r => pick(r, ['round', 'verdict', 'notes', 'marks', 'noComment', 'olderPicture', 'sentAt', 'annotatedUrl', 'afterUrl', 'beforeUrl'])),
+  records: records => records.map(r => ({
+    ...pick(r, ['round', 'verdict', 'notes', 'marks', 'noComment', 'olderPicture', 'sentAt', 'annotatedUrl', 'afterUrl', 'beforeUrl', 'answer']),
+    ...(r.readings ? { readings: r.readings.map(forPhone.reading) } : {}),
+  })),
+  reading: x => ({ ...pick(x, ['n', 'text', 'from', 'reply']), ...(x.box ? { box: pick(x.box, ['x', 'y', 'w', 'h']) } : {}) }),
+  // The word list's name in the store, or why there is none: never where the store is.
+  words: got => pick(got, ['words', 'why', 'reading']),
   film: f => f && {
     ...pick(f, ['screen', 'mode', 'finished', 'missing', 'seconds']),
     rounds: f.rounds.map(r => ({ round: r.round, url: r.url, answer: r.answer && pick(r.answer, ['verdict', 'notes', 'marks', 'noComment']) })),
@@ -199,11 +208,12 @@ async function handle(req, res, fromPhone = false) {
   if (fromPhone ? !ownPage(req) : proxied(req) || !localHost(req) || !ownPage(req)) return json(res, 403, { error: 'Only this computer can use this.' })
   if (fromPhone && !phoneMay(req.method, url.pathname)) return json(res, 403, { error: PHONE_WORDS.atComputer })
   try {
+    // `reader`: whether this computer can read words off a picture, so the page shows the words tool only where it can work.
     if (req.method === 'GET' && url.pathname === '/api/queue') {
       const apps = listApps()
       // `remote`: asked through the phone's door, so the page offers only what a phone may do.
-      if (fromPhone) return json(res, 200, { apps: forPhone.apps(apps), listening: forPhone.listening(listening(apps)), phone: forPhone.phone(phone.status()), remote: true })
-      return json(res, 200, { apps, listening: listening(apps), phone: phone.status() })
+      if (fromPhone) return json(res, 200, { apps: forPhone.apps(apps), listening: forPhone.listening(listening(apps)), phone: forPhone.phone(phone.status()), reader: hasReader(), remote: true })
+      return json(res, 200, { apps, listening: listening(apps), reader: hasReader(), phone: phone.status() })
     }
     if (req.method === 'GET' && url.pathname === '/api/phone') return json(res, 200, fromPhone ? forPhone.phone(phone.status()) : phone.status())
     if (req.method === 'POST' && url.pathname === '/api/phone') {
@@ -224,6 +234,13 @@ async function handle(req, res, fromPhone = false) {
         if (error instanceof PhoneProblem) return json(res, 400, { error: error.message })
         throw error
       }
+    }
+    if (req.method === 'POST' && url.pathname === '/api/read-words') {
+      // A picture pushed with no word list: its words are read here, once, and the list is kept beside it. The answer comes at
+      // once, reading or not, so a read never holds one of the few connections a browser opens to a server.
+      const input = JSON.parse(await body(req))
+      const got = wordsForPicture(String(input.after ?? ''))
+      return json(res, 200, fromPhone ? forPhone.words(got) : got)
     }
     if (req.method === 'GET' && url.pathname.startsWith('/images/')) {
       const path = inside(IMAGES, decodeURIComponent(url.pathname.slice('/images/'.length)))
@@ -305,6 +322,15 @@ async function handle(req, res, fromPhone = false) {
       setAside(input.slugs.map(String), input.aside !== false)
       return json(res, 200, { ok: true })
     }
+    if (req.method === 'POST' && url.pathname === '/api/reading') {
+      const input = JSON.parse(await body(req))
+      try {
+        const reading = replyToReading({ appSlug: String(input.appSlug), id: String(input.id), answer: String(input.answer), n: Number(input.n), yes: input.yes === true, text: typeof input.text === 'string' ? input.text : '' })
+        return json(res, 200, { ok: true, reading: fromPhone ? forPhone.reading(reading) : reading })
+      } catch (error) {
+        return json(res, 400, { error: error.message })
+      }
+    }
     if (req.method === 'POST' && url.pathname === '/api/send') {
       const input = JSON.parse(await body(req))
       const png = input.png ? Buffer.from(String(input.png).replace(/^data:image\/png;base64,/, ''), 'base64') : null
@@ -374,4 +400,5 @@ process.on('exit', () => {
   phone.offSync()
   serverGone()
 })
-for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => process.exit(0))
+// Stopped (review stop, or Ctrl-C): a reader still at work stops too, rather than go on after the server.
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => void stopReading().finally(() => process.exit(0)))

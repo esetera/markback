@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { standInProxy, standInTailscale, writePicture } from './helpers.mjs'
+import { standInProxy, standInTailscale, writePicture, writeReader } from './helpers.mjs'
 
 const from = process.env.REVIEW_PLAYWRIGHT_FROM
 const skip = from ? false : 'set REVIEW_PLAYWRIGHT_FROM to a package.json that has Playwright'
@@ -44,13 +44,16 @@ after(async () => {
   for (const clean of cleanups) clean()
 })
 
-/** A store and a server for one test. */
-async function rig(more = {}) {
+/**
+ * A store and a server for one test. With no reader: a computer that cannot read words off a picture, unless a test gives
+ * a stand-in, so no test waits on the real one.
+ */
+async function rig({ reader = null, ...more } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'review-browser-'))
   const port = await freePort()
   // REVIEW_CHROME here is for driving these tests; a picture of an app is taken by the Chrome a person would have.
   // A Tailscale that is not there, unless a test gives its stand-in: the real one is never run.
-  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_CHROME: '', REVIEW_TAILSCALE: join(home, 'no-tailscale'), REVIEW_PHONE_WARM: 'off', ...more }
+  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_CHROME: '', REVIEW_TESSERACT: reader ? writeReader(join(home, 'reader.mjs'), ...reader) : join(home, 'no-reader'), REVIEW_TAILSCALE: join(home, 'no-tailscale'), REVIEW_PHONE_WARM: 'off', ...more }
   // Wide: it fills the room, and what to check is the line under the bar. `tall` leaves room beside it.
   const picture = join(home, 'p.png')
   writePicture(picture, 1600, 900)
@@ -899,6 +902,449 @@ test('coming back shows what was sent: marks on the picture, words in a small li
   await page.keyboard.press('Meta+Enter')
   await page.waitForTimeout(300)
   assert.deepEqual(read('Back').filter(r => r.screenId === 'one').map(r => r.shapes.length), [1, 1])
+  assert.deepEqual(errors, [])
+})
+
+test('what the agent read each mark to mean: a line beside each, yes or a few words back, and the session reads them', { skip }, async () => {
+  const { push, open, read, env } = await rig()
+  push('Readings', ['One', 'Two'])
+  const { page, errors } = await open('readings')
+  await draw(page, 0.1, 0.1, 0.3, 0.3)
+  await draw(page, 0.5, 0.6, 0.6, 0.7)
+  await page.keyboard.press('Meta+Enter')
+  assert.equal(await at(page), 2)
+  await waitFor(() => read('Readings').length)
+  assert.equal(await page.locator('#readings').innerHTML(), '', 'a screen with no readings looks as it did')
+  const say = (mark, text) => execFileSync('node', [join(ROOT, 'review.mjs'), 'inferred', '--app', 'Readings', '--screen', 'One', '--mark', mark, '--text', text], { env, stdio: 'ignore' })
+  say('1', 'Make the heading bigger')
+  say('2', 'Move this <b>button</b> up')
+  // On another screen, a line says they came, and Look goes there.
+  await page.locator('#toast [data-look-at]').waitFor({ timeout: 8000 })
+  assert.match(await page.locator('#toast').innerText(), /Claude said what it read on One/)
+  await page.locator('#toast [data-look-at]').click()
+  assert.equal(await at(page), 1)
+  await page.locator('.reading').nth(1).waitFor()
+  assert.deepEqual(await page.locator('.reading .rt').allInnerTexts(), ['Claude read:Make the heading bigger', 'Claude read:Move this <b>button</b> up'])
+  // Each beside its own mark: just right of it, level with its top.
+  const stage = await page.locator('#stage').boundingBox()
+  const first = await page.locator('.reading[data-reading$="|1"]').boundingBox()
+  assert.ok(Math.abs(first.x - (stage.x + stage.width * 0.3)) < 16, `${first.x} beside the first box`)
+  assert.ok(Math.abs(first.y - (stage.y + stage.height * 0.1)) < 6, `${first.y} level with its top`)
+  assert.equal(await page.locator('#toast').isVisible(), false, 'come to look, the line has gone')
+  await page.locator('.reading[data-reading$="|1"] [data-yes]').click()
+  await page.locator('.reading[data-reading$="|2"] [data-no]').click()
+  // The keys are for the words: G and N here do not answer the screen or open the notes.
+  await page.keyboard.type('Not up: bigger, and green')
+  assert.equal(await at(page), 1)
+  assert.equal(await page.locator('#notes').inputValue(), '')
+  await page.keyboard.press('Enter')
+  await page.locator('.reading.corrected').waitFor()
+  assert.match(await page.locator('.reading[data-reading$="|1"]').innerText(), /Yes/)
+  assert.match(await page.locator('.reading.corrected .rc').innerText(), /Not up: bigger, and green/)
+  const [record] = read('Readings')
+  assert.deepEqual(record.inferred.map(r => r.reply.yes ? 'yes' : r.reply.text), ['yes', 'Not up: bigger, and green'])
+  assert.equal(record.shapes.length, 2, 'what was sent is as it was')
+  // Changed again, and still there after a reload: the files hold it, not the page.
+  await page.locator('.reading.corrected [data-no]').click()
+  assert.equal(await page.locator('.reading [data-correct]').inputValue(), 'Not up: bigger, and green')
+  await page.keyboard.press('Escape')
+  await page.reload()
+  await page.locator('.reading.corrected').waitFor()
+  assert.equal(await page.locator('#readings [data-correct]').count(), 0)
+  assert.equal(await page.locator('#footActions [data-act=send]').isDisabled(), true, 'nothing new to send')
+  assert.deepEqual(errors, [])
+})
+
+/** Two marks sent on the first screen of two, and a line said for each: the page left on the second. */
+async function twoReadings({ width = 1500, height = 960, colorScheme = 'light', marks = [[0.1, 0.1, 0.3, 0.3], [0.5, 0.6, 0.6, 0.7]] } = {}) {
+  const r = await rig()
+  r.push('Lines', ['One', 'Two'])
+  const opened = await r.open('lines', { width, height, colorScheme })
+  for (const m of marks) await draw(opened.page, ...m)
+  await opened.page.keyboard.press('Meta+Enter')
+  await waitFor(() => r.read('Lines').length)
+  const say = (mark, text) => execFileSync('node', [join(ROOT, 'review.mjs'), 'inferred', '--app', 'Lines', '--screen', 'One', '--mark', mark, '--text', text], { env: r.env, stdio: 'ignore' })
+  marks.forEach((m, i) => say(String(i + 1), `Line ${i + 1}`))
+  await opened.page.keyboard.press('ArrowLeft')
+  await opened.page.locator('.reading').nth(marks.length - 1).waitFor({ timeout: 8000 })
+  return { ...r, ...opened, say }
+}
+
+test('a line said again while the person writes in its box: the words and the keyboard stay, and no key answers the screen', { skip }, async () => {
+  const { page, errors, say, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|2"] [data-no]').click()
+  await page.keyboard.type('Not up')
+  say('2', 'Line 2, said again')
+  say('1', 'Line 1, said again')
+  await page.waitForFunction(() => document.querySelector('.reading[data-reading$="|1"]')?.textContent.includes('said again'), null, { timeout: 8000 })
+  await page.waitForFunction(() => document.querySelector('.reading[data-reading$="|2"] .rt')?.textContent.includes('said again'), null, { timeout: 8000 })
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-correct]')), true, 'the box still has the keyboard')
+  await page.keyboard.type(', go bigger')
+  assert.equal(await page.locator('[data-correct]').inputValue(), 'Not up, go bigger')
+  assert.equal(await at(page), 1)
+  // The box taken away under the words by something the page could not help: a notice takes the keyboard, and holds it.
+  await page.evaluate(() => document.querySelector('[data-correct]').closest('.reading').remove())
+  await page.waitForTimeout(1600)
+  await page.keyboard.type('gn')
+  await settled(page)
+  assert.equal(await page.locator('#keptTrap').isVisible(), true)
+  assert.match(await page.locator('#keptTrap').innerText(), /Your words: “Not up, go bigger”/)
+  assert.equal(await at(page), 1, 'G did not answer the screen')
+  assert.equal(await page.locator('#notes').inputValue(), '')
+  await page.waitForTimeout(1600)
+  await page.keyboard.type('g')
+  assert.equal(await at(page), 1, 'no clock lets it go')
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('#keptTrap').isVisible(), false)
+  assert.equal(read('Lines').length, 1, 'nothing more was sent')
+  assert.deepEqual(errors, [])
+})
+
+test('a new picture while the person writes in a box: the box, its words and the keyboard stay, it says so, and Enter still sends', { skip }, async () => {
+  const { page, errors, push, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Not the')
+  await page.waitForTimeout(1600)
+  push('Lines', ['One'])
+  await page.locator('.reading.kept').waitFor({ timeout: 8000 })
+  await page.waitForTimeout(1600)
+  await page.keyboard.type(' footer, go fbm')
+  await settled(page)
+  assert.match(await page.locator('.reading.kept').innerText(), /A new picture came\. Your words are kept/)
+  assert.equal(await page.locator('.reading.kept [data-correct]').inputValue(), 'Not the footer, go fbm')
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('.kept [data-correct]')), true)
+  assert.equal(await at(page), 1)
+  assert.equal(await page.evaluate(() => !!document.fullscreenElement), false, 'F made nothing full screen')
+  assert.equal(await page.locator('.tool.on[data-tool]').getAttribute('data-tool'), 'box', 'no tool was picked')
+  assert.deepEqual(read('Lines').map(r => r.round), [1], 'the new picture was not answered')
+  await page.keyboard.press('Enter')
+  await page.locator('.reading.kept').waitFor({ state: 'detached' })
+  await waitFor(() => read('Lines')[0].inferred[0].reply?.text === 'Not the footer, go fbm')
+  assert.deepEqual(errors, [])
+})
+
+test('Esc closes the box, and a G straight after is a Looks good; words typed in the notes while a box is open land there', { skip }, async () => {
+  const { page, errors } = await twoReadings()
+  await page.locator('.reading[data-reading$="|2"] [data-no]').click()
+  await page.keyboard.type('The footer')
+  // The notes, chosen by a press: typing there is words, never the page's keys, and the box stays open with its own.
+  await page.locator('#notes').click()
+  const sentence = 'Also make the whole page lighter please, it is far too dark'
+  await page.keyboard.type(sentence, { delay: 20 })
+  assert.equal(await page.locator('#notes').inputValue(), sentence)
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'The footer')
+  await page.locator('#notes').fill('')
+  await page.locator('[data-correct]').focus()
+  await page.keyboard.press('Escape')
+  // This screen was answered with marks: a Looks good on it asks first, so the question coming up is G at work.
+  await page.keyboard.press('g')
+  await page.locator('#confirmModal').waitFor()
+  assert.match(await page.locator('#confirmTitle').innerText(), /good/i)
+  assert.deepEqual(errors, [])
+})
+
+test('one box at a time: while it is open the other lines wait, and once it is sent they can be pressed', { skip }, async () => {
+  const { page, errors, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|2"] [data-no]').click()
+  await page.keyboard.type('half a corr')
+  await page.locator('.reading[data-reading$="|1"] [data-yes]').click({ timeout: 500 }).then(() => assert.fail('it could be pressed'), () => undefined)
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'half a corr')
+  assert.equal(read('Lines')[0].inferred[0].reply ?? null, null)
+  await page.locator('.reading.open [data-send]').click()
+  await page.locator('.reading.open').waitFor({ state: 'detached' })
+  await page.locator('.reading[data-reading$="|1"] [data-yes]').click()
+  await waitFor(() => read('Lines')[0].inferred[0].reply?.yes && read('Lines')[0].inferred[1].reply?.text === 'half a corr')
+  assert.deepEqual(errors, [])
+})
+
+/** Each line on show: its buttons can be pressed where they are (nothing over them, inside the window), and no two lines overlap. */
+const linesReachable = page => page.evaluate(() => {
+  const cards = [...document.querySelectorAll('.reading')].filter(c => c.getClientRects().length).map(c => {
+    const b = c.getBoundingClientRect()
+    const pressable = [...c.querySelectorAll('button')].every(x => {
+      const k = x.getBoundingClientRect()
+      const hit = document.elementFromPoint(k.left + k.width / 2, k.top + k.height / 2)
+      // A row of the list scrolled out of its box is not on show: it is reached by scrolling the list.
+      const list = c.closest('.list')?.getBoundingClientRect()
+      const middle = k.top + k.height / 2
+      if (list && (middle < list.top || middle > list.bottom)) return true
+      return k.left >= 0 && k.right <= innerWidth && (hit === x || x.contains(hit))
+    })
+    return { n: c.querySelector('.rn').textContent, l: b.left, r: b.right, t: b.top, b: b.bottom, pressable }
+  })
+  const overlaps = []
+  for (const [i, a] of cards.entries()) for (const z of cards.slice(i + 1)) if (a.l < z.r - 1 && a.r > z.l + 1 && a.t < z.b - 1 && a.b > z.t + 1) overlaps.push(`${a.n}/${z.n}`)
+  return { shown: cards.length, unpressable: cards.filter(c => !c.pressable).map(c => c.n), overlaps }
+})
+const TEN = [[0, 0, 0.08, 0.06], [0.92, 0, 1, 0.06], [0, 0.94, 0.08, 1], [0.92, 0.94, 1, 1], [0.02, 0.45, 0.98, 0.55], [0.4, 0.3, 0.45, 0.33], [0.41, 0.31, 0.46, 0.34], [0.42, 0.32, 0.47, 0.35], [0.43, 0.33, 0.48, 0.36], [0.44, 0.34, 0.49, 0.37]]
+
+for (const [width, height, colorScheme] of [[1500, 960, 'light'], [520, 800, 'dark'], [380, 760, 'light']]) {
+  test(`ten lines at ${width} wide, ${colorScheme}: every line on show can be pressed, none overlap, fitted and zoomed in`, { skip }, async () => {
+    const { page, errors } = await twoReadings({ width, height, colorScheme, marks: TEN })
+    const fitted = await linesReachable(page)
+    assert.ok(fitted.shown > 0)
+    assert.deepEqual([fitted.unpressable, fitted.overlaps], [[], []], 'fitted')
+    if (width < 560) assert.equal(await page.locator('#readings.list').count(), 1, 'a narrow window lists them under the picture')
+    for (let i = 0; i < 3; i++) await page.keyboard.press('=')
+    await page.locator('#scroller').evaluate(e => {
+      e.scrollTop = e.scrollHeight
+      e.scrollLeft = e.scrollWidth
+    })
+    await settled(page)
+    await page.waitForTimeout(100)
+    const zoomed = await linesReachable(page)
+    assert.deepEqual([zoomed.unpressable, zoomed.overlaps], [[], []], 'zoomed in and scrolled')
+    assert.deepEqual(errors, [])
+  })
+}
+
+test('a line whose mark is out of view is not pulled in: a marker says how many, and a press goes there', { skip }, async () => {
+  const { page, errors } = await twoReadings({ marks: [[0.1, 0.05, 0.2, 0.1], [0.1, 0.9, 0.2, 0.95]] })
+  for (let i = 0; i < 4; i++) await page.keyboard.press('=')
+  await page.locator('#scroller').evaluate(e => {
+    e.scrollTop = 0
+    e.scrollLeft = 0
+  })
+  await page.locator('[data-more-lines=below]').waitFor()
+  assert.match(await page.locator('[data-more-lines=below]').innerText(), /1 more line below/)
+  assert.equal(await page.locator('.reading[data-reading$="|2"]').isVisible(), false)
+  await page.locator('[data-more-lines=below]').click()
+  await page.locator('.reading[data-reading$="|2"]').waitFor()
+  // Pointing at a line lights its mark.
+  await page.locator('.reading[data-reading$="|2"]').hover()
+  assert.equal(await page.locator('#readingSpot').isVisible(), true)
+  assert.deepEqual(errors, [])
+})
+
+test('while a box is open the page\'s keys are off wherever the keyboard is: Tab stays in the card, words typed on its buttons go into the box', { skip }, async () => {
+  const { page, errors, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Not the')
+  assert.equal(await page.locator('.reading[data-reading$="|2"]').evaluate(el => el.inert), true, 'the other line cannot be pressed')
+  await page.keyboard.press('Tab')
+  assert.equal(await page.evaluate(() => !!document.activeElement.closest('.reading.open')), true, 'Tab stays in the card')
+  await page.keyboard.type(' footer, go')
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'Not the footer, go')
+  assert.equal(await page.evaluate(() => !!document.fullscreenElement), false)
+  assert.equal(await page.locator('.tool.on[data-tool]').getAttribute('data-tool'), 'box')
+  assert.equal(await page.locator('#confirmModal').isVisible(), false)
+  // A key on a control outside the card does nothing, and Tab from there goes back into the box.
+  await page.locator('#menuOpen').focus()
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Space')
+  await page.keyboard.press('g')
+  assert.equal(await page.locator('#menu').isVisible(), false, 'New project and the rest of the menu cannot be opened by key')
+  await page.keyboard.press('Tab')
+  assert.equal(await page.evaluate(() => document.activeElement.matches('.reading.open [data-correct]')), true)
+  // A late Go there does nothing while the box is open.
+  await page.evaluate(() => {
+    const t = document.getElementById('toast')
+    t.innerHTML = '<button class="link" data-toast-go="lines/two">Go there</button>'
+    t.hidden = false
+  })
+  await page.locator('[data-toast-go]').click()
+  assert.equal(await at(page), 1)
+  await page.locator('.reading.open [data-correct]').focus()
+  await page.keyboard.press('Enter')
+  await page.locator('.reading.open').waitFor({ state: 'detached' })
+  const [record] = read('Lines')
+  assert.deepEqual(record.inferred.map(r => r.reply?.text ?? r.reply?.yes ?? null), ['Not the footer, go', null], 'nothing was said on line 2')
+  assert.equal(read('Lines').length, 1, 'the screen was not answered')
+  // Box closed: G is G again, at once.
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('g')
+  await waitFor(() => read('Lines').some(r => r.screen === 'Two' && r.verdict === 'approved'))
+  assert.deepEqual(errors, [])
+})
+
+test('letters from an input method and pasted words go into the box, and nothing reaches the page\'s keys', { skip }, async () => {
+  const { page, errors, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Input.imeSetComposition', { text: 'g', selectionStart: 1, selectionEnd: 1 })
+  // Enter while letters are still being put together ends the word, not the box.
+  await page.locator('[data-correct]').dispatchEvent('keydown', { key: 'Enter', isComposing: true, keyCode: 229 })
+  await cdp.send('Input.insertText', { text: '日本語' })
+  await page.keyboard.insertText(' and pasted words')
+  await page.locator('[data-correct]').dispatchEvent('paste')
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), '日本語 and pasted words')
+  assert.equal(await at(page), 1)
+  assert.equal(await page.locator('#confirmModal').isVisible(), false)
+  assert.equal(read('Lines')[0].inferred[0].reply ?? null, null, 'nothing was sent')
+  assert.deepEqual(errors, [])
+})
+
+test('words that do not reach the server stay in their box, which says so, and Enter tries again', { skip }, async () => {
+  const { page, read } = await twoReadings()
+  await page.route('**/api/reading', route => route.abort())
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('The other button')
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() => /Not sent/.test(document.querySelector('.reading.open .rx')?.textContent ?? ''))
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'The other button')
+  await page.unroute('**/api/reading')
+  await page.locator('.reading.open [data-correct]').focus()
+  await page.keyboard.press('Enter')
+  await page.locator('.reading.open').waitFor({ state: 'detached' })
+  await waitFor(() => read('Lines')[0].inferred[0].reply?.text === 'The other button')
+})
+
+test('a kept box says where its words went once they are saved', { skip }, async () => {
+  const { page, push, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Not that')
+  push('Lines', ['One'])
+  await page.locator('.reading.kept').waitFor({ timeout: 8000 })
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() => /Sent, about the earlier picture \(round 1\)\./.test(document.getElementById('toast').textContent))
+  await waitFor(() => read('Lines')[0].inferred[0].reply?.text === 'Not that')
+})
+
+test('a review cleared while a box is open: the box stays, with its words, and says the review was cleared', { skip }, async () => {
+  const { page, push, clear } = await twoReadings()
+  // Another review, so a screen is left to show once this one is cleared.
+  push('Else', ['Here'])
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Bigger')
+  clear('Lines')
+  await page.locator('.reading.kept').waitFor({ timeout: 8000 })
+  assert.match(await page.locator('.reading.kept').innerText(), /This review was cleared\. Your words are kept/)
+  assert.equal(await page.locator('.reading.kept [data-correct]').inputValue(), 'Bigger')
+})
+
+test('in a narrow window the lines fold into a bar under the picture: marks at the bottom can be seen and drawn on, and each line reached', { skip }, async () => {
+  const marks = [[0.05, 0.05, 0.2, 0.15], [0.3, 0.3, 0.4, 0.4], [0.5, 0.5, 0.6, 0.6], [0.05, 0.85, 0.25, 0.98], [0.75, 0.85, 0.95, 0.98]]
+  const { page, errors, read } = await twoReadings({ width: 380, height: 600, marks })
+  await page.locator('#readingsBar').waitFor()
+  assert.match(await page.locator('#readingsBar').innerText(), /5 readings/)
+  // Drawing folds it; the bar has its own room, so the whole picture is above it, the bottom edge too.
+  await draw(page, 0.6, 0.1, 0.8, 0.2)
+  assert.equal(await page.locator('#readings').isVisible(), false)
+  await draw(page, 0.4, 0.88, 0.6, 0.97)
+  const stage = await page.locator('#stage').boundingBox()
+  const bar = await page.locator('#readingsBar').boundingBox()
+  assert.ok(stage.y + stage.height <= bar.y + 1, `${JSON.stringify(stage)} above ${JSON.stringify(bar)}`)
+  assert.equal((await saved(page, 'lines', 'one'))?.marks?.length, 2, 'a mark at the bottom edge was drawn')
+  // Open again: every line can be pressed, and the sheet never covers the Send bar.
+  await page.locator('[data-fold-readings]').click()
+  for (let i = 1; i <= 5; i++) await page.locator(`.reading[data-reading$="|${i}"] [data-yes]`).click()
+  const list = await page.locator('#readings').boundingBox()
+  const foot = await page.locator('#foot').boundingBox()
+  assert.ok(list.y + list.height <= foot.y, 'the Send bar stays clear')
+  await waitFor(() => read('Lines')[0].inferred.every(r => r.reply?.yes))
+  assert.deepEqual(errors, [])
+})
+
+test('with a box open, New project and the film wait for the words, by mouse and by key', { skip }, async () => {
+  const { page, errors } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Not that')
+  await page.locator('#menuOpen').click()
+  await page.getByRole('menuitem', { name: 'New project' }).click()
+  assert.equal(await page.locator('#newModal').isVisible(), false)
+  assert.match(await page.locator('#toast').innerText(), /Send or cancel your words first/)
+  assert.equal(await page.evaluate(() => document.activeElement.matches('.reading.open [data-correct]')), true, 'the keyboard is back in the box')
+  await page.locator('#menuOpen').click()
+  await page.getByRole('menuitem', { name: /The film of this screen/ }).click()
+  assert.equal(await page.locator('#film').isVisible(), false)
+  await page.locator('#notes').click()
+  await page.keyboard.press('r')
+  assert.equal(await page.locator('#film').isVisible(), false, 'R typed elsewhere opens no film')
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'Not that')
+  assert.deepEqual(errors, [])
+})
+
+test('Esc from outside the box brings the keyboard back to it; Cancel or Esc with words says so, and Undo brings them back', { skip }, async () => {
+  const { page, errors } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Keep me')
+  await page.locator('#notes').click()
+  await page.keyboard.press('Escape')
+  assert.equal(await page.evaluate(() => document.activeElement.matches('.reading.open [data-correct]')), true, 'one stray Esc only moved the keyboard')
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'Keep me')
+  await page.keyboard.press('Escape')
+  await page.locator('.reading.open').waitFor({ state: 'detached' })
+  assert.match(await page.locator('#toast').innerText(), /Words dropped/)
+  await page.locator('#toast [data-undo-words]').click()
+  await page.locator('.reading.open').waitFor()
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'Keep me')
+  // Enter on Cancel is the same: the words can come back.
+  await page.locator('.reading.open [data-cancel]').focus()
+  await page.keyboard.press('Enter')
+  await page.locator('#toast [data-undo-words]').click()
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'Keep me')
+  // An empty box cancels quietly.
+  await page.locator('.reading.open [data-correct]').fill('')
+  await page.keyboard.press('Escape')
+  await page.locator('.reading.open').waitFor({ state: 'detached' })
+  assert.equal(await page.locator('#toast [data-undo-words]').isVisible(), false)
+  assert.deepEqual(errors, [])
+})
+
+test('leaving with words in a box asks first, and a reload brings the box back open with them', { skip }, async () => {
+  const { page, errors } = await twoReadings()
+  await page.locator('.reading[data-reading$="|2"] [data-no]').click()
+  await page.keyboard.type('Not up, bigger')
+  const asked = []
+  page.on('dialog', dialog => {
+    asked.push(dialog.type())
+    void dialog.accept()
+  })
+  await page.reload()
+  assert.deepEqual(asked, ['beforeunload'])
+  await page.locator('.reading.open [data-correct]').waitFor({ timeout: 8000 })
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'Not up, bigger')
+  assert.equal(await page.locator('.reading.open').getAttribute('data-reading').then(k => k.endsWith('|2')), true)
+  assert.deepEqual(errors, [])
+})
+
+test('a review cleared with no other left: the kept box stands on the empty page, with its words and the keyboard', { skip }, async () => {
+  const { page, clear } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Bigger')
+  clear('Lines')
+  await page.locator('#keptAlone .reading.kept').waitFor({ timeout: 8000 })
+  assert.match(await page.locator('#keptAlone').innerText(), /This review was cleared\. Your words are kept/)
+  assert.equal(await page.evaluate(() => document.activeElement.matches('#keptAlone [data-correct]')), true)
+  await page.keyboard.type(' still')
+  assert.equal(await page.locator('#keptAlone [data-correct]').inputValue(), 'Bigger still')
+  assert.equal(await page.locator('#keptTrap').isVisible(), false)
+})
+
+test('a line that comes while the film is up does not take the keyboard from it', { skip }, async () => {
+  const { page, errors, say } = await twoReadings()
+  await page.keyboard.press('r')
+  await page.locator('#film').waitFor()
+  const before = await page.evaluate(() => !!document.activeElement.closest('#film'))
+  say('1', 'Said while the film plays')
+  await page.waitForTimeout(3500)
+  assert.equal(await page.evaluate(() => !!document.activeElement.closest('#film')), before)
+  assert.equal(await page.locator('#film').isVisible(), true)
+  assert.deepEqual(errors, [])
+})
+
+test('two answers on one picture each with a mark 1: the older one\'s line says earlier 1', { skip }, async () => {
+  const { page, errors, read, env } = await twoReadings({ marks: [[0.1, 0.1, 0.3, 0.3]] })
+  await draw(page, 0.5, 0.6, 0.6, 0.7)
+  await page.keyboard.press('Meta+Enter')
+  const [first, second] = await waitFor(() => read('Lines').length === 2 && read('Lines'))
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'inferred', '--app', 'Lines', '--screen', 'One', '--answer', second.answer, '--mark', '1', '--text', 'The newer one'], { env, stdio: 'ignore' })
+  assert.ok(first.answer)
+  await page.keyboard.press('ArrowLeft')
+  await page.waitForFunction(() => document.querySelectorAll('.reading').length === 2, null, { timeout: 8000 })
+  assert.deepEqual((await page.locator('.reading .rn').allInnerTexts()).sort(), ['1', 'earlier 1'])
+  assert.deepEqual(errors, [])
+})
+
+test('the line that says readings came waits while another is up, and is said after', { skip }, async () => {
+  const { page, errors, say, push } = await twoReadings()
+  await page.keyboard.press('ArrowRight')
+  await settled(page)
+  say('1', 'Said again')
+  push('Lines', ['Three'])
+  await page.waitForFunction(() => /New: Three/.test(document.getElementById('toast').textContent), null, { timeout: 8000 })
+  await page.waitForFunction(() => document.querySelector('#toast [data-look-at]'), null, { timeout: 12000 })
+  assert.match(await page.locator('#toast').innerText(), /Claude said what it read on One/)
   assert.deepEqual(errors, [])
 })
 
@@ -2179,7 +2625,7 @@ test('something new to review: the tab counts it, the page says it, and from beh
   assert.deepEqual(errors, [])
 })
 
-test('select the words themselves: where a picture has a word list, the words tool marks words, and they go as what they say', { skip }, async () => {
+test('select the words themselves: where a picture has a word list, the words tool marks words, and they go as what they say, with no reader here too', { skip }, async () => {
   const { readFileSync, writeFileSync } = await import('node:fs')
   const r = await rig()
   r.push('Words', ['With', 'Without'], null)
@@ -2221,9 +2667,10 @@ test('select the words themselves: where a picture has a word list, the words to
   assert.deepEqual([sent.shapes[0].type, sent.shapes[0].text, sent.shapes[0].colour], ['words', 'work day Saturday 14', 'red'])
   assert.deepEqual(sent.shapes[0].box, { x: 200, y: 100, w: 620, h: 100 })
   assert.ok(sent.annotatedImage, 'the marked picture is made, with the words tinted')
-  // The next picture has no list: the same tool draws a box, and says so on its button.
+  // The next picture has no list, and this computer cannot read one: the tool is not there, and a box stands in for it.
   await page.waitForFunction(() => /Without/.test(document.getElementById('crumbs').innerText))
-  assert.equal(await page.locator('#toolButtons [data-tool=words]').evaluate(el => el.classList.contains('unlit')), true)
+  assert.equal(await page.locator('#toolButtons [data-tool=words]').count(), 0)
+  assert.equal(await page.locator('#toolButtons [data-tool=box]').evaluate(el => el.classList.contains('on')), true)
   const d = await page.locator('#canvas').boundingBox()
   await page.mouse.move(d.x + 100, d.y + 100)
   await page.mouse.down()
@@ -2534,6 +2981,109 @@ test('no sideways scroll at any width, open to a phone or not, and a phone held 
   await page.locator('#toolButtons [data-tool=box]').tap()
   await finger(page, [0.2, 0.2], [0.4, 0.4], [0.6, 0.6])
   assert.deepEqual((await saved(page, 'a-rather-long-app-name-here', 'home')).marks.map(m => m.tool), ['box'])
+})
+
+test('a drag along one row takes that row, and a drag down a card stays in the card, whatever order the list is in', { skip }, async () => {
+  const { readFileSync, writeFileSync } = await import('node:fs')
+  const r = await rig()
+  r.push('Order', ['Table'], null)
+  // A dense table, its list a column at a time, as a reader can get it wrong; and two cards beside it whose lines are listed
+  // in among each other.
+  const cells = [['Ana', 'Editor', 'Active'], ['Ben', 'Author', 'Invited'], ['Chen', 'Admin', 'Paused']]
+  const table = [0, 1, 2].flatMap(c => cells.map((row, r) => ({ t: row[c], x: 100 + c * 200, y: 100 + r * 24, w: 120, h: 20 })))
+  const card = (x, lines) => lines.map((t, n) => ({ t, x, y: 400 + n * 22, w: 200, h: 20 }))
+  const left = card(100, ['Starter', 'Free', 'Three'])
+  const right = card(600, ['Team', 'Paid', 'Many'])
+  const list = { size: { w: 1600, h: 900 }, words: [...table, ...left.flatMap((w, n) => [w, right[n]])] }
+  writeFileSync(join(r.home, 'images', 'order', 'table-words-1.json'), JSON.stringify(list))
+  const entry = join(r.home, 'queue', 'order', 'table.json')
+  writeFileSync(entry, JSON.stringify({ ...JSON.parse(readFileSync(entry, 'utf8')), words: 'order/table-words-1.json' }))
+  const { page, errors } = await r.open('order')
+  await page.keyboard.press('e')
+  await page.waitForFunction(() => !document.querySelector('#toolButtons [data-tool=words]').classList.contains('unlit'))
+  const c = await page.locator('#canvas').boundingBox()
+  const k = c.width / 1600
+  const drag = async (x1, y1, x2, y2) => {
+    await page.mouse.move(c.x + x1 * k, c.y + y1 * k)
+    await page.mouse.down()
+    await page.mouse.move(c.x + x2 * k, c.y + y2 * k, { steps: 4 })
+    await page.mouse.up()
+    await settled(page)
+  }
+  // Along the middle row, from Ben to Invited.
+  await drag(150, 134, 550, 134)
+  // Down the left card, from Free to Three.
+  await drag(150, 432, 150, 454)
+  assert.deepEqual((await saved(page, 'order', 'table')).marks.map(m => m.text), ['Ben Author Invited', 'Free Three'])
+  assert.deepEqual(errors, [])
+})
+
+test('with nothing to read words with, a picture without a list has no words tool, and E does nothing there', { skip }, async () => {
+  const r = await rig()
+  r.push('Bare', ['One'], null)
+  const { page, errors } = await r.open('bare')
+  assert.equal(await page.locator('#toolButtons [data-tool=box]').count(), 1)
+  assert.equal(await page.locator('#toolButtons [data-tool=words]').count(), 0)
+  await page.keyboard.press('a')
+  await page.keyboard.press('e')
+  await settled(page)
+  assert.equal(await page.locator('#toolButtons [data-tool=arrow]').evaluate(el => el.classList.contains('on')), true, 'E leaves the tool as it was')
+  assert.equal(await page.locator('#toolButtons [data-tool=words]').count(), 0)
+  assert.deepEqual(errors, [])
+})
+
+test('a bare picture gets its words read on this computer: the tool says it is reading, then E snaps to the words', { skip }, async () => {
+  // Two lines of three words, as a reader finds them in a picture 1600 by 900, given in the reader's own jumbled order.
+  const line = (y, words) => words.map((t, n) => ({ t, x: 200 + n * 220, y, w: 180, h: 40 }))
+  const r = await rig({ reader: [{ w: 1600, h: 900 }, [...line(160, ['Saturday', '14', 'March']), ...line(100, ['First', 'work', 'day'])], { wait: 1500 }] })
+  r.push('Read', ['Shot'], null)
+  const { page, errors } = await r.open('read')
+  await page.keyboard.press('e')
+  // Shown while the words are read, saying so.
+  const button = page.locator('#toolButtons [data-tool=words]')
+  await button.waitFor()
+  assert.match(await button.getAttribute('data-tip'), /Reading the words/)
+  await page.waitForFunction(() => !document.querySelector('#toolButtons [data-tool=words]').classList.contains('unlit'), null, { timeout: 8000 })
+  assert.equal(await button.getAttribute('data-tip'), 'Select the words themselves')
+  const c = await page.locator('#canvas').boundingBox()
+  const k = c.width / 1600
+  const to = (x, y) => [c.x + x * k, c.y + y * k]
+  // From "work" on the first line to "14" on the second: everything between, in lines.
+  await page.mouse.move(...to(510, 120))
+  await page.mouse.down()
+  await page.mouse.move(...to(510, 180), { steps: 4 })
+  await page.mouse.up()
+  await settled(page)
+  assert.equal((await saved(page, 'read', 'shot')).marks[0].text, 'work day Saturday 14')
+  // A box drawn too carries the words read, and the agent is told they were read.
+  await page.keyboard.press('b')
+  await draw(page, 180 / 1600, 90 / 900, 1000 / 1600, 150 / 900)
+  await page.keyboard.press('Meta+Enter')
+  const sent = await waitFor(() => r.read('Read')[0])
+  assert.deepEqual(sent.shapes.map(x => x.words ?? x.text), ['work day Saturday 14', 'First work day'])
+  assert.equal(sent.wordsRead, true)
+  assert.deepEqual(errors, [])
+})
+
+test('a slow reader never slows the review: through ten bare screens, the picture on show comes and marks go at once', { skip }, async () => {
+  // Each read takes four seconds: ten of them would hold every connection the browser has, if asking waited on them.
+  const r = await rig({ reader: [{ w: 1600, h: 900 }, [{ t: 'Hello', x: 100, y: 100, w: 100, h: 30 }], { wait: 4000 }] })
+  const shots = Array.from({ length: 10 }, (_, n) => `S${n}`)
+  r.push('Slow', shots, null)
+  const { page, errors } = await r.open('slow')
+  for (let n = 1; n < shots.length; n++) {
+    await page.keyboard.press('ArrowRight')
+    // Each picture shows as soon as it is the one on show.
+    await page.waitForFunction(id => document.getElementById('afterImg').src.includes(`/${id}-after-`), `s${n}`, { timeout: 1500 })
+  }
+  const started = Date.now()
+  await page.keyboard.press('b')
+  await draw(page, 0.2, 0.2, 0.4, 0.4)
+  await page.keyboard.press('Meta+Enter')
+  const sent = await waitFor(() => r.read('Slow').find(x => x.screenId === 's9'))
+  assert.ok(Date.now() - started < 2500, `sent after ${Date.now() - started} ms`)
+  assert.equal(sent.shapes[0].type, 'box')
+  assert.deepEqual(errors, [])
 })
 
 /* ---------- the film of one screen ---------- */
@@ -2914,6 +3464,49 @@ test('on a phone through Tailscale, the film of a screen plays, and cannot be sa
     // Asked for anyway, the file is refused at the door's list: ffmpeg never runs for a phone.
     assert.equal(await page.evaluate(async () => (await fetch('/api/film/file?app=film&id=home')).status), 403)
     assert.equal(await page.evaluate(async () => (await fetch('/api/film?app=film&id=home')).status), 200)
+    assert.deepEqual(errors, [])
+  } finally {
+    await far.close()
+  }
+})
+
+test('on a phone through Tailscale, what the agent read each mark to mean is shown on the screen, and Yes or a few words back are kept', { skip }, async () => {
+  const tail = standInTailscale(mkdtempSync(join(tmpdir(), 'review-tailscale-')))
+  const r = await rig({ REVIEW_TAILSCALE: tail.program })
+  r.push('Readings', ['One', 'Two'], null)
+  await answerAs(r, 'readings', 'one', { marks: 2 })
+  for (const [mark, text] of [['1', 'Make the heading bigger'], ['2', 'Move this button up']]) execFileSync('node', [join(ROOT, 'review.mjs'), 'inferred', '--app', 'Readings', '--screen', 'One', '--mark', mark, '--text', text], { env: r.env, stdio: 'ignore' })
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, stdio: 'ignore' })
+  const proxy = await standInProxy(tail, 'my-mac.example.ts.net:443')
+  cleanups.push(proxy.close)
+  const at = `http://my-mac.example.ts.net:${proxy.port}`
+  const far = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--host-resolver-rules=MAP my-mac.example.ts.net 127.0.0.1', `--unsafely-treat-insecure-origin-as-secure=${at}`] })
+  try {
+    const page = await (await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })).newPage()
+    const errors = []
+    page.on('pageerror', e => errors.push(e.message))
+    await page.goto(`${at}/?undo=40#readings/one`)
+    await page.locator('.reading').nth(1).waitFor()
+    assert.deepEqual(await page.locator('.reading .rt').allInnerTexts(), ['Claude read:Make the heading bigger', 'Claude read:Move this button up'])
+    for (const box of await page.locator('.reading').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) {
+      assert.ok(box.left >= 0 && box.right <= 390 && box.top >= 0 && box.bottom <= 844, `each reading is on the screen: ${JSON.stringify(box)}`)
+    }
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390)
+    // The bar's sign of whether an agent hears is a finger wide, and covers nothing.
+    const sign = await page.locator('#heardSign').boundingBox()
+    const count = await page.locator('#overall').boundingBox()
+    assert.ok(!sign || sign.x >= count.x + count.width - 1 || sign.x + sign.width <= count.x + 1, `the sign beside the count: ${JSON.stringify([sign, count])}`)
+    // Under the picture, above the buttons: the list opens upwards over the picture.
+    const bar = await page.locator('#readingsBar').boundingBox()
+    assert.ok(bar.y > (await page.locator('#canvas').boundingBox()).y && bar.y + bar.height <= (await page.locator('#foot').boundingBox()).y + 1)
+    await page.screenshot({ path: process.env.REVIEW_SHOTS ? join(process.env.REVIEW_SHOTS, 'phone-readings.png') : join(r.home, 'readings.png') })
+    await page.locator('.reading[data-reading$="|1"] [data-yes]').tap()
+    await page.locator('.reading[data-reading$="|2"] [data-no]').tap()
+    await page.locator('.reading[data-reading$="|2"] [data-correct]').fill('The button, not the link')
+    await page.locator('.reading[data-reading$="|2"] [data-send]').tap()
+    await page.locator('.reading[data-reading$="|2"].corrected').waitFor()
+    const said = execFileSync('node', [join(ROOT, 'review.mjs'), 'read', '--app', 'Readings', '--latest'], { env: r.env, encoding: 'utf8' })
+    assert.match(said, /The button, not the link/)
     assert.deepEqual(errors, [])
   } finally {
     await far.close()

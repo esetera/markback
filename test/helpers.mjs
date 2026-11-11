@@ -110,3 +110,14 @@ export async function standInProxy(tail, name) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   return { port: server.address().port, close: () => server.close() }
 }
+
+/**
+ * A stand-in for tesseract, for REVIEW_TESSERACT: it prints, as tesseract's TSV, the words it is given, as though it had read
+ * them off a picture of this size. `wait` is how long it takes, in milliseconds. A word with `sure` below 30 is a poor guess.
+ */
+export function writeReader(path, size, words, { wait = 0 } = {}) {
+  const head = 'level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext'
+  const rows = [head, `1\t1\t0\t0\t0\t0\t0\t0\t${size.w}\t${size.h}\t-1\t`, ...words.map((w, n) => `4\t1\t1\t1\t${n + 1}\t0\t${w.x}\t${w.y}\t${w.w}\t${w.h}\t-1\t\n5\t1\t1\t1\t${n + 1}\t1\t${w.x}\t${w.y}\t${w.w}\t${w.h}\t${w.sure ?? 96}\t${w.t}`)]
+  writeFileSync(path, `#!/usr/bin/env node\nsetTimeout(() => process.stdout.write(${JSON.stringify(`${rows.join('\n')}\n`)}), ${wait})\n`, { mode: 0o755 })
+  return path
+}

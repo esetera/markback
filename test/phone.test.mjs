@@ -68,7 +68,8 @@ async function startServer(env) {
 /** A store, a stand-in Tailscale and, unless `page` is false, a running review page. */
 async function rig({ page = true, tailscale = {}, env: more = {}, home = mkdtempSync(join(work, 'home-')), tail = standInTailscale(mkdtempSync(join(work, 'tailscale-')), tailscale) } = {}) {
   const port = await freePort()
-  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_TAILSCALE: tail.program, REVIEW_PHONE_WARM: 'off', ...more }
+  // No reader of words, unless a test gives one: no test waits on the computer's own.
+  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_TAILSCALE: tail.program, REVIEW_PHONE_WARM: 'off', REVIEW_TESSERACT: join(home, 'no-reader'), ...more }
   const review = (...words) => {
     const ran = spawnSync('node', [CLI, ...words], { env, encoding: 'utf8' })
     return { code: ran.status, out: ran.stdout, err: ran.stderr }
@@ -270,6 +271,7 @@ test('a phone is sent nothing of this computer: no path, no folder, no wake comm
     queue: await r.ask('/api/queue'),
     send: await r.ask('/api/send', { method: 'POST', headers: { origin }, body: answer }),
     queueAfter: await r.ask('/api/queue'),
+    readWords: await r.ask('/api/read-words', { method: 'POST', headers: { origin }, body: { after: home.after } }),
     history: await r.ask('/api/history?app=leak&id=home'),
     film: await r.ask('/api/film?app=leak&id=home'),
     phone: await r.ask('/api/phone'),
@@ -288,6 +290,61 @@ test('a phone is sent nothing of this computer: no path, no folder, no wake comm
   assert.deepEqual(sent.apps[0].screens.map(x => x.status).sort(), ['sent', 'waiting'])
   assert.ok(sent.listening.unheard.marks >= 1)
   assert.equal(JSON.parse(replies.history.text).records[0].verdict, 'changes')
+})
+
+test('on a phone, what the agent read a mark to mean is shown and answered, and the answer is kept as any other', async () => {
+  const r = await rig()
+  const picture = join(r.home, 'shot.png')
+  writePicture(picture, 800, 500)
+  r.review('push', '--app', 'Read', '--screen', 'Home', '--after', picture)
+  r.review('phone', 'on')
+  const origin = `https://${NAME}`
+  const home = JSON.parse((await r.local('/api/queue')).text).apps[0].screens[0]
+  assert.equal((await r.ask('/api/send', { method: 'POST', headers: { origin }, body: { appSlug: 'read', id: 'home', after: home.after, round: home.round, verdict: 'changes', notes: '', shapes: [{ type: 'box', colour: 'red', box: { x: 10, y: 20, w: 30, h: 40 } }], imageSize: { w: 800, h: 500 }, png: null } })).status, 200)
+  assert.equal(r.review('inferred', '--app', 'Read', '--screen', 'Home', '--mark', '1', '--text', 'Make the title bigger').code, 0)
+  // The phone hears of it with the queue, and sees it beside the mark.
+  const queue = JSON.parse((await r.ask('/api/queue')).text)
+  assert.ok(queue.apps[0].screens[0].inferred.posted)
+  const record = JSON.parse((await r.ask('/api/history?app=read&id=home')).text).records[0]
+  assert.deepEqual(record.readings.map(x => [x.n, x.text, x.box]), [[1, 'Make the title bigger', { x: 10, y: 20, w: 30, h: 40 }]])
+  // Answered from the phone: kept, and the computer's page and review read see it.
+  const said = await r.ask('/api/reading', { method: 'POST', headers: { origin }, body: { appSlug: 'read', id: 'home', answer: record.answer, n: 1, text: 'No, the subtitle' } })
+  assert.equal(said.status, 200, said.text)
+  assert.equal(JSON.parse(said.text).reading.reply.text, 'No, the subtitle')
+  const atComputer = JSON.parse((await r.local('/api/history?app=read&id=home')).text).records[0]
+  assert.equal(atComputer.readings[0].reply.text, 'No, the subtitle')
+  assert.match(r.review('read', '--app', 'Read', '--latest').out, /No, the subtitle/)
+})
+
+test('on a phone, the words tool may ask for a stored picture\'s words, and nothing else: no path, no unbounded work', async () => {
+  const { readFileSync, writeFileSync } = await import('node:fs')
+  // A stand-in reader that writes down each time it is run, slowly, so a burst would pile up if nothing held it back.
+  const dir = mkdtempSync(join(work, 'reader-'))
+  const log = join(dir, 'runs.log')
+  const reader = join(dir, 'tesseract.mjs')
+  writeFileSync(reader, `#!/usr/bin/env node\nimport { appendFileSync } from 'node:fs'\nif (process.argv.length > 3) appendFileSync(${JSON.stringify(log)}, process.argv[2] + '\\n')\nsetTimeout(() => process.stdout.write('level\\tpage_num\\tblock_num\\tpar_num\\tline_num\\tword_num\\tleft\\ttop\\twidth\\theight\\tconf\\ttext\\n'), 150)\n`, { mode: 0o755 })
+  writeFileSync(log, '')
+  const r = await rig({ env: { REVIEW_TESSERACT: reader } })
+  const picture = join(r.home, 'shot.png')
+  writePicture(picture, 800, 500)
+  r.review('push', '--app', 'Words', '--screen', 'Home', '--after', picture)
+  r.review('phone', 'on')
+  const origin = `https://${NAME}`
+  const home = JSON.parse((await r.local('/api/queue')).text).apps[0].screens[0]
+  const words = after => r.ask('/api/read-words', { method: 'POST', headers: { origin }, body: { after } }).then(got => ({ status: got.status, body: JSON.parse(got.text) }))
+  // A stored picture is let through, and read here once; the reply names the word list in the store, nothing more.
+  const stored = await words(home.after)
+  assert.equal(stored.status, 200)
+  assert.deepEqual(Object.keys(stored.body).filter(key => !['words', 'why', 'reading'].includes(key)), [])
+  // Anything that is not a picture of the store is refused before any reader is asked.
+  for (const after of [picture, '../../etc/passwd', '/etc/hosts', 'words/../../x-after-1.png', 'words/x.txt']) assert.deepEqual((await words(after)).body, { words: '', why: 'not-readable' }, after)
+  // A burst of names: one read at a time, a few waiting at most, and a name with no picture is never read.
+  await Promise.all(Array.from({ length: 40 }, (_, n) => words(`words/home-after-${n}.png`)))
+  for (let i = 0; i < 40 && !(await words(home.after)).body.words; i++) await sleep(100)
+  const runs = readFileSync(log, 'utf8').split('\n').filter(Boolean)
+  assert.equal(runs.length, 1, `the reader ran ${runs.length} times: ${runs.join(', ')}`)
+  assert.match(runs[0], /home-after-\d+\.png$/, 'for the stored picture only')
+  assert.match((await words(home.after)).body.words, /^words\/home-words-\d+\.json$/)
 })
 
 test('the page turns it on and off too, from this computer', async () => {

@@ -10,6 +10,9 @@
  *   review wait  --app MyApp [--all] [--timeout 3600] [--json]
  *   review read  --app MyApp [--since 2026-01-15T10:00:00Z] [--latest] [--json]
  *   review clear --app MyApp
+ *   review inferred --app MyApp --screen "Home" [--mode light] --mark 1 --text "..." [--answer <time>]
+ *                                               what you read one mark to mean, shown beside it, so the reviewer can say
+ *                                               yes or correct it before you build. --answer: which answer, as read prints it
  *   review film  --app MyApp --screen "Home" [--mode light] --out film.mp4   one screen's rounds and marks as a video (needs ffmpeg)
  *
  *   review demo                                 a sample to try it on
@@ -63,7 +66,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HOME, INBOX, PORT, clearApp, isSetAside, listApps, listScreens, push, readInbox, rememberPort, slug } from './lib/store.mjs'
+import { HOME, INBOX, PORT, answerId, clearApp, isSetAside, listApps, listScreens, postReading, push, readInbox, rememberPort, slug } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { showPdf } from './lib/pdf.mjs'
 import { filmOf, filmScreen, leftOutLine, saveFilm } from './lib/film.mjs'
@@ -121,20 +124,27 @@ const delivered = records => {
 /** One feedback record as a change request someone can act on. */
 function describe(r) {
   const head = `${r.app} / ${r.screen}${r.mode ? ` (${r.mode})` : ''}, round ${r.round}: ${r.verdict === 'approved' ? (r.noComment ? 'LOOKS GOOD (no comment)' : 'LOOKS GOOD') : 'CHANGES ASKED'}${r.olderPicture ? ' (about an older picture; a new one has been pushed since)' : ''}`
-  const lines = [head]
+  // The name review inferred --answer takes, on the same line, so the lines under it stay as they were.
+  const lines = [r.verdict === 'changes' && r.shapes.length ? `${head}  Answer: ${answerId(r)}` : head]
   if (r.notes) lines.push(`  Notes: ${r.notes.replace(/\n/g, '\n         ')}`)
   for (const [i, s] of r.shapes.entries()) {
     const box = `x ${s.box.x}, y ${s.box.y}, ${s.box.w}x${s.box.h}`
     const what = s.type === 'text' ? `text "${s.text}"` : s.type === 'arrow' ? `arrow from ${s.from.x},${s.from.y} to ${s.to.x},${s.to.y}` : s.type === 'words' ? `words "${s.text}"` : s.type === 'pin' ? `said at pin ${s.n ?? ''} "${s.text}"`.replace('  ', ' ') : s.type
     // A mark's words came from a page or a file. Printed with no new lines and no codes, they cannot pass for a line of this report.
     lines.push(`  ${i + 1}. ${printable(`${what} (${s.colour ?? s.color}) at ${box}${sayWords(s)}`)}`)
+    const reading = r.inferred?.find(x => x.n === i + 1)
+    if (reading) lines.push(`     ${printable(`Read as: "${reading.text}". ${saidBack(reading)}`)}`)
   }
+  if (r.wordsRead && r.shapes.some(s => s.words)) lines.push('  The words on the marks were read off the picture, so a few may be wrong.')
   if (r.annotatedImage) lines.push(`  Marked picture: ${r.annotatedImage}`)
   lines.push(`  After: ${r.afterImage}${r.beforeImage ? `\n  Before: ${r.beforeImage}` : ''}`)
   lines.push(`  File: ${r.file}`)
   for (const e of r.earlier ?? []) lines.push(`  Also said, and still stands:\n${describe(e).replace(/^/gm, '    ')}`)
   return lines.join('\n')
 }
+
+/** What the reviewer said back to a reading. A correction is a request: it stands in place of the reading. */
+const saidBack = reading => (reading.reply?.yes ? 'They said: yes, that.' : reading.reply?.text ? `They corrected it: "${reading.reply.text}"` : 'Not answered yet.')
 
 const print = records => {
   if (flags.json) console.log(JSON.stringify(records, null, 2))
@@ -466,7 +476,8 @@ if (command === 'push') {
   const deadline = Date.now() + Number(flags.timeout || 3600) * 1000
   const ear = listen({ by: who(), what: 'wait', app })
   const done = () => {
-    const fresh = readInbox(app).filter(r => r.sentAt > started)
+    // Without --all, a reply to a reading ends the wait too: it is what the reviewer said since.
+    const fresh = readInbox(app).filter(r => r.sentAt > started || r.inferred?.some(x => x.reply?.at > started))
     if (!flags.all) return fresh.length ? fresh : null
     const screens = listScreens(slug(app))
     if (!screens.length || screens.some(s => s.status === 'waiting')) return null
@@ -494,6 +505,15 @@ if (command === 'push') {
       fail(flags.all && left && left < screens.length ? `Not everything was answered before the timeout: ${left} of ${screens.length} screens of ${app} still wait${left === 1 ? 's' : ''}. ${aside ? 'It is set aside, so no more will come until the reviewer brings it back.' : 'Run this again to keep waiting. It gives every answer when the last one comes.'}` : `No feedback for ${app} before the timeout.${aside ? ' It is set aside, not answered.' : ' Run this again to keep waiting.'}`)
     }
     await sleep(2000)
+  }
+} else if (command === 'inferred') {
+  try {
+    const { record, reading } = postReading({ app: need('app'), screen: need('screen'), mode: flags.mode || '', mark: need('mark'), text: need('text'), from: typeof flags.from === 'string' ? flags.from : 'Claude', answer: typeof flags.answer === 'string' ? flags.answer : '' })
+    // One short line a mark: it is read beside the mark at a glance.
+    if (reading.text.split(/\s+/).length > 12) console.error('Too long: one short line a mark, twelve words or fewer.')
+    console.log(`Shown beside mark ${reading.n} on ${record.screen}${record.mode ? ` (${record.mode})` : ''}: ${printable(reading.text)}\nGo on with the work. review wait --app "${record.app}" ends when they say yes or correct it.`)
+  } catch (error) {
+    fail(error.message)
   }
 } else if (command === 'project') {
   await start()
@@ -717,6 +737,6 @@ if (command === 'push') {
     fail(error.message)
   }
 } else {
-  console.log(`review start | stop | check | see | pdf | demo | sketch | push | list | wait | read | clear | film | ideas | queue | take | show | note | stage | work | wake | project | open | phone | install-skills | plugin | export   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
+  console.log(`review start | stop | check | see | pdf | demo | sketch | push | list | wait | read | inferred | clear | film | ideas | queue | take | show | note | stage | work | wake | project | open | phone | install-skills | plugin | export   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
   if (command) process.exit(1)
 }

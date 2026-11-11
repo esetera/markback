@@ -101,7 +101,9 @@ writeFileSync('home-words.json', JSON.stringify(await page.evaluate(script)))
 execFileSync('review', ['push', '--app', 'My app', '--screen', 'Home', '--after', 'home.png', '--words', 'home-words.json'])
 ```
 
-The list is JSON: `{ "size": { "w": 1440, "h": 900 }, "words": [{ "t": "Saturday", "x": 795, "y": 1038, "w": 132, "h": 34, "el": "div.item > b" }] }`. `size` is the picture's width and height. Each word has its box in the picture's own pixels, from the top left. Words are in reading order. `el` is the element the word is in, and can be left out. A screenshot saved at another scale is fine: `push` fits the list to the picture. A list that is not right is refused in one line: push again without `--words` then, since a picture without words is better than no picture. The script reads the text the window shows and what its form fields show, never a password. It leaves out frames, closed shadow roots and text a style sheet adds. Markback does not read words off a bare picture.
+The list is JSON: `{ "size": { "w": 1440, "h": 900 }, "words": [{ "t": "Saturday", "x": 795, "y": 1038, "w": 132, "h": 34, "el": "div.item > b" }] }`. `size` is the picture's width and height. Each word has its box in the picture's own pixels, from the top left. Words are in reading order. `el` is the element the word is in, and can be left out. A screenshot saved at another scale is fine: `push` fits the list to the picture. A list that is not right is refused in one line: push again without `--words` then, since a picture without words is better than no picture. The script reads the text the window shows and what its form fields show, never a password. It leaves out frames, closed shadow roots and text a style sheet adds.
+
+A picture pushed without `--words` still gets words: the review page reads them off the picture on this computer when the person first opens it (the Mac's own text reader, or `tesseract`). Those are a guess and may have small mistakes, so give `--words` when you can.
 
 ### Then
 
@@ -147,9 +149,21 @@ Each answer has:
 - `kind`: `qa` or `proposal`.
 - `notes`: what they typed or spoke.
 - `shapes`: each with `type` (box, arrow, text, freehand, words, pin) and `box` in the picture's own pixels. An arrow has `from` and `to`. Text has `text`. A pin is something said at a spot: `at` is the spot and `text` is what was said.
-- `words` on a shape: the words under that mark, when the picture was pushed with its words. `element` is the element they are all in. Search the code for them to find what the mark is about. A shape of type `words` is words the person chose, in `text`.
+- `words` on a shape: the words under that mark, when the picture was pushed with its words or they were read off it. With `wordsRead` on the answer, they were read off the picture and a few may be wrong. `element` is the element they are all in. Search the code for them to find what the mark is about. A shape of type `words` is words the person chose, in `text`.
 - `annotatedImage`: the picture with the marks burned in. **Open it before you change anything.** A box round something says more than its numbers.
 - `afterImage`, `beforeImage`, `round`.
+
+### Say what you read
+
+A mark can be read more than one way. Before you change anything, say back what you take each mark to mean, in one short line a mark:
+
+```bash
+review inferred --app "My app" --screen "Home" --mode light --mark 1 --text "Make Book the main button"
+```
+
+`--mark` is the mark's number as `review read` gives it. When `review read` shows more than one answer on a screen, each has `Answer: <time>` at the end of its first line: add `--answer <time>` for the one you read. Say what you will do, in twelve words or fewer, not what the mark looks like. The person sees each line beside its mark, and answers **Yes, that** or corrects it in a few words.
+
+Do not wait for them: go on with the work. Run `review wait --app "My app" --by "your name"` in the background as you work; it ends when they answer a line. `review read --app "My app" --latest` shows each line with what they said back. A correction stands in place of your reading: do what it says, and undo what you did on the wrong reading.
 
 ### Act
 
