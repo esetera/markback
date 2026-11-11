@@ -29,17 +29,17 @@ You need [Node](https://nodejs.org) 22.6 or later. Markback uses Chrome or Edge 
 
 Open your project in a local Claude Code or Codex session and ask in the chat.
 
-> Set up Markback from https://github.com/esetera/markback for this project. Open the first review and keep sending screenshots to Markback as you work.
+> Install and start Markback from https://github.com/esetera/markback in this workspace. Connect this agent for automatic pickup and open New project with “Make a todo app” filled in. I’ll edit it or press Send to agent myself.
 
-Your agent runs the setup and opens the review. As it reaches a visible change, it pushes the updated screenshots and waits for your feedback. You can draw and press **Send**, or press **Looks good**.
+Your agent runs the setup and opens New project. Edit the example or press **Send to agent** to try it. When the first screenshot arrives, draw and press **Send**, or press **Looks good**. Screenshots taken from a running website have an **Open live app** link so you can try that page yourself.
 
 ### Codex Desktop without a terminal
 
 Open your project in Codex Desktop and paste this into the project chat:
 
-> Set up Markback from https://github.com/esetera/markback in this project. Open the first review and turn on automatic pickup of my marks in this chat.
+> Install and start Markback from https://github.com/esetera/markback in this workspace. Connect this chat for automatic pickup and open New project with “Make a todo app” filled in. I’ll edit it or press Send to agent myself.
 
-Codex installs Markback locally, starts the review, and sets up a scheduled check in the same chat. Draw on a screenshot and press **Send**. Keep Codex Desktop open. On the next check, usually within a minute, the chat picks up the mark even if its first turn has finished. Codex applies the change and pushes a new screenshot for review.
+Codex installs Markback locally and connects New project to a scheduled check in the same chat. Keep Codex Desktop open. On the next check, usually within a minute, the chat picks up a build request or a mark. Codex applies the change and pushes a new screenshot for review.
 
 In a fresh Codex project, the agent can use `npm install --prefix .markback github:esetera/markback` to install locally and read `.markback/node_modules/markback/AGENTS.md` in the current session. The agent keeps `REVIEW_HOME` in a writable project folder and uses that same folder for each review command. `review project` can start the review even when Codex protects `.agents/skills` from edits.
 
@@ -292,6 +292,7 @@ review read --app MyApp --latest  # what was said, newest per screen; --json for
 review list                        # what is queued and its status
 review work wait --by "Claude"     # blocks until anything waits for an agent, on any app or in the queue
 review clear --app MyApp          # take the app off the page (feedback stays)
+review inferred --app MyApp --screen Home --mode light --mark 1 --text "Make Book the main button"
 ```
 
 ### The film of a screen
@@ -340,12 +341,28 @@ Every `box` is in the after picture's own pixels. `verdict` is `changes` or `app
 annotated image). A screen sent with the set with nothing on it is `approved` with `"notes": "No comment."` and an extra
 `"noComment": true`: it counts as Looks good, and the flag keeps it apart from a Looks good pressed on that screen.
 
+### Show what it inferred
+
+A mark can be read more than one way. Before it builds, the agent says back what it took each mark to mean, one short line a mark, so a wrong reading is caught early:
+
+```
+review inferred --app MyApp --screen Home --mode light --mark 2 --text "Ask for the plot size beside Postcode"
+```
+
+`--mark` is the mark's number as `review read` gives it. Said again, it replaces the first. When marks were sent twice on one picture, both answers stand, and `review read` prints `Answer: <time>` at the end of each one's first line: give that as `--answer <time>`. Without it, `review inferred` asks which, and names them. `--from` is a short name, cut at 40 characters. On the review page, each line stands beside its mark on the picture, with **Yes, that** and **No**. No opens a box for a few words of your own; Enter or its Send sends them, Esc cancels, and words cancelled come back with Undo. While a box is open the page's own keys are off, Tab stays in the box, Esc from elsewhere goes back to it, the other lines wait, and New project and the film wait too. The words are kept in this browser as you type: leaving the page asks first, and a reload opens the box again with them. The box is yours: it closes only when the server has your words, and if a new picture comes, or the review is cleared, it stays with your words, says what happened, and Enter still sends them. A line whose mark is out of view waits behind a small "2 more lines below"; when the lines cannot stand apart, or the window is narrow, a bar under the picture says how many and opens them as a list; it folds when you start to draw, and pointing at a row lights its mark. When two answers stand on one picture, the older one's marks say "earlier 1". Nothing waits on you: the agent goes on working, and a screen with no readings looks as it always did. When the agent said what it read on a screen you are not on, a line at the foot says so, with **Look**.
+
+`review read` gives each line under its mark, with what you said back: `Read as: "…". They corrected it: "…"`, or `They said: yes, that.`, or `Not answered yet.` In the JSON, each answer has `answer`, its name for `--answer` (the time it was sent), and `inferred`: `[{ "n": 2, "text": "…", "from": "Claude", "reply": { "yes": true } }]`, where a correction is `"reply": { "text": "…" }`. `review wait` without `--all` also ends when you answer a reading. The readings are kept in `~/.review-wizard/inferred/<app>/<screen>.json`, apart from the inbox.
+
 The page also reads `GET /api/history?app=<app>&id=<screen id>` (earlier answers for one screen),
 `GET /inbox/<app>/<file>.png` (the marked pictures) and `GET /api/film?app=<app>&id=<screen id>` (the rounds of one screen's
 film, and the steps that play). All three only read. `GET /api/film/file` with the same two gives the film as a video, made
 with ffmpeg when it is asked for and not kept, one at a time.
 
 ## Ideas and the queue
+
+Markback opens on **New project**. Describe an app and press **Send to agent** after you’ve enabled wake in your coding agent. The request appears in the Queue immediately. Taking it moves it to **In progress**, and pushing the first screens moves it to **Ready for you**. Review the result from the Queue, and press **Looks good** when it’s done.
+
+In Codex Desktop, an agent can connect an empty workspace with `review wake desktop --app <workspace-name> --new --ideas` after setting up the chat heartbeat. For an existing review, update the heartbeat and register with `review wake desktop --app <slug> --builds --ideas`. Use the [queue skill](skills/ideas-and-queue/SKILL.md) for the heartbeat prompt and how to link the resulting screenshots to the build request. Idea requests appear in Queue and the Markback drawer. Choose **View ideas** when results arrive.
 
 Press **W** for a second page. **Ideas:** say what for and how many, and press Get ideas. That writes a request; an agent studies the thing and answers. Each idea is one line for what, one for why, and a size. Press Yes, No or Later (Y, N, L).
 
@@ -370,6 +387,8 @@ For an agent: `review work` prints all that waits (queued items, requests for id
 ### Markback wakes your agent
 
 In **Codex Desktop**, ask Codex to set up automatic Markback pickup in the chat. Codex starts Markback as part of opening the review and sets up a scheduled check in that chat. After you press **Send**, the next check reads the marks and Codex pushes the revised screen. Keep the desktop app open while reviewing. The review menu can turn pickup off for this review.
+
+In **Kimi Work**, ask Kimi to connect Markback to a dedicated local session in your signed-in Kimi Code CLI. After you press **Send**, Markback starts that Kimi Code session in the background even if the Kimi Work task has finished. Keep reviewing in the Kimi Work browser pane. See the [queue skill](skills/ideas-and-queue/SKILL.md) for setup.
 
 #### Claude Code and other command-based agents
 

@@ -7,17 +7,17 @@
 import { createServer } from 'node:http'
 import { readFileSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { extname, join, normalize, dirname, sep } from 'node:path'
+import { basename, extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { IMAGES, INBOX, PORT, listApps, readInbox, receive, setAside } from './lib/store.mjs'
+import { IMAGES, INBOX, PORT, listApps, readInbox, receive, replyToReading, setAside } from './lib/store.mjs'
 import { filmOf, leftOutLine, saveFilm, savedPart } from './lib/film.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { hasReader, stopReading, wordsForPicture } from './lib/read-words.mjs'
-import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder } from './lib/work.mjs'
+import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder, requestBuild } from './lib/work.mjs'
 import { appsOf, madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
 // Only what reads the wake command and turns it on and off. What sets the command is not imported here, on purpose:
 // nothing a web page can reach may decide what this computer runs.
-import { createWaker, listWakes, readDesktopWake, switchDesktopWake, switchWake, wakeSummary } from './lib/wake.mjs'
+import { createWaker, listDesktopWakes, listWakes, readDesktopWake, switchDesktopWake, switchWake, wakeSummary } from './lib/wake.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' }
@@ -44,6 +44,8 @@ function history(appSlug, id) {
       annotatedUrl: urlFor(INBOX, '/inbox/', r.annotatedImage),
       afterUrl: urlFor(IMAGES, '/images/', r.afterImage),
       beforeUrl: urlFor(IMAGES, '/images/', r.beforeImage),
+      // What the agent read each mark to mean, with where the mark is, so the page can put each beside its own.
+      ...(r.inferred ? { answer: basename(r.file), readings: r.inferred.filter(x => r.shapes?.[x.n - 1]?.box).map(x => ({ n: x.n, text: x.text, from: x.from, reply: x.reply ?? null, box: r.shapes[x.n - 1].box })) } : {}),
     }))
 }
 
@@ -107,25 +109,40 @@ function body(req) {
  * test with REVIEW_WAKE_MS="every,quiet,backoff,late,gap" in milliseconds.
  */
 const [wakeEvery = 20_000, quiet, backoff, late, gap] = (process.env.REVIEW_WAKE_MS ?? '').split(',').filter(Boolean).map(Number)
-/** What waits unheard, leaving out marks a Codex Desktop heartbeat takes: nobody needs to be told of those, or woken. */
-const commandWork = (apps, only = null) => standing(apps, { excludeMarksFor: slug => readDesktopWake(slug)?.on === true, only })
+/** A Codex Desktop heartbeat takes work it has registered for. */
+const desktopOn = slug => readDesktopWake(slug)?.on === true
+const desktopBuilds = slug => {
+  const wake = readDesktopWake(slug)
+  return wake?.on === true && wake.builds === true
+}
+const desktopIdeas = slug => {
+  const wake = readDesktopWake(slug)
+  return wake?.on === true && wake.ideas === true
+}
+const commandWork = (apps, only = null) => standing(apps, { excludeMarksFor: desktopOn, excludeBuildsFor: desktopBuilds, excludeIdeasFor: desktopIdeas, only })
 const waker = createWaker({ look: wake => commandWork(listApps(), appsOf(wake.in)), ...(quiet >= 0 ? { quiet } : {}), ...(backoff >= 0 ? { backoff } : {}), ...(late >= 0 ? { late } : {}), ...(gap >= 0 ? { gap } : {}) })
 const total = unheard => unheard.queue + unheard.ideas + unheard.marks
 /** Who listens, what waits unheard, and whether an agent will be woken for it: with every answer the pages poll. */
 const listening = (apps = listApps()) => {
   const now = commandWork(apps)
-  const held = apps.flatMap(({ slug }) => {
-    const desktop = readDesktopWake(slug)
-    return desktop ? [[slug, desktop]] : []
-  })
+  const held = listDesktopWakes()
   // Marks waiting for a Desktop heartbeat are counted only for its own sign.
   const pendingMarks = held.length ? standing(apps).markApps : []
-  const desktop = Object.fromEntries(held.map(([slug, d]) => [slug, { on: d.on, pending: pendingMarks.includes(slug) }]))
+  const desktop = Object.fromEntries(held.map(([slug, d]) => [slug, { on: d.on, pending: pendingMarks.includes(slug), ...(d.builds ? { builds: true } : {}), ...(d.ideas ? { ideas: true } : {}) }]))
   const wakes = listWakes().map(wake => {
     const there = commandWork(apps, appsOf(wake.in))
     return { view: { ...waker.view(wake, there), apps: appsOf(wake.in) }, waits: total(there.unheard) }
   })
   return { agents: now.agents, heard: now.heard, unheard: now.unheard, wake: wakeSummary(total(now.unheard), wakes), wakes: wakes.map(w => w.view), desktop }
+}
+
+// A request goes only to an agent already enabled through the CLI. The brief is data in the work queue.
+function workTargets(apps, status = listening(apps), capability = 'builds') {
+  const enabled = new Set([
+    ...Object.entries(status.desktop).filter(([, wake]) => wake.on && wake[capability]).map(([app]) => app),
+    ...status.wakes.filter(wake => wake.on).flatMap(wake => wake.apps),
+  ])
+  return [...enabled].map(slug => ({ slug, name: apps.find(app => app.slug === slug)?.name ?? slug }))
 }
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
@@ -157,7 +174,9 @@ const server = createServer(async (req, res) => {
     // `reader`: whether this computer can read words off a picture, so the page shows the words tool only where it can work.
     if (req.method === 'GET' && url.pathname === '/api/queue') {
       const apps = listApps()
-      return json(res, 200, { apps, listening: listening(apps), reader: hasReader() })
+      const status = listening(apps)
+      const ideaRequests = listRequests().filter(r => r.status === 'open' || r.posted).slice(-8)
+      return json(res, 200, { apps, listening: status, buildTargets: workTargets(apps, status), ideaRequests, reader: hasReader() })
     }
     if (req.method === 'POST' && url.pathname === '/api/read-words') {
       // A picture pushed with no word list: its words are read here, once, and the list is kept beside it. The answer comes at
@@ -213,11 +232,31 @@ const server = createServer(async (req, res) => {
       }
     }
     if (req.method === 'POST' && url.pathname === '/api/sample') return json(res, 200, { appSlug: pushSample().appSlug })
-    if (req.method === 'GET' && url.pathname === '/api/work') return json(res, 200, { items: listWork(), requests: listRequests(), listening: listening() })
+    if (req.method === 'GET' && url.pathname === '/api/work') {
+      const apps = listApps()
+      const status = listening(apps)
+      return json(res, 200, { items: listWork(), requests: listRequests(), listening: status, ideaTargets: workTargets(apps, status, 'ideas') })
+    }
     if (req.method === 'POST' && url.pathname.startsWith('/api/work/')) {
       const input = JSON.parse(await body(req))
       const action = url.pathname.slice('/api/work/'.length)
-      if (action === 'ask') return json(res, 200, { request: askForIdeas({ target: input.target, count: input.count }) })
+      if (action === 'build') {
+        const target = workTargets(listApps()).find(option => option.slug === input.target)
+        if (!target) return json(res, 409, { error: 'That agent is no longer connected. Turn on wake and try again.' })
+        try {
+          return json(res, 200, { item: requestBuild({ target: target.slug, brief: input.brief, requestId: input.requestId }) })
+        } catch (error) {
+          return json(res, 400, { error: error.message })
+        }
+      }
+      if (action === 'ask') {
+        const apps = listApps()
+        const targets = workTargets(apps, listening(apps), 'ideas')
+        const selected = targets.find(option => option.slug === input.route)
+        if (input.route && !selected) return json(res, 409, { error: 'That workspace is no longer connected.' })
+        const route = selected?.slug ?? (targets.length === 1 ? targets[0].slug : '')
+        return json(res, 200, { request: askForIdeas({ target: input.target, count: input.count, route }) })
+      }
       if (action === 'decide') return json(res, 200, { item: decide(String(input.id), String(input.decision)) })
       if (action === 'note') return json(res, 200, { item: addNote(String(input.id), input.text) })
       if (action === 'order' && Array.isArray(input.ids)) {
@@ -242,6 +281,15 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(input.slugs)) return json(res, 400, { error: 'Say which.' })
       setAside(input.slugs.map(String), input.aside !== false)
       return json(res, 200, { ok: true })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/reading') {
+      const input = JSON.parse(await body(req))
+      try {
+        const reading = replyToReading({ appSlug: String(input.appSlug), id: String(input.id), answer: String(input.answer), n: Number(input.n), yes: input.yes === true, text: typeof input.text === 'string' ? input.text : '' })
+        return json(res, 200, { ok: true, reading })
+      } catch (error) {
+        return json(res, 400, { error: error.message })
+      }
     }
     if (req.method === 'POST' && url.pathname === '/api/send') {
       const input = JSON.parse(await body(req))
