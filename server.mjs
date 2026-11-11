@@ -7,9 +7,9 @@
 import { createServer } from 'node:http'
 import { readFileSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { extname, join, normalize, dirname, sep } from 'node:path'
+import { basename, extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HOME, IMAGES, INBOX, PORT, WHERE, storeIdNow, listApps, readInbox, receive, setAside } from './lib/store.mjs'
+import { HOME, IMAGES, INBOX, PORT, WHERE, storeIdNow, listApps, readInbox, receive, replyToReading, setAside } from './lib/store.mjs'
 import { filmOf, leftOutLine, saveFilm, savedPart } from './lib/film.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { linkIn, LINK_OUT } from './lib/home.mjs'
@@ -44,6 +44,8 @@ function history(appSlug, id) {
       annotatedUrl: urlFor(INBOX, '/inbox/', r.annotatedImage),
       afterUrl: urlFor(IMAGES, '/images/', r.afterImage),
       beforeUrl: urlFor(IMAGES, '/images/', r.beforeImage),
+      // What the agent read each mark to mean, with where the mark is, so the page can put each beside its own.
+      ...(r.inferred ? { answer: basename(r.file), readings: r.inferred.filter(x => r.shapes?.[x.n - 1]?.box).map(x => ({ n: x.n, text: x.text, from: x.from, reply: x.reply ?? null, box: r.shapes[x.n - 1].box })) } : {}),
     }))
 }
 
@@ -245,6 +247,15 @@ const server = createServer(async (req, res) => {
       if (!Array.isArray(input.slugs)) return json(res, 400, { error: 'Say which.' })
       setAside(input.slugs.map(String), input.aside !== false)
       return json(res, 200, { ok: true })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/reading') {
+      const input = JSON.parse(await body(req))
+      try {
+        const reading = replyToReading({ appSlug: String(input.appSlug), id: String(input.id), answer: String(input.answer), n: Number(input.n), yes: input.yes === true, text: typeof input.text === 'string' ? input.text : '' })
+        return json(res, 200, { ok: true, reading })
+      } catch (error) {
+        return json(res, 400, { error: error.message })
+      }
     }
     if (req.method === 'POST' && url.pathname === '/api/send') {
       const input = JSON.parse(await body(req))

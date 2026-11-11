@@ -52,11 +52,13 @@
       <div class="scroller" id="scroller">
         <div class="pair" id="pair">
           <figure class="shot before-shot" id="beforeShot"><figcaption>Before</figcaption><div class="frame"><img id="beforeImg" alt="Before"></div></figure>
-          <figure class="shot after-shot" id="afterShot"><figcaption id="afterCaption">After</figcaption><div class="frame" id="stage"><img id="afterImg" alt="After"><canvas id="canvas"></canvas><div class="pin-glow" id="pinGlow" hidden></div></div></figure>
+          <figure class="shot after-shot" id="afterShot"><figcaption id="afterCaption">After</figcaption><div class="frame" id="stage"><img id="afterImg" alt="After"><canvas id="canvas"></canvas><div class="pin-glow" id="pinGlow" hidden></div><div class="reading-spot" id="readingSpot" hidden></div><div class="readings" id="readings"></div></div></figure>
           <aside class="checks" id="checks" hidden></aside>
         </div>
         <div class="state-card" id="stateCard" hidden></div>
       </div>
+      <div class="readings-more" id="readingsMore"></div>
+      <div class="readings-bar" id="readingsBar" hidden></div>
       <footer class="foot" id="foot">
         <div class="note-wrap"><textarea id="notes" rows="1" placeholder="Notes (N)"></textarea></div>
         <button class="tool" id="micBtn" data-key="⇧D" aria-label="Speak your notes" hidden></button>
@@ -120,6 +122,8 @@
     <div class="viewer-body"><img id="viewerImg" alt=""></div>
   </div>
 
+  <div class="kept-alone" id="keptAlone"></div>
+  <div class="kept-trap" id="keptTrap" role="alertdialog" aria-live="assertive" tabindex="-1" hidden></div>
   <div class="film" id="film" role="dialog" aria-modal="true" aria-labelledby="filmTitle" hidden>
     <div class="film-head">
       <h2 id="filmTitle"></h2>

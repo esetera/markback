@@ -224,6 +224,54 @@ body.covered .marking, body.covered #views, body.covered #zoomValue, body.covere
 .pin-glow::after { animation: pin-glow 1.4s ease-out infinite; }
 @keyframes pin-glow { from { transform: scale(0.8); opacity: 0.6; } to { transform: scale(1.9); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .pin-glow::after { animation: none; transform: scale(1.4); opacity: 0.3; } }
+/* What the agent read each mark to mean: one line beside the mark, over the picture and never in what is sent. */
+.readings { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.reading { position: absolute; display: flex; align-items: center; gap: 6px; width: max-content; max-width: 340px; padding: 4px 6px 4px 4px; transform: translateX(8px); pointer-events: auto; background: var(--ground); color: var(--ink); border: 1px solid var(--edge); border-radius: var(--r); box-shadow: var(--sheet-lift); font-size: 12.5px; line-height: 17px; }
+.reading.left { transform: translateX(calc(-100% - 8px)); }
+.reading.under { transform: translateY(6px); }
+.reading .rn { flex: none; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 2px; background: var(--ink); color: var(--ground); font-weight: 700; font-size: 11px; line-height: 18px; text-align: center; }
+.reading .rt { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.reading .rf { color: var(--faint); margin-right: 4px; }
+.reading.answered { color: var(--soft); }
+.reading.answered.corrected .rt { text-decoration: line-through; color: var(--faint); }
+.reading .rc { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.reading .rs { flex: none; display: inline-flex; align-items: center; gap: 2px; color: var(--good); font-weight: 600; }
+.reading .rs svg { width: 13px; height: 13px; }
+.reading button { flex: none; height: 22px; padding: 0 7px; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink); background: linear-gradient(var(--btn-top), var(--btn-bottom)); border: 1px solid var(--edge); border-radius: 2px; cursor: pointer; }
+.reading button.link { height: auto; padding: 0; border: 0; background: none; font-weight: 400; color: var(--soft); text-decoration: underline; text-underline-offset: 2px; }
+.reading input { flex: 1 1 auto; min-width: 220px; height: 24px; padding: 2px 6px; font: inherit; border: 1px solid var(--accent); border-radius: 2px; background: var(--ground); color: var(--ink); outline: none; }
+.reading[hidden] { display: none; }
+.reading.open { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent), var(--sheet-lift); }
+.reading .rx:empty { display: none; }
+.reading .rx { flex-basis: 100%; color: var(--danger); font-size: 12px; }
+.reading.sending .rx { color: var(--soft); }
+.reading.open, .reading.kept { flex-wrap: wrap; }
+.readings.list.folded { display: none; }
+/* The bar under the picture in a narrow window: how many lines, and a press to open or fold them. */
+.readings-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 34px; padding: 0 8px 0 12px; border-top: 1px solid var(--rule-firm); background: var(--side); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.readings-bar[hidden] { display: none; }
+.readings-bar .btn { height: 24px; padding: 0 10px; font-size: 12px; }
+/* A box whose line went from under it: the words stay, and it says why. */
+.reading.kept { border-color: var(--amber); }
+.reading.kept .rt b { font-weight: 600; }
+/* When the lines cannot stand apart beside their marks: a list under the picture, one row each, over its foot. */
+.readings.list { position: fixed; inset: auto; z-index: 6; display: flex; flex-direction: column; gap: 4px; padding: 6px; overflow-y: auto; pointer-events: auto; background: var(--ground); border: 1px solid var(--rule-firm); border-radius: var(--r); box-shadow: var(--shadow); }
+.readings.list .reading { position: static; transform: none; width: auto; max-width: none; margin: 0; box-shadow: none; border-color: var(--rule); }
+.reading-spot { position: absolute; z-index: 1; pointer-events: none; outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 2px; background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.reading-spot[hidden] { display: none; }
+/* Lines whose marks are out of view: how many, and a press to go there. */
+.readings-more { position: absolute; left: 0; right: 0; height: 0; pointer-events: none; z-index: 4; }
+.more-lines { position: absolute; left: 50%; transform: translateX(-50%); pointer-events: auto; height: 24px; padding: 0 10px; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink); background: var(--ground); border: 1px solid var(--edge); border-radius: 12px; box-shadow: var(--sheet-lift); cursor: pointer; }
+.more-lines.above { top: 8px; }
+.more-lines.below { bottom: 8px; }
+.more-lines.aside { top: 38px; }
+.kept-trap { position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%); z-index: 50; display: flex; flex-direction: column; gap: 4px; max-width: min(520px, calc(100vw - 32px)); padding: 12px 14px; background: var(--ground); color: var(--ink); border: 2px solid var(--amber); border-radius: var(--r); box-shadow: var(--shadow); font-size: 13px; outline: none; }
+.kept-trap[hidden] { display: none; }
+/* A kept box with no picture left to stand on: on the empty page, where it can be seen. */
+.kept-alone { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 45; width: min(520px, calc(100vw - 32px)); }
+.kept-alone:empty { display: none; }
+.kept-alone .reading { position: static; transform: none; width: auto; max-width: none; }
+.kept-trap .link { align-self: flex-start; font: inherit; font-weight: 600; color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
 .tool.unlit { opacity: 0.45; }
 .text-entry { position: absolute; z-index: 3; min-width: 180px; padding: 3px 5px; border: 1px solid var(--accent); border-radius: 2px; background: #fff; font: 600 16px -apple-system, system-ui, sans-serif; outline: none; }
 
