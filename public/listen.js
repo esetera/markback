@@ -95,3 +95,11 @@ export const heardWords = (agents, now = Date.now()) => {
   const live = agents.filter(a => !a.told)
   return live.length ? `${names(live)} ${many(live) ? 'are' : 'is'} listening and will take this.` : `${agentsWords(agents, now)}.`
 }
+export function ideaProgress(request, listening) {
+  if (request.status !== 'open') return `${request.posted} ${request.posted === 1 ? 'idea' : 'ideas'} ready`
+  if (request.posted) return `${request.posted} of ${request.count} ideas ready`
+  const desktop = listening?.desktop?.[request.route]
+  if (desktop?.on && desktop.ideas) return 'Waiting for Codex'
+  const wake = listening?.wakes?.find(option => option.on && option.apps?.includes(request.route))
+  return wake ? `Waiting for ${wake.by}` : 'Waiting for an agent'
+}

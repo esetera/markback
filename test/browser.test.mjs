@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -88,7 +88,7 @@ async function rig({ reader = null } = {}) {
       for (const [key, value] of Object.entries(values)) if (localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify(value))
     }, seed)
     // `film` is how long a step of the film stays, so a test need not wait out the real seconds.
-    await page.goto(`http://127.0.0.1:${port}/?undo=${undo}${film ? `&film=${film}` : ''}#${app}`)
+    await page.goto(`http://127.0.0.1:${port}/?undo=${undo}${film ? `&film=${film}` : ''}${app ? `#${app}` : '&review=1'}`)
     await page.locator('#canvas').waitFor()
     await page.waitForFunction(() => document.getElementById('canvas').width > 300)
     return { page, errors, url: page.url() }
@@ -1778,7 +1778,7 @@ test('both looks draw, light and dark', { skip }, async () => {
   assert.deepEqual(errors, [])
 })
 
-test('opened with no address, it starts at the next thing to review, says so, and one Enter is in', { skip }, async () => {
+test('opening Review starts at the next thing to review, says so, and one Enter is in', { skip }, async () => {
   const { push, port, read } = await rig()
   push('Done one', ['A'], null)
   push('Beta-style: Waiting', ['P1', 'P2', 'P3'], null)
@@ -1789,7 +1789,7 @@ test('opened with no address, it starts at the next thing to review, says so, an
   const page = await (await browser.newContext({ viewport: { width: 1500, height: 960 } })).newPage()
   // A panel view remembered from before is ignored.
   await page.addInitScript(() => localStorage.setItem('review:ui:view', 'panels'))
-  await page.goto(`http://127.0.0.1:${port}/?undo=40`)
+  await page.goto(`http://127.0.0.1:${port}/?undo=40&review=1`)
   await page.locator('#segment').getByText('You are starting with:').waitFor()
   assert.equal(await page.locator('#segment h1').innerText(), 'Beta-style, 2 of 2')
   assert.match(await page.locator('#segment').innerText(), /Waiting: 3 left in this review · 4 in all/)
@@ -2047,12 +2047,12 @@ test('ideas: asking writes a request, a session answers, and Yes, No and Later t
   await page.locator('#target').fill('The reader')
   await page.locator('#count').fill('3')
   await page.getByRole('button', { name: 'Get ideas' }).click()
-  await page.getByText('Waiting for a session').waitFor()
+  await page.getByText('Waiting for an agent').waitFor()
   const open = JSON.parse(work(r, 'ideas', '--json'))
   assert.equal(open[0].target, 'The reader')
   for (const what of ['One', 'Two', 'Three']) work(r, 'ideas', 'post', '--request', open[0].id, '--what', what, '--why', `Why ${what}`, '--size', 'M')
   await page.locator('.idea').nth(2).waitFor({ timeout: 6000 })
-  assert.equal(await page.getByText('Waiting for a session').count(), 0, 'answered: it no longer says waiting')
+  assert.equal(await page.getByText('Waiting for an agent').count(), 0, 'answered: it no longer says waiting')
   await page.locator('.idea').nth(0).getByRole('button', { name: 'Yes' }).click()
   await page.waitForFunction(() => document.querySelectorAll('.idea').length === 2)
   await page.locator('.idea').first().focus()
@@ -2074,7 +2074,8 @@ test('the queue: four parts, drag or keys set the order, notes reach the session
   await page.locator('.section-head', { hasText: 'Queued' }).waitFor()
   // Empty parts say so together, in one line; what it is asked is plain words, and every note button looks alike.
   assert.equal(await page.locator('.empty-line').innerText(), 'Nothing in progress, ready for you or done.')
-  assert.equal(await page.locator('.section-head').count(), 1)
+  assert.equal(await page.locator('.section-head').count(), 2)
+  assert.ok(await page.getByRole('link', { name: 'View ideas' }).isVisible())
   assert.deepEqual([...new Set(await page.locator('[data-lane="queued"] .phase').allInnerTexts())], ['Proposal'])
   assert.equal(await page.locator('.tag').count(), 0, 'no labels in colour')
   assert.equal(await page.locator('.row .target').count(), 0, 'all for the same thing: no column for it')
@@ -2206,6 +2207,9 @@ test('the first minute: an address becomes a screen to mark, and where nothing a
   await page.locator('#canvas').waitFor({ timeout: 50000 })
   await page.waitForFunction(() => document.getElementById('canvas').width > 1000, null, { timeout: 8000 })
   assert.match(await page.locator('#aboutNote').innerText(), /Draw on anything/)
+  const live = page.getByRole('link', { name: 'Open live app' })
+  await live.waitFor()
+  assert.equal(await live.getAttribute('href'), `http://127.0.0.1:${r.port}/work.html`)
   assert.match(await page.locator('#crumbs').innerText(), /127\.0\.0\.1/)
   assert.deepEqual(errors, [])
 })
@@ -2217,6 +2221,79 @@ test('the first minute: the sample, from an empty page', { skip }, async () => {
   await page.getByRole('button', { name: 'Try the sample' }).click()
   await page.locator('#canvas').waitFor({ timeout: 8000 })
   assert.match(await page.locator('#crumbs').innerText(), /Sample/)
+})
+
+test('New project is the start page and sends a build through the connected agent queue', { skip }, async () => {
+  const r = await rig()
+  const thread = '01020304-1111-2222-3333-445566778899'
+  const folder = join(r.home, 'workspace')
+  mkdirSync(folder)
+  const env = { ...r.env, CODEX_THREAD_ID: thread }
+  const cli = (...args) => execFileSync('node', [join(ROOT, 'review.mjs'), ...args], { env, cwd: folder, encoding: 'utf8' })
+  r.push('Garden', ['Home'], null)
+  const page = await (await browser.newContext({ viewport: { width: 390, height: 850 } })).newPage()
+  await page.goto(`http://localhost:${r.port}/?undo=40&example=todo`)
+  await page.getByRole('heading', { name: 'What would you like to build?' }).waitFor()
+  const description = page.getByRole('textbox', { name: 'Describe your idea' })
+  assert.equal(await description.inputValue(), 'Make a todo app')
+  assert.equal(await page.locator('#canvas').isVisible(), false)
+  const send = page.getByRole('button', { name: 'Send to agent' })
+  assert.equal(await send.isEnabled(), false)
+  cli('wake', 'desktop', '--app', 'Workspace', '--new')
+  const brief = 'Build a todo manager.\nShow the tasks due today.'
+  await description.fill(brief)
+  await send.click()
+  await page.getByText('Sent to your agent.', { exact: false }).waitFor()
+  const { builds: [item] } = JSON.parse(cli('wake', 'poll', '--app', 'Workspace'))
+  assert.equal(item.brief, brief)
+  assert.equal(item.stage, 'queued')
+  await page.getByRole('link', { name: 'View the queue' }).click()
+  await page.locator('[data-lane="queued"]').getByText(item.title, { exact: true }).waitFor()
+  cli('take', '--item', item.id, '--by', 'Codex')
+  await page.locator('[data-lane="progress"]').getByText(item.title, { exact: true }).waitFor()
+  cli('push', '--app', 'Todo', '--screen', 'Home', '--after', join(r.home, 'p.png'), '--item', item.id)
+  const ready = page.locator('[data-lane="ready"]')
+  await ready.getByText(item.title, { exact: true }).waitFor()
+  await ready.getByRole('link', { name: 'Review' }).click()
+  await page.locator('#canvas').waitFor()
+  assert.match(await page.locator('#crumbs').innerText(), /Todo/)
+  await page.locator('[data-act="good"]').click()
+  await waitFor(() => JSON.parse(cli('show', '--item', item.id, '--json')).stage === 'done')
+})
+
+test('idea requests reach Codex and show progress in Queue and the drawer', { skip }, async () => {
+  const r = await rig()
+  const folder = join(r.home, 'workspace')
+  mkdirSync(folder)
+  r.push('Workspace', ['Home'], null)
+  const env = { ...r.env, CODEX_THREAD_ID: '01020304-1111-2222-3333-445566778899' }
+  const cli = (...args) => execFileSync('node', [join(ROOT, 'review.mjs'), ...args], { env, cwd: folder, encoding: 'utf8' })
+  cli('wake', 'desktop', '--app', 'Workspace', '--ideas')
+  const { page } = await r.open('workspace')
+  const work = await page.context().newPage()
+  await work.goto(`http://127.0.0.1:${r.port}/work.html#ideas`)
+  await work.getByLabel('Ideas for').fill('How could we make this todo app more useful?')
+  await work.getByLabel('How many').fill('1')
+  await work.getByRole('button', { name: 'Get ideas' }).click()
+  await work.getByText('Waiting for Codex', { exact: false }).waitFor()
+  const { ideas: [request] } = JSON.parse(cli('wake', 'poll', '--app', 'Workspace'))
+  assert.equal(request.route, 'workspace')
+  assert.match(request.target, /todo app/)
+  await work.getByRole('button', { name: 'Queue', exact: true }).click()
+  await work.getByRole('heading', { name: 'Idea requests', exact: false }).waitFor()
+  await work.getByText('Waiting for Codex', { exact: false }).waitFor()
+  await page.getByRole('button', { name: 'Apps and screens' }).click()
+  await page.locator('#drawer').getByText('Waiting for Codex').waitFor()
+  cli('ideas', 'post', '--request', request.id, '--what', 'Pin today’s priorities', '--why', 'Keep important tasks in sight', '--size', 'S')
+  await page.locator('#drawer').getByText('1 idea ready').waitFor()
+  await work.getByRole('link', { name: 'View ideas' }).click()
+  await work.getByText('Pin today’s priorities').waitFor()
+  await work.getByRole('button', { name: 'Yes', exact: true }).click()
+  await waitFor(() => JSON.parse(cli('wake', 'poll', '--app', 'Workspace')).queue?.length === 1)
+  await work.getByRole('heading', { name: 'Accepted', exact: false }).waitFor()
+  await work.getByText('Pin today’s priorities').waitFor()
+  await work.getByRole('button', { name: 'Queue', exact: true }).click()
+  await work.locator('[data-lane="queued"]').getByText('Pin today’s priorities').waitFor()
 })
 
 test('New project in the menu: the same two ways in as the first screen, Esc closes, focus goes back, and a wrong address is said there', { skip }, async () => {
@@ -2235,7 +2312,9 @@ test('New project in the menu: the same two ways in as the first screen, Esc clo
     assert.equal(await modal.isVisible(), true)
     assert.equal(await page.evaluate(() => document.activeElement.matches('#newModal [data-first-address]')), true, 'the address takes the keys')
     // The same form as the first screen, without the sample, and with no id said twice.
-    assert.match(await modal.innerText(), /1\. Your app's address/)
+    assert.match(await modal.innerText(), /What would you like to build/)
+    assert.match(await modal.innerText(), /Already have an app/)
+    await modal.locator('details').evaluate(details => { details.open = true })
     assert.match(await modal.innerText(), /\/markback a recipe box for my family/)
     assert.equal(await modal.locator('[data-first-sample]').count(), 0)
     assert.equal(await page.evaluate(() => { const ids = [...document.querySelectorAll('[id]')].map(e => e.id); return ids.length === new Set(ids).size }), true)
