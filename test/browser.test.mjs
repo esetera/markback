@@ -1318,6 +1318,84 @@ test('a line that comes while the film is up does not take the keyboard from it'
   assert.deepEqual(errors, [])
 })
 
+/** Leaves, reloads, and says yes to leaving: the words are in the box, so the browser asks first. */
+const reloadKeeping = async page => {
+  const accept = dialog => void dialog.accept()
+  page.on('dialog', accept)
+  await page.reload()
+  page.off('dialog', accept)
+  await page.waitForFunction(() => document.getElementById('canvas').width > 300)
+}
+
+test('words brought back by Undo are saved again: a reload after it still has them', { skip }, async () => {
+  const { page, errors } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Keep me')
+  await page.keyboard.press('Escape')
+  await page.locator('#toast [data-undo-words]').click()
+  await page.locator('.reading.open').waitFor()
+  await reloadKeeping(page)
+  await page.locator('.reading.open [data-correct]').waitFor({ timeout: 8000 })
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'Keep me')
+  assert.deepEqual(errors, [])
+})
+
+test('off the screen and back: one box, the line\'s own, with the words as they were', { skip }, async () => {
+  const { page, errors } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Not that')
+  // Moved away by a press, with words in the box: they are kept.
+  await page.locator('#next').click()
+  await page.locator('.reading.kept').waitFor()
+  await page.locator('.reading.kept [data-correct]').fill('Not that one')
+  await page.locator('#back').click()
+  await page.locator('.reading.open').waitFor({ timeout: 8000 })
+  assert.equal(await page.locator('[data-correct]').count(), 1, 'one box')
+  assert.equal(await page.locator('.reading.kept').count(), 0)
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'Not that one')
+  assert.equal(await page.locator('.reading.open').getAttribute('data-reading').then(k => k.endsWith('|1')), true)
+  assert.deepEqual(errors, [])
+})
+
+test('words typed before a new round come back after a reload as a kept box: sent about the earlier picture, or discarded for good', { skip }, async () => {
+  const { page, errors, push, read } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('About the old one')
+  push('Lines', ['One'])
+  await page.locator('.reading.kept').waitFor({ timeout: 8000 })
+  await reloadKeeping(page)
+  await page.locator('.reading.kept').waitFor({ timeout: 8000 })
+  assert.match(await page.locator('.reading.kept').innerText(), /A new picture came\. Your words are kept/)
+  assert.equal(await page.locator('.reading.kept [data-correct]').inputValue(), 'About the old one')
+  assert.equal(await page.locator('.reading.kept [data-copy]').count(), 1)
+  await page.locator('.reading.kept [data-send]').click()
+  await page.waitForFunction(() => /Sent, about the earlier picture \(round 1\)\./.test(document.getElementById('toast').textContent))
+  await waitFor(() => read('Lines').find(r => r.round === 1)?.inferred?.[0]?.reply?.text === 'About the old one')
+  // Nothing left saved once they have gone: a reload shows no box.
+  await page.reload()
+  await page.waitForFunction(() => document.getElementById('canvas').width > 300)
+  await page.waitForTimeout(500)
+  assert.equal(await page.locator('[data-correct]').count(), 0)
+  assert.deepEqual(errors, [])
+})
+
+test('saved words that can never be shown again are cleared once discarded, never kept out of sight', { skip }, async () => {
+  const { page, errors, push } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Old words')
+  push('Lines', ['One'])
+  await page.locator('.reading.kept').waitFor({ timeout: 8000 })
+  await reloadKeeping(page)
+  await page.locator('.reading.kept [data-discard]').click()
+  assert.match(await page.locator('#toast').innerText(), /Words dropped/)
+  await page.reload()
+  await page.waitForFunction(() => document.getElementById('canvas').width > 300)
+  await page.waitForTimeout(500)
+  assert.equal(await page.locator('[data-correct]').count(), 0)
+  assert.equal(await page.evaluate(() => localStorage.getItem('review:ui:box') || ''), '')
+  assert.deepEqual(errors, [])
+})
+
 test('two answers on one picture each with a mark 1: the older one\'s line says earlier 1', { skip }, async () => {
   const { page, errors, read, env } = await twoReadings({ marks: [[0.1, 0.1, 0.3, 0.3]] })
   await draw(page, 0.5, 0.6, 0.6, 0.7)
