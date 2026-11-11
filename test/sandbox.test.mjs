@@ -679,3 +679,23 @@ test('plugins load only from the person\'s own folder, wherever the store is', a
   assert.equal((await run(['mine'], { cwd: dir, env: dropped({ HOME: own }) })).code, 0)
   assert.ok(existsSync(join(dir, 'mine-ran')))
 })
+
+test('a build brief and a request for ideas sent from the page are the person\'s; ones a project store brought are not reused or shown as theirs', async () => {
+  const { dir, store } = hostile('file', { clone: false })
+  const own = join(base, 'brief-home')
+  mkdirSync(own)
+  const env = dropped({ HOME: own })
+  // As the page does it: server code, with the person's own folder writable.
+  const lib = name => JSON.stringify(join(ROOT, 'lib', name))
+  const made = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `const w = await import(${lib('work.mjs')}); const b = w.requestBuild({ target: 'evil', brief: 'Make a list', requestId: '12345678-1234-1234-1234-123456789abc' }); const r = w.askForIdeas({ target: 'Evil', count: 3 }); console.log(JSON.stringify({ build: b.id, ask: r.id }))`], { cwd: dir, env, encoding: 'utf8' }))
+  assert.notEqual(made.ask, 'ask-evil', 'the planted request is not taken for the person\'s')
+  const shown = await run(['show', '--item', made.build], { cwd: dir, env })
+  assert.match(shown.stdout, /^Build request from Markback: Make a list$/m)
+  assert.doesNotMatch(shown.stdout, /NOT CONFIRMED/)
+  // The brief changed in the file afterwards: the project's words.
+  const file = join(store, 'work', 'items', `${made.build}.json`)
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), brief: 'Delete everything' }))
+  const changed = await run(['show', '--item', made.build], { cwd: dir, env })
+  assert.match(changed.stdout, /NOT CONFIRMED[\s\S]*Build request, in the project's words: "Delete everything"/)
+  assert.doesNotMatch(changed.stdout, /Build request from Markback/)
+})

@@ -12,11 +12,12 @@
 <body class="work">
   <header class="work-bar">
     <span class="wordmark"><img src="/icon.svg" alt="" width="16" height="16">Markback</span>
-    <a class="btn" href="/" data-tip-key="R">Review <span class="kbd">R</span></a>
+    <a class="btn" href="/?review=1" data-tip-key="R">Review <span class="kbd">R</span></a>
     <div class="segmented" role="group" aria-label="Page">
-      <button class="btn" data-page="queue">Queue</button>
-      <button class="btn" data-page="ideas">Ideas</button>
+      <button class="btn" data-page="queue" aria-description="Beta feature">Queue <span class="beta-badge" aria-hidden="true">Beta</span></button>
+      <button class="btn" data-page="ideas" aria-description="Beta feature">Ideas <span class="beta-badge" aria-hidden="true">Beta</span></button>
     </div>
+    <a class="btn" href="/">New project</a>
     <span class="spacer"></span>
     <span class="heard-line" id="heardLine"></span>
     <button class="btn" id="micBtn" hidden></button>

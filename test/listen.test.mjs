@@ -290,6 +290,31 @@ test('the wake command is set from the command line only, kept with its folder a
   assert.throws(() => setWake({ run: "x '{prompt}'", folder: homedir() }), /project's folder/, 'never for the home folder, which holds every project')
 })
 
+test('a routed idea request wakes the Claude project and its approved idea returns to that project', async () => {
+  settle()
+  const folder = join(home, 'claude-ideas')
+  mkdirSync(folder)
+  const request = askForIdeas({ target: 'How can the first screen be better?', count: 1, route: 'claude-ideas' })
+  assert.equal(askForIdeas({ target: request.target, count: 1, route: 'claude-ideas' }).id, request.id)
+  const agent = standIn('claude-ideas-worker', `
+    const work = JSON.parse(execFileSync(process.execPath, [${JSON.stringify(CLI)}, 'work', '--json'], { encoding: 'utf8' }))
+    if (work.ideas.length !== 1 || work.ideas[0].id !== ${JSON.stringify(request.id)}) throw new Error('The request was not routed here.')
+    execFileSync(process.execPath, [${JSON.stringify(CLI)}, 'ideas', 'post', '--request', work.ideas[0].id, '--what', 'Show the next step'])
+  `)
+  setWake({ folder, run: agent.run, by: 'Claude', app: 'claude-ideas' })
+  assert.match(run(['wake', 'kimi', '--session', 'test-session', '--app', 'claude-ideas'], { cwd: folder }).stderr, /already set for Claude/)
+  const waker = createWaker({ quiet: 0 })
+  assert.equal(waker.check()[readWake(folder).key], 'started')
+  await until(() => waker.last(readWake(folder).key)?.running === false)
+  assert.equal(waker.last(readWake(folder).key).failed, false)
+  const item = listWork().find(i => i.request === request.id)
+  assert.equal(item.route, 'claude-ideas')
+  decide(item.id, 'yes')
+  assert.equal(JSON.parse(cliIn(folder, 'work', '--json')).queue[0].id, item.id)
+  clearWake(folder)
+  settle()
+})
+
 test('the server wakes the agent once for waiting work: not at once, not twice for the same work, one run at a time, and a run that changes nothing has failed', async () => {
   settle()
   const agent = standIn('agent')

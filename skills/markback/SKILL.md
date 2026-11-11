@@ -10,6 +10,10 @@ Start from what the person said.
 
 If `review` is not found, use `node <Markback folder>/review.mjs` in its place. The Markback folder is two folders up from this SKILL.md: the one that holds `skills`.
 
+## Set up the New project page
+
+When the person asks to open New project, start Markback with `review start`, then connect their agent to this workspace using the wake instructions in `ideas-and-queue`. Use the workspace name as the review target when there are no screens yet. Run `review open --new --no-open` and open the printed address in the agent’s browser pane. If the agent has no browser pane, use `review open --new` to open it in the person’s browser. The box starts with “Make a todo app.” The person can edit it or press **Send to agent**. Wait for their request before building.
+
 ## In their project
 
 Run this in the project's folder:
@@ -39,6 +43,6 @@ For a single-screen project, `review project --no-open` can also capture and pus
 
 Once the first review is open, set up wake as described in the `ideas-and-queue` skill. In Codex Desktop, use the chat's native heartbeat and let the turn end after the first push. Do not register a subprocess or start a blocking wait when the Desktop heartbeat is active.
 
-For sessions without a Desktop heartbeat, keep listening after each round: start `review work wait --by "your name"` as the `ideas-and-queue` skill says, and when it ends, do what it prints. An approved proposal is an instruction to build, not a question.
+For Kimi with background wake configured, finish the turn after a push so Markback can resume the selected Kimi Code session on the next request. For other sessions without a Desktop heartbeat, start `review work wait --by "your name"` after each round and do what it prints.
 
 If a command fails or nothing shows, run `review check` and tell the person what it says.

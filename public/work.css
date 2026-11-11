@@ -6,12 +6,16 @@ a.btn { text-decoration: none; }
 .work-bar .btn.on { background: var(--chosen); border-color: var(--chosen-edge); color: var(--chosen-ink); box-shadow: none; }
 .work-page { flex: 1; min-height: 0; overflow: auto; padding: 16px 20px 40px; }
 .work-inner { max-width: 980px; margin: 0 auto; }
-.ask { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
 .ask label { font-weight: 600; color: var(--soft); }
-.ask input { height: 30px; padding: 0 8px; font: inherit; color: var(--ink); background: var(--ground); border: 1px solid var(--edge); border-radius: var(--r); }
+.ask input, .ask select { height: 30px; padding: 0 8px; font: inherit; color: var(--ink); background: var(--ground); border: 1px solid var(--edge); border-radius: var(--r); }
 .ask #target { flex: 1; min-width: 160px; }
 .ask #count { width: 62px; }
 .waiting-line { margin: 0 0 12px; color: var(--soft); }
+.idea-request { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 4px; border-bottom: 1px solid var(--rule); }
+.idea-request > div { min-width: 0; overflow-wrap: anywhere; }
+.idea-request .wait { color: var(--soft); font-size: 12px; }
+.idea-request .btn { flex: none; }
 .section-head { display: flex; align-items: baseline; gap: 8px; margin: 18px 0 4px; font-size: 13px; font-weight: 700; }
 .section-head span { color: var(--faint); font-weight: 500; font-variant-numeric: tabular-nums; }
 .section-head button { all: unset; cursor: pointer; font-weight: 700; }
@@ -67,6 +71,9 @@ a.btn { text-decoration: none; }
 .keys-line { margin-top: 14px; color: var(--faint); font-size: 12px; }
 #micBtn.listening { background: var(--danger); border-color: var(--danger); color: #fff; }
 #micBtn svg { width: 15px; height: 15px; }
+@media (max-width: 560px) {
+  .work-bar { height: auto; min-height: 46px; padding-block: 6px; flex-wrap: wrap; }
+}
 @media (max-width: 760px) {
   .row { grid-template-columns: 26px minmax(0, 1fr) 120px !important; }
   .row .target, .row .who, .row > .phase { display: none; }
