@@ -4207,6 +4207,7 @@ test('a choice is made by clicking an option, its button or its key, changed bef
   // Looks good with nothing chosen says what to do, and sends nothing.
   await page.keyboard.press('g')
   await page.locator('#toast').getByText('Choose one first').waitFor()
+  assert.match(await page.locator('#toast').innerText(), /Press A, B or C, or click an option\./)
   // Chosen, then marked: a drag over C is a mark on C, not a choice.
   await page.keyboard.press('c')
   const c = await overOption(page, s, 'C', 0.3)
@@ -4509,6 +4510,8 @@ test('through the phone\'s door a lineup is a lineup: the question and buttons s
     // Looks good with nothing chosen says so on the phone too.
     await page.locator('#footActions [data-act=good]').tap()
     await page.locator('#toast').getByText('Choose one first').waitFor()
+    assert.match(await page.locator('#toast').innerText(), /Tap a choice\./, 'a phone has no keys to press')
+    assert.doesNotMatch(await page.locator('#toast').innerText(), /Press|click/)
     // A tap on option B, before Mark, chooses it; Looks good sends it.
     const b = await overOption(page, s, 'B')
     await page.touchscreen.tap(b.x, b.y)
@@ -4548,4 +4551,24 @@ test('a lineup whose question wraps onto two lines is still whole, and stays who
   await page.setViewportSize({ width: 900, height: 700 })
   assert.ok((await whole('smaller')).fits)
   assert.deepEqual(errors, [])
+})
+
+
+test('a refused answer says why and no more: no "press Send to try again"; a server that fails still says it is kept', { skip }, async () => {
+  const r = await rig()
+  await lineup(r, 'Refused')
+  const { page, errors } = await r.open('refused', { undo: 1 })
+  let answer = { status: 400, body: { error: 'Which layout for page 2? is a choice, and this page does not show it. Reload the page, then choose.' } }
+  await page.route('**/api/send', route => route.fulfill({ status: answer.status, contentType: 'application/json', body: JSON.stringify(answer.body) }))
+  await page.keyboard.press('b')
+  await page.keyboard.press('g')
+  const toast = page.locator('#toast')
+  await toast.getByText('Reload the page, then choose.').waitFor()
+  assert.doesNotMatch(await toast.innerText(), /Press Send to try again/)
+  answer = { status: 500, body: { error: 'Something broke.' } }
+  await page.keyboard.press('a')
+  await page.keyboard.press('g')
+  await toast.getByText('Something broke.').waitFor()
+  assert.match(await toast.innerText(), /It is kept\. Press Send to try again\./)
+  assert.deepEqual(errors.filter(e => !/40\d|500|Internal Server Error|Bad Request/.test(e)), [])
 })
