@@ -72,6 +72,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createServer } from 'node:net'
+import { codeVersion } from './lib/version.mjs'
 import { HOME, INBOX, PORT, PROJECT_STORE, STORE_LINE, WHERE, answerConfirmed, answerId, canCheck, storeIdNow, clearApp, isSetAside, listApps, listScreens, liveAddress, postReading, push, readInbox, rememberPort, slug } from './lib/store.mjs'
 import { ignoreHint, ignoreHintOnce, projectPort, shellWord, writeProjectFile } from './lib/home.mjs'
 import { NO_CHROME, canTakePictures, pushSample, showApp } from './lib/first.mjs'
@@ -165,7 +166,7 @@ async function pageHint() {
 
 /** Whose page answers on a port: this store's ('ours'), another store's ('other'), one this command cannot tell ('unknown'), or none ('none'). */
 async function pageOn(port) {
-  const queue = await fetch(`http://127.0.0.1:${port}/api/queue`, { signal: AbortSignal.timeout(1500) }).then(r => (r.ok ? r.json() : null), () => null).catch(() => null)
+  const queue = await queueAt(port)
   if (!queue) return 'none'
   // A page from before pages said their store cannot be told apart, so it is not taken for this one. Without the secret, this
   // command cannot tell which store a page shows.
@@ -173,6 +174,9 @@ async function pageOn(port) {
   if (!mine) return 'unknown'
   return queue.store === mine ? 'ours' : 'other'
 }
+
+/** What the page on a port says of itself, or null. */
+const queueAt = port => fetch(`http://127.0.0.1:${port}/api/queue`, { signal: AbortSignal.timeout(1500) }).then(r => (r.ok ? r.json() : null), () => null).catch(() => null)
 
 /** Nothing holds this port now. */
 const portFree = port => new Promise(resolve => {
@@ -491,13 +495,30 @@ const readPid = () => {
 }
 /** This number is Markback's own server, still running: not a number the system has since given to something else. */
 const SERVER = join(dirname(fileURLToPath(import.meta.url)), 'server.mjs')
+/**
+ * A server.mjs in a Markback folder (one that also holds review.mjs and lib/store.mjs). In the person's own store a page they
+ * started from another copy of Markback, or before an update, is still theirs to stop; a project store's server.pid could
+ * name any of them, so there only this copy's server counts, and the page must say it is that process (servesThisStore).
+ */
+const markbackServerIn = command => {
+  const end = command.search(/\/server\.mjs(?=\s|$)/)
+  if (end < 0) return false
+  // The path may hold spaces: each word start before it is tried, longest first.
+  for (let at = 0; at < end; at++) {
+    if (at && command[at - 1] !== ' ') continue
+    const folder = command.slice(at, end)
+    if (folder.startsWith('/') && existsSync(join(folder, 'review.mjs')) && existsSync(join(folder, 'lib', 'store.mjs'))) return true
+  }
+  return false
+}
 const ourServer = pid => {
   if (!pid) return false
   try {
     process.kill(pid, 0)
     // Windows has no ps to ask: there a live number is taken as the server, as before.
     if (process.platform === 'win32') return true
-    return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).includes(SERVER)
+    const command = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
+    return command.includes(SERVER) || (!PROJECT_STORE && markbackServerIn(command))
   } catch {
     // Gone, not ours, or no way to tell: never trusted, never signalled.
     return false
@@ -506,7 +527,18 @@ const ourServer = pid => {
 /** Runs the server on its own, so it outlasts this command. Nothing leaves this computer. */
 async function start() {
   let port = Number(flags.port || PORT)
-  const page = await pageOn(port)
+  let page = await pageOn(port)
+  // A page from before an update: older code, or one from before pages said their store. In the person's own store, one this
+  // store's server.pid names is theirs: it is stopped and this code started in its place.
+  const info = page === 'none' ? null : await queueAt(port)
+  const older = info && info.version !== codeVersion() && (page === 'ours' || (!PROJECT_STORE && !info.store))
+  if (older) {
+    const pid = readPid()
+    if (!(ourServer(pid) && (await servesThisStore(pid)))) fail(`An older Markback runs on port ${port}${info.pid ? ` (process ${info.pid})` : ''}, and this command cannot tell it is this store's. Stop it, then run review start again${info.pid ? `: kill ${info.pid}` : ''}.`)
+    await stopServer(pid)
+    console.log('An older Markback was running for this store. It is stopped, and this one starts in its place.')
+    page = 'none'
+  }
   if (page === 'ours') {
     if (flags.port) rememberPort(port)
     return console.log(`Already running: http://localhost:${port}`)
@@ -548,19 +580,33 @@ async function servesThisStore(pid) {
   return !!queue?.store && queue.store === storeIdNow() && queue?.pid === pid
 }
 
+/** Stops a server, and waits until it has gone and its port is free, so a new one can take it at once. */
+async function stopServer(pid) {
+  process.kill(pid)
+  for (let i = 0; i < 50 && ourServer(pid); i++) await sleep(100)
+  rmSync(PID_FILE, { force: true })
+}
+
 async function stop() {
-  // Review from a phone goes off with the page: asked of the page first, so what it could not do is said.
+  // Review from a phone goes off with the page: asked of the page first, so what it could not do is said. A page from before
+  // phones has no such question: that, or any answer but a plain one, never stands in the way of stopping it.
   if (await up(PORT)) {
-    const was = await askPhone().catch(() => null)
-    if (was?.on) sayOff(await askPhone(false))
+    const was = await fetch(`http://127.0.0.1:${PORT}/api/phone`, { signal: AbortSignal.timeout(5000) }).then(r => (r.ok ? r.json() : null), () => null).catch(() => null)
+    if (was?.on) {
+      const off = await fetch(`http://127.0.0.1:${PORT}/api/phone`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: false }), signal: AbortSignal.timeout(60000) }).then(r => r.json(), () => null).catch(() => null)
+      if (off) sayOff(off)
+      else console.log('Review from your phone could not be turned off from here. Turn it off in Tailscale.')
+    }
   }
   if (!existsSync(PID_FILE)) return console.log('It is not running from here.')
   const pid = readPid()
   if (ourServer(pid) && (await servesThisStore(pid))) {
-    process.kill(pid)
+    await stopServer(pid)
     console.log('Stopped.')
-  } else console.log('It was not running.')
-  rmSync(PID_FILE, { force: true })
+  } else {
+    console.log('It was not running.')
+    rmSync(PID_FILE, { force: true })
+  }
 }
 
 /**

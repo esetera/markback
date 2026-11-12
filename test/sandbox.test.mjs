@@ -726,3 +726,27 @@ test('review queue labels an item moved back to the queue without the person, as
   assert.doesNotMatch(queue, /\[Proposal\]|\[Build\]/)
   assert.match((await run(['take', '--by', 'Claude'], { cwd: dir, env })).stdout, /Nothing is queued/)
 })
+
+test('a project store\'s server.pid naming an older Markback elsewhere is never stopped, nor replaced by start', async () => {
+  const folder = join(base, 'older markback')
+  mkdirSync(join(folder, 'lib'), { recursive: true })
+  writeFileSync(join(folder, 'review.mjs'), '')
+  writeFileSync(join(folder, 'lib', 'store.mjs'), '')
+  writeFileSync(join(folder, 'server.mjs'), `import { createServer } from 'node:http'\ncreateServer((req, res) => res.writeHead(req.url === '/api/queue' ? 200 : 404).end(req.url === '/api/queue' ? '{"apps":[]}' : '{"error":"Not found"}')).listen(Number(process.env.REVIEW_PORT), '127.0.0.1')\n`)
+  const port = await freePort()
+  const { spawn } = await import('node:child_process')
+  const older = spawn(process.execPath, [join(folder, 'server.mjs')], { env: { ...process.env, REVIEW_PORT: String(port) }, stdio: 'ignore' })
+  try {
+    for (let i = 0; i < 100 && !(await queueAt(port)); i++) await new Promise(r => setTimeout(r, 50))
+    const dir = project({ home: '.markback-store', port })
+    mkdirSync(join(dir, '.markback-store'))
+    writeFileSync(join(dir, '.markback-store', 'server.pid'), String(older.pid))
+    assert.match((await run(['stop'], { cwd: dir })).stdout, /It was not running/)
+    const started = await run(['start'], { cwd: dir })
+    assert.doesNotMatch(started.stdout, /older Markback was running/)
+    assert.ok(await queueAt(port), 'the older page still runs')
+    await run(['stop'], { cwd: dir })
+  } finally {
+    older.kill()
+  }
+})

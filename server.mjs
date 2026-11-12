@@ -14,6 +14,7 @@ import { filmOf, leftOutLine, saveFilm, savedPart } from './lib/film.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { linkIn, LINK_OUT } from './lib/home.mjs'
 import { makeSecret } from './lib/trust.mjs'
+import { codeVersion } from './lib/version.mjs'
 import { hasReader, stopReading, wordsForPicture } from './lib/read-words.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder, requestBuild } from './lib/work.mjs'
 import { PhoneProblem, WORDS as PHONE_WORDS, cleanStale, phoneDoor, phoneMay, warmUp } from './lib/phone.mjs'
@@ -237,7 +238,7 @@ async function handle(req, res, fromPhone = false) {
       // requests: those are for the computer's own page.
       if (fromPhone) return json(res, 200, { apps: forPhone.apps(apps), listening: forPhone.listening(status), phone: forPhone.phone(phone.status()), reader: hasReader(), remote: true })
       const ideaRequests = listRequests().filter(r => r.status === 'open' || r.posted).slice(-8)
-      return json(res, 200, { apps, listening: status, buildTargets: workTargets(apps, status), ideaRequests, reader: hasReader(), store: storeIdNow(), pid: process.pid, phone: phone.status() })
+      return json(res, 200, { apps, listening: status, buildTargets: workTargets(apps, status), ideaRequests, reader: hasReader(), store: storeIdNow(), pid: process.pid, version: codeVersion(), phone: phone.status() })
     }
     if (req.method === 'GET' && url.pathname === '/api/phone') return json(res, 200, fromPhone ? forPhone.phone(phone.status()) : phone.status())
     if (req.method === 'POST' && url.pathname === '/api/phone') {
