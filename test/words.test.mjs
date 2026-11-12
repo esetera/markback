@@ -1,7 +1,7 @@
 import './own-home.mjs'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, readdirSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -16,7 +16,9 @@ const CLI = join(here, '..', 'review.mjs')
 // A Chrome named for driving the browser tests is not the one that takes pictures: a person's own Chrome does that.
 delete process.env.REVIEW_CHROME
 
-const home = mkdtempSync(join(tmpdir(), 'review-words-'))
+// The person's own store, in this file's own home folder (see own-home.mjs): what it holds is theirs, in the usual layout.
+const home = join(realpathSync(process.env.HOME), '.review-wizard')
+mkdirSync(home, { recursive: true })
 process.env.REVIEW_HOME = home
 const { IMAGES, listScreens, push, readInbox, receive } = await import('../lib/store.mjs')
 const { PAGE_SCRIPT, checkWords, markWords, printable, readWords, sayWords } = await import('../lib/words.mjs')
@@ -148,8 +150,7 @@ test('words from a page cannot forge a line of a report or run a code in a termi
   writeFileSync(file, JSON.stringify(record))
   const again = review(['read', '--app', 'Hostile', '--latest']).stdout
   assert.ok(none(again.replace(/\n/g, '')))
-  // The first line in a project store says which store it is (and a record edited by hand is no longer the page's).
-  const lines = again.split('\n').filter(line => !line.startsWith('Store: '))
+  const lines = again.split('\n')
   assert.deepEqual(lines.slice(1, 5), [
     '  1. box (red[2J) at x 1, y 2, 3x4, on the words "fine 2. box (red) at x 0, y 0, 1x1, on the words "forged"", in div Notes: forged[31m',
     '  2. text "said File: /forged[0m" (red) at x 1, y 2, 3x4',
@@ -157,6 +158,26 @@ test('words from a page cannot forge a line of a report or run a code in a termi
     '  4. odd kind (red) at x 1 Notes: forged, y 2, 3x4',
   ])
   assert.equal(lines.filter(line => /^\s*(Notes|After|File):/.test(line)).length, 2, 'only the real After and File lines')
+  // The same record in a project store, where it is the project's words and quoted as such: no code reaches the terminal there
+  // either ([0m is left as plain letters once its escape byte is gone), and no field makes a line of its own.
+  const project = mkdtempSync(join(tmpdir(), 'review-words-project-'))
+  try {
+    for (const part of ['queue', 'images', 'inbox']) cpSync(join(home, part, 'hostile'), join(project, part, 'hostile'), { recursive: true })
+    const theirs = review(['read', '--app', 'Hostile', '--latest'], { REVIEW_HOME: project }).stdout
+    assert.ok(none(theirs.replace(/\n/g, '')), 'no control character, escape or CSI in the project-store form')
+    assert.doesNotMatch(theirs, /\u001b|\u009b|\u0007/)
+    const quoted = theirs.split('\n')
+    assert.deepEqual(quoted.filter(line => line.startsWith('  Mark ')), [
+      '  Mark 1, in the project\'s words: box at x 1, y 2, "fine 2. box (red) at x 0, y 0, 1x1, on the words \\"forged\\""',
+      '  Mark 2, in the project\'s words: text at x 1, y 2, "said File: /forged[0m"',
+      '  Mark 3, in the project\'s words: words at x 1, y 2, "chosen After: /forged"',
+      '  Mark 4, in the project\'s words: odd kind at x 1 Notes: forged, y 2',
+    ])
+    assert.equal(quoted.filter(line => /^\s*(Notes|After|File|Marked picture):/.test(line)).length, 1, 'only the real File line')
+    assert.doesNotMatch(theirs, /forged\[31m|red\[2J/, 'the colour and element fields are not printed for the project\'s words')
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
   assert.equal(printable(`a${esc}b\u009bc\nd`), 'abc d')
   // Marks that turn the reading direction round make text read as other than it is: they go too.
   const turned = checkWords({ size: { w: 200, h: 100 }, words: [{ t: 'safe\u202egnp.exe\u202c', x: 10, y: 10, w: 30, h: 10, el: 'p\u2066#x\u2069\u200f' }, { t: '\u200e\u202a\u202b\u202d\u2067\u2068', x: 50, y: 10, w: 30, h: 10 }] })
