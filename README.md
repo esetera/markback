@@ -233,6 +233,7 @@ Moving into another review is never quiet. A full overlay says what was finished
 | 1–4 | Red, amber, blue, black |
 | ⌘Z / ⇧⌘Z | Undo / redo a mark |
 | + − 0 | Zoom in, zoom out, fit. On a tall picture, 0 again shows the whole of it |
+| A–F | On a choice: choose that option. There, they come before the tools that share them |
 | N | Write notes on this screen |
 | G | Looks good, and on to the next |
 | ⌘Enter | Send, and on to the next |
@@ -251,6 +252,15 @@ Say what to look at in ten words or fewer. Longer words wait behind More, and `p
 
 The pictures are copied, so scratch files can go away. Pushing the same app, screen and mode again starts round 2 on
 the same step. The marks and notes sent on round 1 come along as checks: the page asks the person whether each is fixed, and `push` says how many.
+
+### Ask the person to choose
+
+```
+review choose --app Brochure --question "Which layout for page 2?" \
+  --option A=a.png --option B=b.png --option "Equal panels=c.png"
+```
+
+Two to six options, side by side as one screen: a lineup. The question is the heading, and a big Choose button stands over each option. The person chooses by the button, by clicking an option, by pressing its letter, or by pointing with the speak tool and saying "this one". Change choice takes it back before it goes. They can mark up an option and write notes as on any screen, then press Send or Looks good. `review read` says which option was chosen, and which option each mark is on. Give the options in order; a short label before `=` is shown under the button.
 
 ### A PDF
 

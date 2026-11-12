@@ -3744,3 +3744,153 @@ test('partial ticks say what the choices are, and Looks good for the rest says w
   assert.match(await page.locator('#submitBody').innerText(), /Your ticks on these are not sent: One/)
   assert.deepEqual(errors, [])
 })
+
+/* ---------- a choice: the options side by side as a lineup ---------- */
+
+/** A choice of three pages, pushed as an agent would. */
+async function lineup(r, app = 'Cover') {
+  const options = ['a', 'b', 'c'].map((name, n) => {
+    const path = join(r.home, `option-${name}.png`)
+    writePicture(path, 600, 850, { x: 60 + n * 120, y: 100, w: 200, h: 120 })
+    return path
+  })
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'choose', '--app', app, '--question', 'Which layout for page 2?', ...options.flatMap((path, n) => ['--option', n === 2 ? `Equal panels=${path}` : path])], { env: r.env, stdio: 'ignore' })
+  return (await r.queue(slugOf(app))).screens[0]
+}
+const slugOf = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+/** A point on the canvas over an option, as shares of the canvas. */
+const overOption = async (page, s, key, down = 0.5) => {
+  const c = await page.locator('#canvas').boundingBox()
+  const o = s.choice.options.find(x => x.key === key)
+  const wide = await page.evaluate(() => document.getElementById('canvas').width)
+  return { x: c.x + ((o.box.x + o.box.w / 2) / wide) * c.width, y: c.y + c.height * down }
+}
+
+test('a choice shows as a lineup: the question as the heading, a button centred over each option, all of them in view', { skip }, async () => {
+  const r = await rig()
+  const s = await lineup(r)
+  for (const [width, height] of [[1500, 960], [390, 844]]) {
+    for (const colorScheme of ['light', 'dark']) {
+      const { page, errors } = await r.open('cover', { width, height, colorScheme })
+      await settled(page)
+      const where = `${width} ${colorScheme}`
+      assert.equal(await page.locator('#lineupQuestion').textContent(), 'Which layout for page 2?', where)
+      assert.match(await page.locator('.lineup-status').textContent(), /press A, B or C/)
+      const c = await page.locator('#canvas').boundingBox()
+      assert.ok(c.x >= 0 && c.x + c.width <= width + 1 && c.y + c.height <= height, `every option in view at ${where}`)
+      const buttons = page.locator('[data-choose]')
+      assert.equal(await buttons.count(), 3)
+      for (const key of ['A', 'B', 'C']) {
+        const b = await page.locator(`[data-choose="${key}"]`).boundingBox()
+        const spot = await overOption(page, s, key)
+        assert.ok(Math.abs(b.x + b.width / 2 - spot.x) < 2, `${key} is centred over its option at ${where}`)
+        assert.ok(b.y + b.height <= c.y, `${key} is above its option at ${where}`)
+        assert.ok(b.x >= 0 && b.x + b.width <= width, `${key} is in view at ${where}`)
+      }
+      // A plain big blue button, with white words: never lost in the page.
+      const look = await page.locator('[data-choose="A"]').evaluate(el => [getComputedStyle(el).backgroundColor, getComputedStyle(el).color])
+      assert.notEqual(look[0], look[1])
+      assert.equal(look[1], 'rgb(255, 255, 255)')
+      assert.deepEqual(errors, [], where)
+      await page.context().close()
+    }
+  }
+})
+
+test('a choice is made by clicking an option, its button or its key, changed before it goes, and sent with marks on it', { skip }, async () => {
+  const r = await rig()
+  const s = await lineup(r)
+  const { page, errors } = await r.open('cover')
+  const chosen = async () => (await saved(page, 'cover', s.id))?.choice ?? null
+  const pressed = () => page.locator('[data-choose][aria-pressed="true"]').getAttribute('data-choose')
+  // A click on the picture of B, with the box tool in hand, chooses B and draws nothing.
+  const b = await overOption(page, s, 'B')
+  await page.mouse.click(b.x, b.y)
+  assert.equal(await chosen(), 'B')
+  assert.equal(await pressed(), 'B')
+  assert.match(await page.locator('.lineup-status').textContent(), /You chose B/)
+  assert.equal((await saved(page, 'cover', s.id)).marks.length, 0)
+  // Looks good would send B as it is; Send is lit too.
+  assert.equal(await page.locator('[data-act="send"]').isDisabled(), false)
+  // Its key changes it, and so does its button. Only one is ever chosen.
+  await page.keyboard.press('c')
+  assert.equal(await chosen(), 'C')
+  assert.equal(await page.locator('[data-choose][aria-pressed="true"]').count(), 1)
+  assert.match(await page.locator('[data-choose="C"]').textContent(), /Chosen C/)
+  await page.locator('[data-choose="A"]').click()
+  assert.equal(await chosen(), 'A')
+  // Change choice takes it back.
+  await page.locator('[data-unchoose]').click()
+  assert.equal(await chosen(), null)
+  assert.equal(await page.locator('[data-choose][aria-pressed="true"]').count(), 0)
+  assert.equal(await page.locator('[data-act="send"]').isDisabled(), true)
+  // Looks good with nothing chosen says what to do, and sends nothing.
+  await page.keyboard.press('g')
+  await page.locator('#toast').getByText('Choose one first').waitFor()
+  // Chosen, then marked: a drag over C is a mark on C, not a choice.
+  await page.keyboard.press('c')
+  const c = await overOption(page, s, 'C', 0.3)
+  await page.mouse.move(c.x - 30, c.y)
+  await page.mouse.down()
+  await page.mouse.move(c.x + 40, c.y + 50, { steps: 4 })
+  await page.mouse.up()
+  assert.equal(await chosen(), 'C')
+  assert.equal((await saved(page, 'cover', s.id)).marks.length, 1)
+  await page.locator('#notes').fill('Bigger title on this one')
+  await page.locator('#notes').blur()
+  await page.keyboard.press('Meta+Enter')
+  const sent = await waitFor(() => r.read('Cover')[0])
+  assert.equal(sent.verdict, 'changes')
+  assert.equal(sent.choice.chosen, 'C')
+  assert.equal(sent.choice.label, 'Equal panels')
+  assert.deepEqual(sent.shapes.map(x => x.option), ['C'])
+  assert.equal(sent.notes, 'Bigger title on this one')
+  assert.ok(sent.annotatedImage, 'the marked lineup is made')
+  assert.deepEqual(errors, [])
+})
+
+test('a choice alone goes by Send or Looks good, and its letters are words while typing', { skip }, async () => {
+  const r = await rig()
+  const s = await lineup(r)
+  const { page, errors } = await r.open('cover')
+  await page.locator('#notes').focus()
+  await page.keyboard.type('abc')
+  assert.equal(await page.locator('#notes').inputValue(), 'abc', 'the keys are the words')
+  assert.equal((await saved(page, 'cover', s.id))?.choice ?? null, null, 'nothing was chosen')
+  await page.locator('#notes').fill('')
+  await page.locator('#notes').blur()
+  await page.keyboard.press('b')
+  await page.locator('[data-act="send"]').click()
+  const sent = await waitFor(() => r.read('Cover')[0])
+  assert.equal(sent.verdict, 'approved')
+  assert.equal(sent.choice.chosen, 'B')
+  assert.deepEqual(errors, [])
+})
+
+test('on a lineup, "this one" said while pointing at an option chooses it, and leaves no mark', { skip }, async () => {
+  const r = await rig()
+  const s = await lineup(r)
+  const { page, errors } = await withSpeech(r, 'cover')
+  await page.locator('#canvas').waitFor()
+  await page.waitForFunction(() => document.getElementById('canvas').width > 300)
+  // D is not an option here, so it is still the speak tool.
+  await page.keyboard.press('d')
+  assert.equal(await page.locator('#toolButtons .on').getAttribute('data-tool'), 'speak')
+  const b = await overOption(page, s, 'B')
+  await page.mouse.click(b.x, b.y)
+  await page.waitForFunction(() => window.FAKE)
+  await page.evaluate(() => window.say('this one', true))
+  await page.keyboard.press('Escape')
+  await settled(page)
+  const draft = await saved(page, 'cover', s.id)
+  assert.equal(draft.choice, 'B')
+  assert.equal(draft.marks.length, 0)
+  // Anything else said there is a pin on that option, as usual.
+  const c = await overOption(page, s, 'C')
+  await page.mouse.click(c.x, c.y)
+  await page.evaluate(() => window.say('too busy', true))
+  await page.keyboard.press('Escape')
+  await settled(page)
+  assert.deepEqual((await saved(page, 'cover', s.id)).marks.map(m => m.text), ['too busy'])
+  assert.deepEqual(errors, [])
+})

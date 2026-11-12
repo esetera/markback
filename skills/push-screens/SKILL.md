@@ -38,6 +38,16 @@ review pdf brochure.pdf --check "Is the cover right?"
 
 Each page becomes a screen, named Page 1, Page 2 and so on, under the file's name (or `--app`). It shows the first 30 pages; ask for others with `--pages 31-60`, or one page with `--pages 4`. Push it again after a change and each page starts its next round, with where it changed marked. Two PDFs with the same file name share one review, so give `--app` to keep them apart. It takes `--kind`, `--item` and `--from` as `push` does. On a Mac it needs nothing more. Anywhere else it needs `pdftoppm`, which comes with Poppler.
 
+## Ask the person to choose
+
+When there are options for the person to choose between, designs A, B and C say, push them as one choice:
+
+```bash
+review choose --app "Brochure" --question "Which layout for page 2?" --option A=a.png --option B=b.png --option "Equal panels=c.png"
+```
+
+The page shows them side by side, a lineup, with the question as the heading and a Choose button over each. The person chooses by the button, by clicking an option, by its letter, or by pointing and saying "this one". They can mark up an option and write notes too. Give 2 to 6 options, in order: each is a picture, with a short label before `=` if it helps. Use the question as a decision, in twelve words or fewer. It takes `--note`, `--kind`, `--item` and `--from` as `push` does. Pushing the same question again starts its next round.
+
 ## The words in the picture
 
 A screenshot is only pixels, so a box says where and not what. With a list of the words in the picture, every mark comes back with the words under it and the element they are in. `review see`, `review project` and `review pdf` make the list themselves. For a screenshot from your own browser tool, make the list in the page, at the same window size and scroll as the screenshot, and give it with `--words`:

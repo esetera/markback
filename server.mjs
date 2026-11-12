@@ -309,6 +309,7 @@ const server = createServer(async (req, res) => {
         unanswered: Array.isArray(input.unanswered) ? input.unanswered : [],
         back: Array.isArray(input.back) ? input.back : [],
         checked: Array.isArray(input.checked) ? input.checked : [],
+        choice: typeof input.choice === 'string' ? input.choice : null,
       })
       if (!record) return json(res, 200, { ok: true, olderPicture: true })
       const stageBefore = record.item ? listWork().find(i => i.id === record.item)?.stage : null

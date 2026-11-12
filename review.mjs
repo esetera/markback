@@ -6,6 +6,9 @@
  *   review push  --app MyApp --screen "Home" --mode light --after after.png [--before before.png] [--note "..."] [--check "..."]
  *                [--kind proposal|qa] [--item <id>] [--words list.json]   (the words in the picture, so marks can carry them)
  *   review words-script                         the script that makes such a list, to run in the page with a browser tool
+ *   review choose --app MyApp --question "Which cover?" --option A=a.png --option B=b.png [--option "Two columns=c.png"]
+ *                [--screen "Cover"] [--mode light] [--note "..."] [--kind proposal|qa] [--item <id>]
+ *                                               2 to 6 options side by side, a lineup: the person chooses one, by A, B, C...
  *   review list  [--app MyApp]
  *   review wait  --app MyApp [--all] [--timeout 3600] [--json]
  *   review read  --app MyApp [--since 2026-01-15T10:00:00Z] [--latest] [--json] [--peek]
@@ -63,7 +66,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HOME, INBOX, PORT, answerId, clearApp, isSetAside, listApps, listScreens, liveAddress, postReading, push, readInbox, rememberPort, slug } from './lib/store.mjs'
+import { HOME, INBOX, PORT, answerId, clearApp, isSetAside, listApps, listScreens, liveAddress, postReading, push, pushChoice, readInbox, rememberPort, slug } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { showPdf } from './lib/pdf.mjs'
 import { filmOf, filmScreen, leftOutLine, saveFilm } from './lib/film.mjs'
@@ -86,8 +89,8 @@ for (let i = 0; i < rest.length; i++) {
   const key = arg.slice(2)
   const next = rest[i + 1]
   // Said more than once, it is a list.
-  if (key === 'check') {
-    if (next !== undefined && !next.startsWith('--')) (flags.check ??= []).push(next)
+  if (key === 'check' || key === 'option') {
+    if (next !== undefined && !next.startsWith('--')) (flags[key] ??= []).push(next)
     if (next !== undefined && !next.startsWith('--')) i++
   } else if (key === 'fetch-browser' || next === undefined || next.startsWith('--')) flags[key] = true // --fetch-browser is a yes, never a name: what follows it is not its value
   else {
@@ -119,9 +122,10 @@ const delivered = records => {
 /** One mark in a line. Its words came from a page or a file: printed with no new lines and no codes, they cannot pass for a line of this report. */
 function markLine(s) {
   const box = `x ${s.box.x}, y ${s.box.y}, ${s.box.w}x${s.box.h}`
+  const on = s.option ? `on ${s.option}: ` : ''
   const what = s.type === 'text' ? `text "${s.text}"` : s.type === 'arrow' && s.from ? `arrow from ${s.from.x},${s.from.y} to ${s.to.x},${s.to.y}` : s.type === 'words' ? `words "${s.text}"` : s.type === 'pin' ? `said at pin ${s.n ?? ''} "${s.text}"`.replace('  ', ' ') : s.type
   const colour = s.colour ?? s.color
-  return printable(`${what}${colour ? ` (${colour})` : ''} at ${box}${sayWords(s)}`)
+  return printable(`${on}${what}${colour ? ` (${colour})` : ''} at ${box}${sayWords(s)}`)
 }
 
 /** One feedback record as a change request someone can act on. */
@@ -129,6 +133,8 @@ function describe(r) {
   const head = `${r.app} / ${r.screen}${r.mode ? ` (${r.mode})` : ''}, round ${r.round}: ${r.verdict === 'approved' ? (r.noComment ? 'LOOKS GOOD (no comment)' : 'LOOKS GOOD') : 'CHANGES ASKED'}${r.olderPicture ? ' (about an older picture; a new one has been pushed since)' : ''}`
   // The name review inferred --answer takes, on the same line, so the lines under it stay as they were.
   const lines = [r.verdict === 'changes' && r.shapes.length ? `${head}  Answer: ${answerId(r)}` : head]
+  // A choice says first what was chosen: that is the answer, and any marks and notes are about it.
+  if (r.choice) lines.push(`  ${chosenLine(r.choice)}`)
   // Where the earlier marks stand comes first: the newest answer says it in full.
   const asked = Array.isArray(r.asked) ? r.asked : []
   if (asked.length) {
@@ -150,6 +156,14 @@ function describe(r) {
   lines.push(`  File: ${r.file}`)
   for (const e of r.earlier ?? []) lines.push(`  Also said, and still stands:\n${describe(e).replace(/^/gm, '    ')}`)
   return lines.join('\n')
+}
+
+/** Which option was chosen, by its letter and label, and what it was chosen from. */
+function chosenLine(choice) {
+  const name = o => (o.label ? `${o.key} (${o.label})` : o.key)
+  const from = `${printable(choice.question)} ${choice.options.map(name).join(', ')}`
+  const chosen = choice.options.find(o => o.key === choice.chosen)
+  return printable(chosen ? `Chose ${name(chosen)}: ${chosen.picture}. Asked: ${from}` : `Chose none: the reviewer did not choose. Asked: ${from}`)
 }
 
 /** What the reviewer said back to a reading. A correction is a request: it stands in place of the reading. */
@@ -423,6 +437,18 @@ if (command === 'push') {
   const open = (entry.asked ?? []).filter(a => a.state !== 'fixed').length
   // The agent should know the page will ask about these, and that `read` says which still stand.
   if (open) console.log(`${open} earlier mark${open === 1 ? '' : 's'} on this screen ${open === 1 ? 'comes' : 'come'} along as checks: the reviewer ticks each fixed or says it still stands, and review read says which.`)
+} else if (command === 'choose') {
+  let entry
+  try {
+    entry = pushChoice({ app: need('app'), question: need('question'), options: flags.option, screen: typeof flags.screen === 'string' ? flags.screen : '', mode: flags.mode || '', note: flags.note || '', check: flags.check ?? [], kind: flags.kind || 'qa', item: typeof flags.item === 'string' ? flags.item : '', from: typeof flags.from === 'string' ? flags.from : 'Claude' })
+  } catch (error) {
+    fail(error.message)
+  }
+  if (entry.item) pushedFor(entry.item, entry.app, entry.from, entry.kind)
+  noteProject(process.cwd(), entry.app)
+  if (entry.choice.question.split(/\s+/).length > 12) console.error('Too long: ask the question in twelve words or fewer. It is the heading over the options.')
+  const keys = entry.choice.options.map(o => o.key)
+  console.log(`Queued ${entry.app} / ${entry.screen}${entry.mode ? ` (${entry.mode})` : ''}, round ${entry.round}: a choice of ${keys.slice(0, -1).join(', ')} or ${keys.at(-1)}. Open http://localhost:${PORT}/#${entry.appSlug}${isSetAside(entry.appSlug) ? `\nThis review is set aside: it is not offered until the reviewer brings it back.` : ''}`)
 } else if (command === 'list') {
   const apps = listApps().filter(a => !flags.app || a.slug === slug(flags.app))
   if (!apps.length) console.log('Nothing queued.')
@@ -719,6 +745,6 @@ if (command === 'push') {
     fail(error.message)
   }
 } else {
-  console.log(`review start | stop | check | see | pdf | demo | sketch | push | list | wait | read | inferred | clear | film | ideas | queue | take | show | note | stage | work | wake | project | open | install-skills | plugin | export   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
+  console.log(`review start | stop | check | see | pdf | demo | sketch | push | choose | list | wait | read | inferred | clear | film | ideas | queue | take | show | note | stage | work | wake | project | open | install-skills | plugin | export   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
   if (command) process.exit(1)
 }
