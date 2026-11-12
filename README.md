@@ -281,7 +281,7 @@ review choose --app Brochure --question "Which layout for page 2?" \
   --option A=a.png --option B=b.png --option "Equal panels=c.png"
 ```
 
-Two to six options, side by side as one screen: a lineup. The question is the heading, and a big Choose button stands over each option. The person chooses by the button, by clicking an option, by pressing its letter, or by pointing with the speak tool and saying "this one". Change choice takes it back before it goes. They can mark up an option and write notes as on any screen, then press Send or Looks good. `review read` says which option was chosen, and which option each mark is on. Give the options in order; a short label before `=` is shown under the button.
+Two to six options, side by side as one screen: a lineup. The question is the heading, and a big Choose button stands over each option. The person chooses by the button, by clicking an option, by pressing its letter, or by pointing with the speak tool and saying "this one". Change choice takes it back before it goes. They can mark up an option and write notes as on any screen, then press Send or Looks good. `review read` says which option was chosen, and which option each mark is on. Give the options in order, as PNG, JPEG, WebP or GIF pictures (SVG is refused); a short label before the last `=` is shown under the button. A choice is never made for the person: a lineup with nothing chosen is left waiting by Looks good for the rest and by moving on. Sent with marks or notes and nothing chosen, it goes as changes asked, "none of these", and `review read` says "Chose none".
 
 ### A PDF
 

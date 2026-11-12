@@ -265,14 +265,20 @@ body.covered .marking, body.covered #views, body.covered #zoomValue, body.covere
 .lineup-status { margin: 4px 0 0; font-size: 14px; color: var(--soft); }
 .lineup-head .btn { flex: none; }
 .lineup-row { position: relative; height: 58px; }
-.choose { position: absolute; top: 6px; transform: translateX(-50%); display: inline-flex; align-items: center; justify-content: center; gap: 10px; width: 168px; height: 46px; padding: 0 12px; font: inherit; font-size: 16px; font-weight: 700; white-space: nowrap; color: var(--on-accent); background: var(--accent); border: 1px solid var(--primary-edge); border-radius: 6px; box-shadow: 0 2px 3px rgba(18, 40, 70, 0.2); cursor: pointer; }
+.choose { position: absolute; top: 6px; transform: translateX(-50%); display: inline-flex; align-items: center; justify-content: center; gap: 10px; width: max-content; height: 46px; padding: 0 12px; font: inherit; font-size: 16px; font-weight: 700; white-space: nowrap; color: var(--on-accent); background: var(--accent); border: 1px solid var(--primary-edge); border-radius: 6px; box-shadow: 0 2px 3px rgba(18, 40, 70, 0.2); cursor: pointer; }
 .choose:hover { background: color-mix(in srgb, var(--accent) 86%, #000); }
 .choose:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 3px; }
 .choose.on { background: #153b7e; border-color: #0c2858; }
 .choose svg { width: 15px; height: 15px; stroke-width: 2.2; }
 .choose kbd { padding: 0 6px; font: 600 13px/1.5 -apple-system, system-ui, sans-serif; color: inherit; border: 1px solid rgba(255, 255, 255, 0.6); border-radius: 4px; }
 /* A label, when the agent gave one, under the button in small words. */
-.choose-label { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); max-width: 100%; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 600; color: var(--soft); }
+.choose-word { white-space: pre; }
+/* No room for the words: the letter alone, then the letter with less round it. The tooltip says it all. */
+.choose.tight .choose-word, .choose.tight kbd { display: none; }
+.choose.tighter { gap: 0; padding: 0 4px; min-width: 0 !important; }
+.choose.tighter svg { display: none; }
+.choose-label { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); width: max-content; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; color: var(--soft); }
+.choose-label[hidden] { display: none; }
 .lineup-row:has(.choose-label) { height: 74px; }
 body.lineup .after-shot > .frame { background: transparent; box-shadow: none; }
 /* The heading at the top, where a page starts: a short lineup, on a phone say, does not float in the middle. */

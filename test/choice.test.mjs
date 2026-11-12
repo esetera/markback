@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import { writePicture } from './helpers.mjs'
 
 const home = mkdtempSync(join(tmpdir(), 'review-choice-'))
@@ -13,6 +14,7 @@ process.env.REVIEW_HOME = home
 const { listScreens, readInbox, receive } = await import('../lib/store.mjs')
 const { optionAt, readOptions } = await import('../lib/choice.mjs')
 after(() => rmSync(home, { recursive: true, force: true }))
+const require = createRequire(import.meta.url)
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'review.mjs')
 const env = { ...process.env, REVIEW_HOME: home }
 const run = (...args) => spawnSync('node', [CLI, ...args], { env, encoding: 'utf8' })
@@ -89,15 +91,82 @@ test('read: the answer says which option was chosen, and each mark which option 
   assert.equal(json[0].shapes[0].option, 'C')
 })
 
-test('a choice that is not one of the options is no choice; a Looks good with one says it plainly', () => {
+test('a choice is never made for the person: a Looks good with none, or one not among the options, is refused; marks with none are "none of these"', () => {
   const [entry] = listScreens('brochure')
-  receive({ appSlug: 'brochure', id: entry.id, png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null, choice: 'Z' })
+  const count = () => readInbox('brochure').length
+  const before = count()
+  for (const choice of [null, 'Z']) {
+    assert.throws(() => receive({ appSlug: 'brochure', id: entry.id, png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null, choice }), /Choose one first/)
+    assert.throws(() => receive({ appSlug: 'brochure', id: entry.id, png: null, shapes: [], notes: 'No comment.', verdict: 'approved', imageSize: null, noComment: true, choice }), /Choose one first/)
+  }
+  assert.equal(count(), before, 'nothing was written')
+  receive({ appSlug: 'brochure', id: entry.id, png: null, shapes: [], notes: 'None of these: try a darker one', verdict: 'changes', imageSize: null, choice: null })
   assert.equal(readInbox('brochure').at(-1).choice.chosen, null)
+  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Brochure', '--latest'], { env, encoding: 'utf8' }), /CHANGES ASKED[^\n]*\n {2}Chose none: the reviewer did not choose/)
   receive({ appSlug: 'brochure', id: entry.id, png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null, choice: 'A' })
   const text = execFileSync('node', [CLI, 'read', '--app', 'Brochure', '--latest'], { env, encoding: 'utf8' })
   assert.match(text, /round 1: LOOKS GOOD\n {2}Chose A: /)
-  const none = execFileSync('node', [CLI, 'read', '--app', 'Brochure'], { env, encoding: 'utf8' })
-  assert.match(none, /Chose none: the reviewer did not choose/)
+})
+
+test('a proposal shown as a lineup is never taken on to be built by an answer with nothing chosen', async () => {
+  const { askForIdeas, postIdea, decide, take, listWork, setStage } = await import('../lib/work.mjs')
+  const r = askForIdeas({ target: 'Lined', count: 1 })
+  const idea = postIdea({ request: r.id, what: 'Three covers' })
+  decide(idea.id, 'yes')
+  take({ by: 'Claude', id: idea.id })
+  assert.equal(run('choose', '--app', 'Lined', '--question', 'Which cover?', '--option', a, '--option', b, '--kind', 'proposal', '--item', idea.id).status, 0)
+  setStage(idea.id, 'ready')
+  const [entry] = listScreens('lined')
+  assert.throws(() => receive({ appSlug: 'lined', id: entry.id, png: null, shapes: [], notes: 'No comment.', verdict: 'approved', imageSize: null, noComment: true }), /Choose one first/)
+  const item = () => listWork().find(i => i.id === idea.id)
+  assert.equal(item().phase, 'proposal')
+  assert.equal(entry.status, 'waiting')
+  const { answered } = await import('../lib/work.mjs')
+  answered({ item: idea.id, app: 'Lined', verdict: 'approved', choice: { chosen: null } })
+  assert.equal(item().phase, 'proposal', 'a planted answer with nothing chosen moves nothing')
+})
+
+test('options of any shape fit one sensible lineup; a strip is refused in one line', () => {
+  const banner = pic('banner.png', 3000, 200)
+  const phone = pic('phone.png', 390, 844)
+  const out = run('choose', '--app', 'Shapes', '--question', 'Which?', '--option', banner, '--option', phone)
+  assert.equal(out.status, 0, out.stderr)
+  const [entry] = listScreens('shapes')
+  const [wide, tall] = entry.choice.options.map(o => o.box)
+  assert.ok(wide.w <= wide.h * 16 && wide.w <= 1.6 * tall.h + 1, 'the banner fits a box 1.6 times as wide as high')
+  assert.ok(tall.x + tall.w < 4000, `the lineup is ${tall.x + tall.w} wide`)
+  assert.ok(wide.y > 0, 'a short option stands centred in the height')
+  const six = run('choose', '--app', 'Six', '--question', 'Which?', ...Array.from({ length: 6 }, () => ['--option', pic('w.png', 3000, 2400)]).flat())
+  assert.equal(six.status, 0, six.stderr)
+  const last = listScreens('six')[0].choice.options.at(-1).box
+  assert.ok(last.x + last.w <= 9000, 'the whole lineup is capped')
+  const strip = run('choose', '--app', 'Strip', '--question', 'Which?', '--option', pic('strip.png', 4000, 10), '--option', pic('thin.png', 20, 3000))
+  assert.equal(strip.status, 1)
+  assert.match(strip.stderr, /Option A is 4000 by 10: too thin to show beside the others/)
+  assert.equal(listScreens('strip').length, 0)
+})
+
+test('a long question gets a short screen name, is warned about first, and a label may hold an =', () => {
+  const question = `Which of these ${'very '.repeat(60)}long layouts should page two use?`
+  const out = run('choose', '--app', 'Long', '--question', question, '--option', a, '--option', `Price = value=${b}`)
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stderr, /^Too long: ask the question in twelve words or fewer/)
+  const [entry] = listScreens('long')
+  assert.ok(entry.id.length <= 60, entry.id)
+  assert.equal(entry.choice.question, question.replace(/\s+/g, ' ').trim())
+  assert.equal(entry.choice.options[1].label, 'Price = value')
+  const bad = run('choose', '--app', 'Longer', '--screen', 'x'.repeat(300), '--question', 'Which?', '--option', a, '--option', b)
+  assert.equal(bad.status, 1)
+  assert.match(bad.stderr, /--screen is too long/)
+  const { existsSync } = require('node:fs')
+  assert.equal(existsSync(join(home, 'queue', 'longer')), false, 'no folder left behind')
+  assert.equal(existsSync(join(home, 'images', 'longer')), false)
+})
+
+test('the film of a lineup says it is a lineup when it cannot be saved', () => {
+  const [entry] = listScreens('brochure')
+  const film = run('film', '--app', 'Brochure', '--screen', entry.screen, '--out', join(home, 'f.mp4'))
+  assert.match(film.stderr + film.stdout, /A film of a lineup cannot be saved as a file/)
 })
 
 test('a choice pushed again is round 2, with no marks carried over from the old options', () => {

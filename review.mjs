@@ -591,6 +591,8 @@ if (command === 'push') {
   }
   await pageHint()
 } else if (command === 'choose') {
+  // Said before anything is pushed: the heading is read at a glance.
+  if (typeof flags.question === 'string' && flags.question.trim().split(/\s+/).length > 12) console.error('Too long: ask the question in twelve words or fewer. It is the heading over the options.')
   let entry
   try {
     entry = pushChoice({ app: need('app'), question: need('question'), options: flags.option, screen: typeof flags.screen === 'string' ? flags.screen : '', mode: flags.mode || '', note: flags.note || '', check: flags.check ?? [], kind: flags.kind || 'qa', item: typeof flags.item === 'string' ? flags.item : '', from: typeof flags.from === 'string' ? flags.from : 'Claude' })
@@ -599,7 +601,6 @@ if (command === 'push') {
   }
   if (entry.item) pushedFor(entry.item, entry.app, entry.from, entry.kind)
   noteProject(process.cwd(), entry.app)
-  if (entry.choice.question.split(/\s+/).length > 12) console.error('Too long: ask the question in twelve words or fewer. It is the heading over the options.')
   const keys = entry.choice.options.map(o => o.key)
   console.log(`Queued ${entry.app} / ${entry.screen}${entry.mode ? ` (${entry.mode})` : ''}, round ${entry.round}: a choice of ${keys.slice(0, -1).join(', ')} or ${keys.at(-1)}. Open http://localhost:${PORT}/#${entry.appSlug}${isSetAside(entry.appSlug) ? `\nThis review is set aside: it is not offered until the reviewer brings it back.` : ''}`)
   if (WHERE.from === 'file') {

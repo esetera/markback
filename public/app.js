@@ -93,7 +93,7 @@ const KEYS = [
   ['Answering', [
     [['A', '–', 'F'], 'On a choice: choose that option'],
     [['N'], 'Write notes on this screen'],
-    [['D'], 'Speak at a spot: click on the picture, then say it'],
+    [['D'], 'Speak at a spot: click on the picture, then say it. On a choice of four or more, D chooses D: use the speak button'],
     [['⇧', 'D'], 'Speak your notes into the notes box'],
     [['G'], 'Looks good, then on to the next'],
     [['⌘', '↩'], 'Send, then on to the next'],
@@ -230,7 +230,9 @@ const marksOrNotes = d => d.marks.some(isReal) || !!d.notes.trim()
 /** Only Fixed ticks on it: no marks, no notes, nothing said to stand. They ride along with an answer, and never go by themselves. */
 const fixedTicks = d => !marksOrNotes(d) && !stands(d) && Object.keys(d.said).length > 0
 /** What goes without a press of Send: the same, but Fixed ticks alone stay in the draft and the screen waits. */
-const goesOf = s => (fixedTicks(draftOf(s)) && !draftOf(s).good ? null : verdictOf(s))
+/** A lineup with nothing chosen. A choice is never made for the person: it goes only when they send it themselves. */
+const needsChoice = s => !!s.choice && !draftOf(s).choice
+const goesOf = s => (needsChoice(s) || (fixedTicks(draftOf(s)) && !draftOf(s).good) ? null : verdictOf(s))
 /** Every earlier mark still asked for is ticked fixed, and no "came back?" waits for an answer. */
 function allChecked(s) {
   const said = saidOf(s)
@@ -258,7 +260,9 @@ const placeOf = a => placeIn(a, state.apps)
 const sentHere = new Set()
 /** Waiting, and not answered here on its way to the server. */
 const openOf = a => waitingOf(a).filter(s => !queued.has(keyOf(s)))
-const setOf = a => (a ? a.screens.filter(s => s.status === 'waiting' || goesOf(s)) : [])
+const setOf = a => (a ? a.screens.filter(s => !needsChoice(s) && (s.status === 'waiting' || goesOf(s))) : [])
+/** Lineups still waiting for a choice: Looks good for the rest leaves them, and says so. */
+const unchosenOf = a => (a ? a.screens.filter(s => s.status === 'waiting' && needsChoice(s) && !queued.has(keyOf(s))) : [])
 function tallyOf(a) {
   const set = setOf(a)
   const changes = set.filter(s => goesOf(s) === 'changes')
@@ -1728,7 +1732,8 @@ function renderLineup(s) {
   setHtml($('lineupHead'), `<div class="lineup-words"><h1 id="lineupQuestion">${esc(s.choice.question)}</h1><p class="lineup-status" role="status">${named ? `You chose ${esc(named.key)}${named.label ? `, ${esc(named.label)}` : ''}. Send it, or mark it up first.` : `Click a choice or press ${esc(keysWords(s))}.`}</p></div>${named ? `<button class="btn" data-unchoose ${tip('Take the choice back')}>Change choice</button>` : ''}`)
   setHtml($('lineupRow'), s.choice.options.map(o => {
     const is = o.key === chosen
-    return `<button class="choose${is ? ' on' : ''}" data-choose="${esc(o.key)}" aria-pressed="${is}" aria-describedby="lineupQuestion"${o.label ? ` title="${esc(o.label)}"` : ''}>${is ? `${ICONS.check}Chosen ${esc(o.key)}` : `Choose ${esc(o.key)}`}<kbd aria-hidden="true">${esc(o.key)}</kbd>${o.label ? `<span class="choose-label">${esc(o.label)}</span>` : ''}</button>`
+    const name = `${is ? 'Chosen' : 'Choose'} ${o.key}${o.label ? `: ${o.label}` : ''}`
+    return `<button class="choose${is ? ' on' : ''}" data-choose="${esc(o.key)}" aria-pressed="${is}" aria-label="${esc(name)}" title="${esc(name)}">${is ? ICONS.check : ''}<span class="choose-word">${is ? 'Chosen' : 'Choose'} </span><span class="choose-key">${esc(o.key)}</span><kbd aria-hidden="true">${esc(o.key)}</kbd>${o.label ? `<span class="choose-label">${esc(o.label)}</span>` : ''}</button>`
   }).join(''))
   placeLineup()
 }
@@ -1742,7 +1747,19 @@ function placeLineup() {
     const o = s.choice.options.find(x => x.key === b.dataset.choose)
     if (!o) continue
     b.style.left = `${((o.box.x + o.box.w / 2) / state.size.w) * 100}%`
-    b.style.maxWidth = `${Math.max(48, Math.round(o.box.w * state.zoom) - 8)}px`
+    // As wide as its words, never past its option: with no room for them, only the letter, the rest in its tooltip.
+    const room = Math.max(28, Math.round(o.box.w * state.zoom) - 6)
+    b.style.minWidth = `${Math.min(168, room)}px`
+    b.classList.remove('tight', 'tighter')
+    if (b.offsetWidth > room) b.classList.add('tight')
+    if (b.offsetWidth > room) b.classList.add('tighter')
+    const words = b.querySelector('.choose-label')
+    if (words) {
+      words.style.maxWidth = `${room}px`
+      // Measured shown: a hidden one has no width.
+      words.hidden = false
+      words.hidden = words.scrollWidth > room
+    }
   }
 }
 /** The chosen option, outlined on screen only: the marked picture sent back shows the marks, and the answer says which. */
@@ -2958,6 +2975,8 @@ const roomNow = () => {
 function fittedZoom(room, across = 1) {
   const { w, h } = state.size
   const all = fitZoom(room, { width: w, height: h }, across)
+  // A lineup is always whole, however small that makes it: every option in view is the point of it.
+  if (screen()?.choice) return Math.min(all, room.width / w, room.height / h)
   // Shrunk only a little, it stays whole: a picture that nearly fits should not scroll by a few lines.
   if (state.whole || all >= SHRUNK || all * w >= TOO_NARROW) return all
   const each = (room.width - (across - 1) * 16) / across
@@ -3406,7 +3425,8 @@ function sendCurrent() {
   if (v !== 'changes') return
   const wasWaiting = s.status === 'waiting'
   queueAnswer(s, 'changes')
-  toast(s.choice && draftOf(s).choice ? `Chose ${draftOf(s).choice}, with changes` : 'Sent', label(s), { undo: true })
+  // Sent with no choice is a plain "none of these", and says so.
+  toast(s.choice ? (draftOf(s).choice ? `Chose ${draftOf(s).choice}, with changes` : 'Sent without a choice: none of these') : 'Sent', label(s), { undo: true })
   moveOn(wasWaiting)
 }
 
@@ -3474,7 +3494,8 @@ function openSubmit() {
   closeTextEntry(true)
   closeMenu()
   const t = tallyOf(a)
-  if (!t.set.length) return
+  const unchosen = unchosenOf(a)
+  if (!t.set.length && !unchosen.length) return
   const left = t.untouched.filter(s => leftBehindOn(s).length)
   // Ticks alone are not an answer: these go as not looked at, and the person is told before they go.
   const ticked = t.untouched.filter(s => fixedTicks(draftOf(s)))
@@ -3482,6 +3503,7 @@ function openSubmit() {
   setHtml($('submitBody'), `<div class="summary">
     ${[['draft-changes', 'With marks or notes', t.changes], ['draft-good', 'Looks good', t.good], ['draft-good', 'No comment, counts as Looks good', t.untouched]].map(([mk, title, list]) => (list.length ? `<div class="srow"><span class="line"><i class="mk ${mk}"></i></span><span class="line">${title}</span><span class="line count">${list.length}</span></div><div class="names">${names(list)}</div>` : '')).join('')}
     ${left.length ? `<div class="names warn">${names(left)}: marks or notes on an older picture were not sent. See Earlier answers.</div>` : ''}
+    ${unchosen.length ? `<div class="names warn">Choose one first: ${names(unchosen)}. ${unchosen.length === 1 ? 'It waits' : 'They wait'} for your choice.</div>` : ''}
     ${ticked.length ? `<div class="names warn">Your ticks on these are not sent: ${names(ticked)}. Go back and press Looks good or Send on each to send them.</div>` : ''}
   </div>`)
   $('submitStatus').textContent = ''
@@ -4268,7 +4290,7 @@ document.addEventListener('keydown', event => {
   if (drawerOpen() && key !== 'l' && key !== 'L' && key !== '\\') return
   if (key === 'Enter' && state.stopped && event.target.tagName !== 'BUTTON') return goOn()
   // On a lineup, its letters choose: they come before the tools and the other keys that share them.
-  const lineup = !onDonePage() ? screen()?.choice : null
+  const lineup = !onDonePage() && $('menu').hidden ? screen()?.choice : null
   if (lineup && !event.repeat && lineup.options.some(o => o.key === key.toUpperCase())) return choose(key.toUpperCase())
   if ((key === 's' || key === 'S') && screen() && !onDonePage()) return stopHere()
   if (key === 'ArrowLeft') go(state.index - 1)

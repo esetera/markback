@@ -3749,13 +3749,13 @@ test('partial ticks say what the choices are, and Looks good for the rest says w
 /* ---------- a choice: the options side by side as a lineup ---------- */
 
 /** A choice of three pages, pushed as an agent would. */
-async function lineup(r, app = 'Cover') {
-  const options = ['a', 'b', 'c'].map((name, n) => {
-    const path = join(r.home, `option-${name}.png`)
-    writePicture(path, 600, 850, { x: 60 + n * 120, y: 100, w: 200, h: 120 })
+async function lineup(r, app = 'Cover', { sizes = [[600, 850], [600, 850], [600, 850]], extra = [] } = {}) {
+  const options = sizes.map(([w, h], n) => {
+    const path = join(r.home, `option-${slugOf(app)}-${n}.png`)
+    writePicture(path, w, h, { x: Math.min(w - 20, 10 + n * 20), y: 10, w: 10, h: 10 })
     return path
   })
-  execFileSync('node', [join(ROOT, 'review.mjs'), 'choose', '--app', app, '--question', 'Which layout for page 2?', ...options.flatMap((path, n) => ['--option', n === 2 ? `Equal panels=${path}` : path])], { env: r.env, stdio: 'ignore' })
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'choose', '--app', app, '--question', 'Which layout for page 2?', ...options.flatMap((path, n) => ['--option', n === 2 ? `Equal panels=${path}` : path]), ...extra], { env: r.env, stdio: 'ignore' })
   return (await r.queue(slugOf(app))).screens[0]
 }
 const slugOf = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
@@ -3933,5 +3933,107 @@ test('on a lineup, A to F are off while a correction box is open, and K and the 
   assert.equal(await chosen(), null)
   await page.keyboard.press('a')
   assert.equal(await chosen(), 'A')
+  assert.deepEqual(errors, [])
+})
+
+
+test('a choice is never made for the person: moving on, finishing and Looks good for the rest all leave a lineup with none chosen waiting', { skip }, async () => {
+  const r = await rig()
+  const work = (...args) => execFileSync('node', [join(ROOT, 'review.mjs'), ...args], { env: r.env, encoding: 'utf8' })
+  // A proposal shown as a lineup: answered without a choice, it would be taken on to be built.
+  const ask = JSON.parse(execFileSync('node', ['--input-type=module', '-e', `const w = await import(${JSON.stringify(join(ROOT, 'lib', 'work.mjs'))}); const r = w.askForIdeas({ target: 'Swept', count: 1 }); const i = w.postIdea({ request: r.id, what: 'Covers' }); w.decide(i.id, 'yes'); console.log(JSON.stringify(i))`], { env: r.env, encoding: 'utf8' }))
+  work('take', '--by', 'Claude', '--item', ask.id)
+  const s = await lineup(r, 'Swept', { extra: ['--kind', 'proposal', '--item', ask.id] })
+  r.push('Swept', ['Two', 'Three'], null, ['--kind', 'proposal', '--item', ask.id])
+  const { page, errors } = await r.open('swept', { undo: 1 })
+  // Marked but not chosen, then moved past: the other screens answered with Looks good finish the review.
+  const b = await overOption(page, s, 'B', 0.3)
+  await page.mouse.move(b.x - 30, b.y)
+  await page.mouse.down()
+  await page.mouse.move(b.x + 30, b.y + 40, { steps: 4 })
+  await page.mouse.up()
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('g')
+  await settled(page)
+  // Looks good for the rest: the lineup is not in it, and is named on its own line.
+  await page.keyboard.press('Shift+Meta+Enter')
+  await page.locator('#submitModal').waitFor()
+  assert.match(await page.locator('#submitBody').innerText(), /Choose one first: Which layout for page 2\?/)
+  assert.equal(await page.locator('#submitYes').innerText(), 'Answer 1 screen')
+  await page.locator('#submitYes').click()
+  await waitFor(() => r.read('Swept').length === 2)
+  await page.waitForTimeout(400)
+  assert.equal(r.read('Swept').some(x => x.screenId === s.id), false, 'nothing was sent for the lineup')
+  assert.equal((await r.queue('swept')).screens.find(x => x.id === s.id).status, 'waiting')
+  assert.match(work('show', '--item', ask.id, '--json'), /"phase": "proposal"/)
+  // Closing the page sends nothing for it either, and opening it again resumes nothing.
+  await page.context().close()
+  const again = await r.open('swept', { undo: 1 })
+  await again.page.waitForTimeout(400)
+  assert.equal(r.read('Swept').some(x => x.screenId === s.id), false)
+  // The person chooses, and only then does it go: the proposal is answered with their choice.
+  await again.page.keyboard.press('c')
+  await again.page.keyboard.press('g')
+  await waitFor(() => r.read('Swept').find(x => x.screenId === s.id))
+  assert.equal(r.read('Swept').find(x => x.screenId === s.id).choice.chosen, 'C')
+  assert.deepEqual([...errors, ...again.errors], [])
+})
+
+test('sent with marks and nothing chosen, a lineup says plainly it went as none of these', { skip }, async () => {
+  const r = await rig()
+  await lineup(r, 'None')
+  const { page, errors } = await r.open('none')
+  await page.locator('#notes').fill('None of these: try a darker cover')
+  await page.locator('#notes').blur()
+  await page.keyboard.press('Meta+Enter')
+  await page.locator('#toast').getByText('Sent without a choice: none of these').waitFor()
+  const sent = await waitFor(() => r.read('None')[0])
+  assert.equal(sent.verdict, 'changes')
+  assert.equal(sent.choice.chosen, null)
+  assert.deepEqual(errors, [])
+})
+
+test('a lineup of any options fits whole: two phone shots in a small window, six at phone width, buttons never past their option', { skip }, async () => {
+  const r = await rig()
+  await lineup(r, 'Phones', { sizes: [[390, 844], [390, 844]] })
+  await lineup(r, 'Six', { sizes: Array.from({ length: 6 }, () => [600, 850]) })
+  for (const [app, width, height] of [['phones', 1100, 800], ['six', 390, 844], ['six', 1500, 960]]) {
+    const { page, errors } = await r.open(app, { width, height })
+    await settled(page)
+    const where = `${app} at ${width}`
+    const c = await page.locator('#canvas').boundingBox()
+    assert.ok(c.y + c.height <= height && c.x >= 0 && c.x + c.width <= width, `whole at ${where}`)
+    assert.equal(await page.evaluate(() => [...document.querySelectorAll('#scroller *')].every(el => el.getBoundingClientRect().right <= innerWidth + 1) && document.getElementById('scroller').scrollWidth <= document.getElementById('scroller').clientWidth), true, `no sideways scroll at ${where}`)
+    const s = (await r.queue(app)).screens[0]
+    const wide = await page.evaluate(() => document.getElementById('canvas').width)
+    for (const o of s.choice.options) {
+      const b = await page.locator(`[data-choose="${o.key}"]`).boundingBox()
+      const left = c.x + (o.box.x / wide) * c.width
+      const right = c.x + ((o.box.x + o.box.w) / wide) * c.width
+      assert.ok(b.x >= left - 1 && b.x + b.width <= right + 1, `${o.key}'s button stays over its option at ${where}`)
+      const inner = await page.locator(`[data-choose="${o.key}"]`).evaluate(el => el.scrollWidth <= el.clientWidth + 1)
+      assert.ok(inner, `${o.key}'s words do not spill at ${where}`)
+      assert.match(await page.locator(`[data-choose="${o.key}"]`).getAttribute('title'), new RegExp(`Choose ${o.key}`))
+    }
+    const label = page.locator('[data-choose="C"] .choose-label')
+    if (await label.count() && await label.isVisible()) assert.equal(await label.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, `the label is not cut at ${where}`)
+    assert.deepEqual(errors, [], where)
+    await page.context().close()
+  }
+})
+
+test('on a lineup the letters are off while the menu is open, and help says D chooses on a choice of four or more', { skip }, async () => {
+  const r = await rig()
+  const s = await lineup(r, 'Menu', { sizes: Array.from({ length: 4 }, () => [600, 850]) })
+  const { page, errors } = await r.open('menu')
+  await page.locator('#menuOpen').click()
+  assert.equal(await page.locator('#menu').isVisible(), true)
+  await page.keyboard.press('a')
+  assert.equal((await saved(page, 'menu', s.id))?.choice ?? null, null, 'no choice behind the menu')
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('d')
+  assert.equal((await saved(page, 'menu', s.id)).choice, 'D', 'with four options, D chooses')
+  await page.keyboard.press('?')
+  assert.match(await page.locator('#keys').innerText(), /On a choice of four or more, D chooses D: use the speak button/)
   assert.deepEqual(errors, [])
 })

@@ -64,7 +64,7 @@ When there are options for the person to choose between, designs A, B and C say,
 review choose --app "Brochure" --question "Which layout for page 2?" --option A=a.png --option B=b.png --option "Equal panels=c.png"
 ```
 
-The page shows them side by side, a lineup, with the question as the heading and a Choose button over each. The person chooses by the button, by clicking an option, by its letter, or by pointing and saying "this one". They can mark up an option and write notes too. Give 2 to 6 options, in order: each is a picture, with a short label before `=` if it helps. Use the question as a decision, in twelve words or fewer. It takes `--note`, `--kind`, `--item` and `--from` as `push` does. Pushing the same question again starts its next round.
+The page shows them side by side, a lineup, with the question as the heading and a Choose button over each. The person chooses by the button, by clicking an option, by its letter, or by pointing and saying "this one". They can mark up an option and write notes too. Give 2 to 6 options, in order: each is a PNG, JPEG, WebP or GIF picture (not SVG), with a short label before the last `=` if it helps. Use the question as a decision, in twelve words or fewer. It takes `--note`, `--kind`, `--item` and `--from` as `push` does. Pushing the same question again starts its next round.
 
 ## The words in the picture
 
