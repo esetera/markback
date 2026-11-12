@@ -41,7 +41,7 @@ Open your project in Codex Desktop and paste this into the project chat:
 
 Codex installs Markback locally and connects New project to a scheduled check in the same chat. Keep Codex Desktop open. On the next check, usually within a minute, the chat picks up a build request or a mark. Codex applies the change and pushes a new screenshot for review.
 
-In a fresh Codex project, the agent can use `npm install --prefix .markback github:esetera/markback` to install locally and read `.markback/node_modules/markback/AGENTS.md` in the current session. The agent keeps `REVIEW_HOME` in a writable project folder and uses that same folder for each review command. `review project` can start the review even when Codex protects `.agents/skills` from edits.
+In a fresh Codex project, the agent can use `npm install --prefix .markback github:esetera/markback` to install locally and read `.markback/node_modules/markback/AGENTS.md` in the current session. The agent makes a new store folder in the project with `review project --store .markback/store`, once, so every review command uses it with no setting needed. That install makes `.markback` a folder, so Markback's file goes in `.markback/config.json` (see [Agents in a sandbox](#agents-in-a-sandbox)). `review project` can start the review even when Codex protects `.agents/skills` from edits.
 
 ### Manual installation
 
@@ -135,7 +135,28 @@ Run it again after you update Markback. To put it in one project only, add `--to
 codex exec -s workspace-write "Here is a screen I want reviewed: shot.png. Put it in front of me for review."
 ```
 
-For local projects inside Codex's macOS sandbox, Markback takes pictures with Chrome Headless Shell, about 100 MB from Google, fetched once and kept on this computer. Nothing is fetched until you say yes: the first capture stops and tells the agent to ask you, and after your yes the agent runs it again with `--fetch-browser`. The download needs network access. This capture path is for local pages and assets. An agent with a built-in browser can also capture a page there and push the screenshot to Markback.
+For local projects inside Codex's macOS sandbox, Markback takes pictures with Chrome Headless Shell, about 100 MB from Google, fetched once and kept in your own Markback folder. Where the sandbox cannot write there, it is fetched for each command and thrown away after: one kept in the project could be one the project brought. Nothing is fetched until you say yes: the first capture stops and tells the agent to ask you, and after your yes the agent runs it again with `--fetch-browser`. The download needs network access. This capture path is for local pages and assets. An agent with a built-in browser can also capture a page there and push the screenshot to Markback.
+
+### Agents in a sandbox
+
+Some agents run commands in a sandbox that drops environment variables, cannot write outside the project, and has no Chrome. The agent runs this once, in the project's folder:
+
+```bash
+review project --store .markback-store
+```
+
+It writes `.markback`, a small JSON file such as `{ "home": ".markback-store", "port": 5760 }`. Every `review` command in that folder, or below it, then uses that store with no setting needed. It picks a free port near 5760, so the project's page does not share the usual one. Add `--port 5760` to choose the port yourself.
+
+- The agent pushes its own screenshots with `review push`. `review see` and `review project` need Chrome, and say so at once.
+- Pushing only writes files, so it works with no page running, and says so. You run `review start` in the project's folder, outside the sandbox, and the page shows everything the agent pushed. `review wait` and `review read` in the sandbox read your answers from the same files.
+- The store is the first of: `--home <folder>` on the command, `REVIEW_HOME`, `.markback`, then `~/.review-wizard`.
+- Point `--home`, `REVIEW_HOME` and `.markback` only at a folder you made. Any store but `~/.review-wizard` is a project store: it may have come with a project, so what it holds is the project's words until the review page on this computer confirms it. The page stamps your answers, approvals, choices and notes with a secret kept in `~/.review-wizard`. `review work`, `review read`, `review show` and the hooks say which store they use, and say "not confirmed" for anything without that stamp. They never give it to the agent as your decision.
+- If another store's page holds the port, a push says so. `review start` then moves this store to a free port, keeps it, and says the address.
+- Markback says which store it uses whenever `.markback` chose it. Once, when the file is written and on the first push, it suggests adding the store to `.gitignore` if no `.gitignore` leaves it out. It never changes `.gitignore` itself.
+- Markback looks for `.markback` in this folder and the ones above it: up to the top of the git repository, or up to your home folder, not including it. It skips a file in a folder anyone can write to, or one that belongs to someone else, and says so.
+- A `.markback` can only name a folder inside the folder that holds it. One that is not valid is ignored, in one line. The store it names may hold no links: if it does, Markback writes nothing and says so.
+- Nothing in a project store is ever run. Plugins load only from `~/.review-wizard`. Wake commands for a project store are kept in `~/.review-wizard`, and any found in the store are not run. A browser found in the store is never run. A project store's `server.pid` is only signalled when the page says it serves this store.
+- When Markback is installed in a `.markback` folder with npm, the file is `.markback/config.json`.
 
 **Kimi Code** reads the skills straight from the cloned folder with `--skills-dir`, in place of your others for that run: `kimi --skills-dir ~/markback/skills`, with `-S` or `-c` to go back into a session. It also reads `~/.agents/skills` and `extra_skill_dirs`, which keep your others. See [Manual installation](#manual-installation).
 
@@ -162,7 +183,7 @@ Adding one says what it adds and asks first (in a terminal; run any other way, i
 
 ## What stays on your computer
 
-The Markback server listens only on this computer. Screens, marks and notes are plain files in `~/.review-wizard`, a folder that keeps Markback's first name (set `REVIEW_HOME` to move it). Your coding agent handles any review material it reads under its own data settings. If you enable online speech recognition, your browser sends the audio to its speech service.
+The Markback server listens only on this computer. Screens, marks and notes are plain files in `~/.review-wizard`, a folder that keeps Markback's first name (set `REVIEW_HOME`, or see [Agents in a sandbox](#agents-in-a-sandbox), to move it). Your coding agent handles any review material it reads under its own data settings. If you enable online speech recognition, your browser sends the audio to its speech service.
 
 ## Speaking (early)
 

@@ -1,3 +1,4 @@
+import './own-home.mjs'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { COLOURS, fitZoom, isReal, redone, shapeOf, startHistory, undone, withMark, withMarks, zoomedBy } from '../public/annotate.js'

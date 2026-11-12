@@ -1,3 +1,4 @@
+import './own-home.mjs'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'

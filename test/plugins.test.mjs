@@ -1,3 +1,4 @@
+import './own-home.mjs'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -8,7 +9,9 @@ import { fileURLToPath } from 'node:url'
 import { writePicture } from './helpers.mjs'
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'review.mjs')
-const home = mkdtempSync(join(tmpdir(), 'review-plugins-'))
+// The person's own store, in this test file's own home folder (see own-home.mjs): what it holds is theirs.
+const home = join(process.env.HOME, '.review-wizard')
+mkdirSync(home, { recursive: true })
 process.env.REVIEW_HOME = home
 const { receive, push } = await import('../lib/store.mjs')
 after(() => rmSync(home, { recursive: true, force: true }))

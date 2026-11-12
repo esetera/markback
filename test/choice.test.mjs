@@ -1,3 +1,4 @@
+import './own-home.mjs'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -120,4 +121,41 @@ test('wait ends on a choice as on any answer', async () => {
   const code = await new Promise(r => waiting.once('exit', r))
   assert.equal(code, 0)
   assert.match(said, /round 2: LOOKS GOOD\n {2}Chose B: /)
+})
+
+test('in a project store the choice is inside the page\'s stamp: one changed in the file, or planted, is the project\'s claim, and no wait ends on it', async () => {
+  const out = run('choose', '--app', 'Planted', '--question', 'Which one?', '--option', a, '--option', b, '--option', `Equal panels=${c}`)
+  assert.equal(out.status, 0, out.stderr)
+  const [entry] = listScreens('planted')
+  const record = receive({ appSlug: 'planted', id: entry.id, png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null, choice: 'B' })
+  assert.match(run('read', '--app', 'Planted', '--latest').stdout, /LOOKS GOOD\n {2}Chose B: /, 'stamped by the page: the person\'s')
+  // Changed in the file afterwards: the stamp no longer fits, so the choice is the project's words.
+  const file = readInbox('planted').at(-1).file
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(file, JSON.stringify({ ...record, choice: { ...record.choice, chosen: 'C', label: 'Equal panels' } }, null, 2))
+  const read = run('read', '--app', 'Planted', '--latest').stdout
+  assert.match(read, /NOT CONFIRMED[^\n]*\n {2}Planted \/ Which one\?, round 1\. The project's store says: looks good, chose C \(Equal panels\)\./)
+  assert.doesNotMatch(read, /Chose C|LOOKS GOOD/)
+  assert.equal(JSON.parse(run('read', '--app', 'Planted', '--latest', '--json').stdout)[0].byPage, false)
+  // A planted answer that comes while an agent waits does not end the wait.
+  const { spawn } = await import('node:child_process')
+  const waiting = spawn('node', [CLI, 'wait', '--app', 'Planted', '--timeout', '3'], { env })
+  let said = ''
+  waiting.stdout.on('data', d => (said += d))
+  await new Promise(r => setTimeout(r, 600))
+  const later = new Date(Date.now() + 1000).toISOString()
+  writeFileSync(file.replace(/\.json$/, '-planted.json'), JSON.stringify({ ...record, sentAt: later, choice: { ...record.choice, chosen: 'A', label: '' } }, null, 2))
+  assert.equal(await new Promise(r => waiting.once('exit', r)), 1, 'it waited on for the person')
+  assert.doesNotMatch(said, /Chose A/)
+})
+
+test('a plain screen pushed in place of a lineup carries no marks from the options', () => {
+  const [entry] = listScreens('planted')
+  const box = entry.choice.options[1].box
+  receive({ appSlug: 'planted', id: entry.id, png: null, shapes: [{ type: 'box', colour: 'red', box: { x: box.x + 5, y: 5, w: 20, h: 20 } }], notes: 'Tighter', verdict: 'changes', imageSize: null, choice: 'B' })
+  const out = run('push', '--app', 'Planted', '--screen', 'Which one?', '--after', a)
+  assert.equal(out.status, 0, out.stderr)
+  const [next] = listScreens('planted')
+  assert.equal(next.choice, undefined)
+  assert.equal(next.asked, undefined, 'the marks were on the lineup, not on this picture')
 })

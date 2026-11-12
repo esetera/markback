@@ -1,3 +1,4 @@
+import './own-home.mjs'
 /**
  * The page itself, in a headless browser, each test on a server and a store of its own. The wizard has nothing to install, so
  * this borrows Playwright from elsewhere and is skipped without it:
@@ -3892,5 +3893,45 @@ test('on a lineup, "this one" said while pointing at an option chooses it, and l
   await page.keyboard.press('Escape')
   await settled(page)
   assert.deepEqual((await saved(page, 'cover', s.id)).marks.map(m => m.text), ['too busy'])
+  assert.deepEqual(errors, [])
+})
+
+test('on a lineup, A to F are off while a correction box is open, and K and the checks list leave the choice alone', { skip }, async () => {
+  const r = await rig()
+  const s = await lineup(r, 'Boxed')
+  r.push('Boxed', ['Two'])
+  const { page, errors } = await r.open('boxed')
+  const chosen = async () => (await saved(page, 'boxed', s.id, 1))?.choice ?? null
+  // Chosen and marked, then sent: the agent says what it read the mark to mean.
+  await page.keyboard.press('b')
+  const b = await overOption(page, s, 'B', 0.3)
+  await page.mouse.move(b.x - 30, b.y)
+  await page.mouse.down()
+  await page.mouse.move(b.x + 30, b.y + 40, { steps: 4 })
+  await page.mouse.up()
+  await page.keyboard.press('Meta+Enter')
+  await waitFor(() => r.read('Boxed').length)
+  assert.equal(r.read('Boxed')[0].choice.chosen, 'B')
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'inferred', '--app', 'Boxed', '--screen', 'Which layout for page 2?', '--mark', '1', '--text', 'Tighten the B heading'], { env: r.env, stdio: 'ignore' })
+  await page.keyboard.press('ArrowLeft')
+  await page.locator('.reading').first().waitFor({ timeout: 8000 })
+  await page.locator('.reading [data-no]').first().click()
+  await page.keyboard.type('acb')
+  assert.equal(await page.locator('.reading.open [data-correct]').inputValue(), 'acb', 'the letters are words in the box')
+  assert.equal(await chosen(), null)
+  // The keyboard taken out of the box by a press elsewhere, the box still open: the letters still choose nothing.
+  await page.locator('#lineupQuestion').click()
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-correct]')), false)
+  await page.keyboard.press('a')
+  await page.keyboard.press('c')
+  await settled(page)
+  assert.equal(await chosen(), null, 'no key of the page works while a box is open')
+  assert.equal(await page.locator('[data-choose][aria-pressed="true"]').count(), 0)
+  await page.locator('.reading.open [data-cancel]').click()
+  // Box closed: K, the checks list's key, is not an option letter and chooses nothing; A does.
+  await page.keyboard.press('k')
+  assert.equal(await chosen(), null)
+  await page.keyboard.press('a')
+  assert.equal(await chosen(), 'A')
   assert.deepEqual(errors, [])
 })

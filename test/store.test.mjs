@@ -1,3 +1,4 @@
+import './own-home.mjs'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -302,7 +303,7 @@ test('a second send on one picture keeps every word said before it, and the newe
   later()
   const second = receive({ appSlug: 'kept-words', id: 'one', png: null, shapes: [], notes: 'b', verdict: 'changes', imageSize: null, said: { 3: 'fixed' } })
   assert.deepEqual(second.asked.map(a => [a.n, a.said]), [[1, 'fixed'], [2, 'stands'], [3, 'fixed']])
-  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Kept words', '--latest'], { env, encoding: 'utf8' }).split('\n').slice(0, 2).join('\n'), /round 2: CHANGES ASKED\n\s+Earlier marks: 2 of 3 ticked fixed, 1 still to do/)
+  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Kept words', '--latest'], { env, encoding: 'utf8' }).split('\n').filter(line => !line.startsWith('Store: ')).slice(0, 2).join('\n'), /round 2: CHANGES ASKED\n\s+Earlier marks: 2 of 3 ticked fixed, 1 still to do/)
   later()
   // Taken back on the page: null, and it is open again.
   const third = receive({ appSlug: 'kept-words', id: 'one', png: null, shapes: [], notes: 'c', verdict: 'changes', imageSize: null, said: { 1: null } })

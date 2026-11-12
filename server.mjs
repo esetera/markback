@@ -9,15 +9,17 @@ import { readFileSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { basename, extname, join, normalize, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { IMAGES, INBOX, PORT, listApps, readInbox, receive, replyToReading, setAside } from './lib/store.mjs'
+import { HOME, IMAGES, INBOX, PORT, WHERE, storeIdNow, listApps, readInbox, receive, replyToReading, setAside } from './lib/store.mjs'
 import { filmOf, leftOutLine, saveFilm, savedPart } from './lib/film.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
+import { linkIn, LINK_OUT } from './lib/home.mjs'
+import { makeSecret } from './lib/trust.mjs'
 import { hasReader, stopReading, wordsForPicture } from './lib/read-words.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder, requestBuild } from './lib/work.mjs'
 import { appsOf, madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
 // Only what reads the wake command and turns it on and off. What sets the command is not imported here, on purpose:
 // nothing a web page can reach may decide what this computer runs.
-import { createWaker, listDesktopWakes, listWakes, readDesktopWake, switchDesktopWake, switchWake, wakeSummary } from './lib/wake.mjs'
+import { WAKES, WAKES_IN_STORE, createWaker, listDesktopWakes, listWakes, readDesktopWake, switchDesktopWake, switchWake, wakeSummary } from './lib/wake.mjs'
 
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public')
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8' }
@@ -171,13 +173,16 @@ const server = createServer(async (req, res) => {
   // Only this computer's own pages: another site open in the browser must not write here, or read by renaming itself.
   if (!isLocal(req)) return json(res, 403, { error: 'Only this computer can use this.' })
   try {
-    // `reader`: whether this computer can read words off a picture, so the page shows the words tool only where it can work.
+    // Which store this page shows: a command on the same port can then tell whether its pushes are here. `reader`: whether this
+    // computer can read words off a picture, so the page shows the words tool only where it can work.
     if (req.method === 'GET' && url.pathname === '/api/queue') {
       const apps = listApps()
       const status = listening(apps)
       const ideaRequests = listRequests().filter(r => r.status === 'open' || r.posted).slice(-8)
-      return json(res, 200, { apps, listening: status, buildTargets: workTargets(apps, status), ideaRequests, reader: hasReader() })
+      return json(res, 200, { apps, listening: status, buildTargets: workTargets(apps, status), ideaRequests, reader: hasReader(), store: storeIdNow(), pid: process.pid })
     }
+    // A store a project's .markback named may hold no link: one added while the page runs would send this write anywhere.
+    if (req.method === 'POST' && WHERE.project && linkIn(HOME)) return json(res, 409, { error: `Not saved: ${LINK_OUT}.` })
     if (req.method === 'POST' && url.pathname === '/api/read-words') {
       // A picture pushed with no word list: its words are read here, once, and the list is kept beside it. The answer comes at
       // once, reading or not, so a read never holds one of the few connections a browser opens to a server.
@@ -258,7 +263,7 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { request: askForIdeas({ target: input.target, count: input.count, route }) })
       }
       if (action === 'decide') return json(res, 200, { item: decide(String(input.id), String(input.decision)) })
-      if (action === 'note') return json(res, 200, { item: addNote(String(input.id), input.text) })
+      if (action === 'note') return json(res, 200, { item: addNote(String(input.id), input.text, 'reviewer', { page: true }) })
       if (action === 'order' && Array.isArray(input.ids)) {
         reorder(input.ids)
         return json(res, 200, { ok: true })
@@ -327,6 +332,20 @@ const server = createServer(async (req, res) => {
   }
 })
 
+if (WAKES_IN_STORE) console.error(`Not running the wake commands in ${join(HOME, 'work', 'wake')}: they came with the project's store. Set one on this computer with review wake set, kept in ${WAKES}.`)
+
+// The secret that stamps the person's decisions, made on the first start, in the person's own Markback folder.
+try {
+  makeSecret()
+} catch (error) {
+  console.error(`Answers cannot be stamped as yours: ${error.message}. In a project's store they will read as the project's words.`)
+}
+
+if (WHERE.problem) {
+  console.error(`Not starting: ${WHERE.problem}`)
+  process.exit(1)
+}
+
 server.on('error', error => {
   if (error.code !== 'EADDRINUSE') throw error
   console.error(`Port ${PORT} is taken. Choose another: review start --port ${PORT + 1}`)
@@ -334,8 +353,10 @@ server.on('error', error => {
 })
 // This computer only: nothing here is reachable from another machine.
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Markback on http://localhost:${PORT}`)
+  console.log(`Markback on http://localhost:${PORT}, with screens and marks in ${HOME}`)
   const beat = () => {
+    // Its notes go in the store too: not while a link in a .markback store could send them elsewhere.
+    if (WHERE.project && linkIn(HOME)) return console.error(`Not saving: ${LINK_OUT}.`)
     try {
       // Said first, so a hook knows the page runs even when a look below fails.
       serverBeat(PORT)
