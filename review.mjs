@@ -606,6 +606,16 @@ async function stopServer(pid) {
 }
 
 async function stop() {
+  // Review from a phone goes off with the page: asked first of this store's own page (it gives this store's id), so what it
+  // could not do is said. A page from before phones has no such question, and no answer ever stands in the way of stopping.
+  if ((await pageOn(PORT)) === 'ours') {
+    const was = await fetch(`http://127.0.0.1:${PORT}/api/phone`, { signal: AbortSignal.timeout(5000) }).then(r => (r.ok ? r.json() : null), () => null).catch(() => null)
+    if (was?.on) {
+      const off = await fetch(`http://127.0.0.1:${PORT}/api/phone`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: false }), signal: AbortSignal.timeout(60000) }).then(r => r.json(), () => null).catch(() => null)
+      if (off) sayOff(off)
+      else console.log('Review from your phone could not be turned off from here. Turn it off in Tailscale.')
+    }
+  }
   if (!existsSync(PID_FILE)) return console.log('It is not running from here.')
   const pid = readPid()
   const proof = await provenPage(pid, PORT)
@@ -616,14 +626,6 @@ async function stop() {
     }
     // Kept: the number may still be the page's, and whoever can check it by hand needs it.
     return console.log(killLine(pid, proof.why))
-  }
-  // Review from a phone goes off with the page: asked of this store's page first, so what it could not do is said. A page from
-  // before phones has no such question: that, or any answer but a plain one, never stands in the way of stopping it.
-  const was = await fetch(`http://127.0.0.1:${PORT}/api/phone`, { signal: AbortSignal.timeout(5000) }).then(r => (r.ok ? r.json() : null), () => null).catch(() => null)
-  if (was?.on) {
-    const off = await fetch(`http://127.0.0.1:${PORT}/api/phone`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: false }), signal: AbortSignal.timeout(60000) }).then(r => r.json(), () => null).catch(() => null)
-    if (off) sayOff(off)
-    else console.log('Review from your phone could not be turned off from here. Turn it off in Tailscale.')
   }
   await stopServer(pid)
   console.log('Stopped.')
