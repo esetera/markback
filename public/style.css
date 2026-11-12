@@ -588,3 +588,119 @@ body.film-open .toast { bottom: auto; top: 58px; }
 }
 .tip .kbd { background: transparent; color: inherit; border-color: color-mix(in srgb, var(--tip-ink) 40%, transparent); }
 
+/* ---------- review from a phone: the window that turns it on, and says what it opens ---------- */
+.modal.phone-modal { width: min(520px, calc(100vw - 32px)); }
+.phone-body { display: flex; align-items: center; gap: 18px; min-height: 152px; }
+/* Black on white whatever the page's colours: a camera reads it. */
+.phone-code { flex: none; width: 152px; height: 152px; background: #fff; border: 1px solid var(--rule-firm); }
+.phone-code svg { display: block; width: 100%; height: 100%; }
+.phone-words { min-width: 0; }
+.modal .phone-words p { margin: 0 0 9px; color: var(--ink); }
+.modal .phone-words p:last-child { margin-bottom: 0; }
+.modal .phone-words .phone-address { margin-top: 14px; font-size: 12px; color: var(--soft); overflow-wrap: anywhere; }
+.phone-address a { color: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.modal .phone-words .phone-address.large { font-size: 17px; color: var(--ink); }
+.modal .phone-words .phone-problem { margin-top: 14px; padding: 8px 10px; color: var(--ink); border: 1px solid var(--danger); border-radius: var(--r); }
+/* While it is open to a phone the bar says so in words, in the colour that warns, until it is turned off. */
+#phoneOn { width: auto; gap: 6px; margin-left: 4px; padding: 0 8px; font-size: 12px; font-weight: 600; background: var(--danger); border-color: var(--danger); color: #fff; }
+/* Short of room, it keeps its colour and its icon, and says the rest in its tip. */
+@media (max-width: 1100px) { #phoneOn { width: 28px; padding: 0; } #phoneOn span { display: none; } }
+/* A window too narrow for the whole bar: the name goes first, then the bar takes a second row rather than run off the side. */
+@media (max-width: 1100px) {
+  body:not(.phone) { grid-template-rows: auto minmax(0, 1fr); }
+  body:not(.phone) .wordmark { display: none; }
+  body:not(.phone) .bar { flex-wrap: wrap; min-height: 40px; padding-top: 3px; padding-bottom: 3px; }
+}
+/* The two large buttons a phone has. Elsewhere the bar and the foot do their work. */
+#markBtn, #talkBtn { display: none; }
+
+/* ---------- on a phone: a name and a count, the picture, what to look at, and three large buttons ---------- */
+body.phone { grid-template-rows: auto minmax(0, 1fr); height: 100dvh; font-size: 15px; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+body.phone .bar { flex-wrap: wrap; gap: 0; min-height: 44px; padding: 0 6px 0 12px; user-select: none; -webkit-user-select: none; }
+body.phone #listOpen, body.phone .wordmark, body.phone .pager, body.phone .sep, body.phone .spacer, body.phone #stopHere, body.phone #views, body.phone #zoomValue, body.phone #phoneOn, body.phone .kbd { display: none; }
+body.phone .crumbs { flex: 1 1 0; padding: 0; font-size: 16px; }
+body.phone .crumbs .crumb-app { max-width: none; font-weight: 600; color: var(--ink); }
+body.phone .overall { margin: 0; min-height: 44px; padding: 0 8px; font-size: 16px; }
+/* The tools fold away. Mark brings them out as two rows under the name, each a finger wide. */
+body.phone .marking { display: none; order: 3; }
+body.phone.marking-on .group.marking { display: flex; border-top: 1px solid var(--rule); }
+body.phone.marking-on #toolButtons { flex: 0 0 100%; }
+body.phone.marking-on #colours { flex: 1 1 auto; }
+body.phone.marking-on.no-screen .marking { display: none; }
+body.phone .tool { width: 44px; height: 44px; touch-action: manipulation; }
+body.phone .tool svg { width: 20px; height: 20px; }
+/* The menu stays, a finger wide: on a phone it offers only what a phone can do. */
+body.phone .menu-wrap { margin-left: 2px; }
+body.phone .tool.swatch { width: 44px; }
+body.phone .tool.swatch i { width: 20px; height: 20px; border-radius: 3px; }
+/* Until Mark is pressed a finger moves the picture, as on any page. Then it draws. */
+body.phone:not(.marking-on) .frame canvas { touch-action: auto; }
+body.phone .scroller { padding: 6px; }
+/* What to look at sits under the picture, beside the thumb. The rest of it opens upwards. */
+body.phone .about { order: 2; padding: 10px 14px 2px; border-bottom: 0; border-top: 1px solid var(--rule-firm); }
+body.phone .about-note, body.phone .about-size { font-size: 16px; }
+body.phone .more { height: 28px; }
+body.phone .more-words { top: auto; bottom: 100%; border-bottom: 0; border-top: 1px solid var(--rule-firm); box-shadow: none; }
+body.phone .scroller { order: 1; }
+/* The bar of readings sits under the picture, so their list opens upwards over the picture, not off the top of the screen. */
+body.phone .readings-bar { order: 1; }
+/* Whether an agent hears: its sign only, a finger wide; a press says the rest. */
+body.phone .heard-sign { width: 44px; min-width: 44px; padding: 0; justify-content: center; }
+body.phone .heard-sign span { display: none; }
+body.phone .foot { order: 3; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; height: auto; padding: 8px 12px calc(10px + env(safe-area-inset-bottom)); }
+body.phone .about:not([hidden]) ~ .foot { border-top: 0; }
+body.phone #micBtn, body.phone .said { display: none !important; }
+body.phone .note-wrap { grid-column: 1 / -1; display: none; height: auto; min-width: 0; }
+body.phone.marking-on .note-wrap, body.phone .foot.has-notes .note-wrap { display: block; }
+body.phone .note-wrap textarea { position: static; display: block; min-height: 44px; padding: 10px 12px; font-size: 16px; line-height: 22px; }
+body.phone #notes::placeholder { color: var(--faint); }
+body.phone #markBtn, body.phone #talkBtn:not([hidden]) { display: inline-flex; }
+body.phone.no-talk .foot { grid-template-columns: 1fr 1fr; }
+body.phone.no-talk .note-wrap { display: block; }
+body.phone .foot-actions { display: flex; min-width: 0; }
+body.phone .foot .btn { width: 100%; height: 50px; padding: 0 6px; font-size: 16px; font-weight: 500; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+/* One answer at a time: Send when there is something to send, Looks good when there is not. */
+body.phone .foot-actions [data-act="send"]:disabled { display: none; }
+body.phone .foot-actions:has([data-act="send"]:not(:disabled)) [data-act="good"] { display: none; }
+body.phone .foot-actions [data-act="good"] { background: var(--accent); color: var(--on-accent); border-color: var(--primary-edge); }
+body.phone .foot-actions [data-act="good"]:disabled { background: var(--off-bg); color: var(--off-ink); border-color: var(--rule); }
+body.phone .foot-actions [data-act="good"] svg { display: none; }
+.btn.talk { background: var(--danger); color: #fff; border-color: var(--danger); touch-action: none; -webkit-touch-callout: none; }
+.btn.talk.listening { box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.35); filter: brightness(0.85); }
+/* The rest of the page, a finger wide. */
+body.phone .toast { top: 52px; bottom: auto; padding: 12px 14px; }
+body.phone .toast .link { padding: 6px 0 6px 8px; }
+body.phone .segment { padding: 20px 16px; align-items: flex-start; }
+body.phone .segment h1, body.phone .segment.new-group h1 { font-size: 28px; }
+body.phone .segment .what { font-size: 18px; margin-bottom: 28px; }
+body.phone .segment .finished { margin-bottom: 24px; font-size: 15px; }
+body.phone .segment .btn, body.phone .state-card .btn, body.phone .modal .btn { height: 48px; padding: 0 16px; font-size: 16px; }
+body.phone .segment .actions .btn { flex: 1 1 auto; }
+body.phone .state-card { margin: 16px 0 0; padding: 18px 16px; }
+body.phone .first-row { flex-wrap: wrap; }
+body.phone .first input, body.phone .first code { height: 44px; font-size: 16px; flex: 1 1 100%; }
+body.phone .drawer { top: 44px; width: min(380px, 100vw); }
+body.phone .row-btn { padding: 12px; }
+body.phone .row-go, body.phone .row-aside { font-size: 13px; }
+body.phone .modal-back { padding-top: 5vh; }
+body.phone .modal { padding: 16px; max-height: 88vh; }
+body.phone .modal-actions { flex-wrap: wrap; }
+body.phone .keys { columns: 1; }
+body.phone .phone-body { flex-direction: column; align-items: flex-start; }
+body.phone .text-entry { min-width: 150px; max-width: 70vw; }
+
+/* ---------- a phone held sideways: the picture takes the room, and what to look at and the buttons stand beside it ---------- */
+@media (orientation: landscape) and (max-height: 500px) {
+  body.phone .center { display: grid; grid-template-columns: minmax(0, 1fr) min(220px, 36vw); grid-template-rows: auto minmax(0, 1fr) auto; }
+  body.phone .scroller { grid-column: 1; grid-row: 1 / span 2; }
+  body.phone .readings-bar { grid-column: 1; grid-row: 3; }
+  body.phone .about { grid-column: 2; grid-row: 1; max-height: 34vh; overflow: auto; padding: 8px 10px 2px; border-top: 0; border-left: 1px solid var(--rule-firm); }
+  body.phone .about-note, body.phone .about-size { font-size: 14px; }
+  body.phone .foot, body.phone.no-talk .foot { grid-column: 2; grid-row: 2 / span 2; grid-template-columns: 1fr; align-content: end; gap: 6px; padding: 6px 10px calc(8px + env(safe-area-inset-bottom)); border-top: 0; border-left: 1px solid var(--rule-firm); }
+  body.phone .foot .btn { height: 44px; }
+  body.phone .note-wrap textarea { min-height: 40px; padding: 8px 10px; }
+  /* Marking: the tools take the one row at the top, and the name and count wait until Mark is pressed again. */
+  body.phone.marking-on .crumbs, body.phone.marking-on .overall { display: none; }
+  body.phone.marking-on #toolButtons { flex: 0 1 auto; }
+  body.phone.marking-on .group.marking { border-top: 0; }
+}

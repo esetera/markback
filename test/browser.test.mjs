@@ -14,12 +14,16 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { writePicture, writeReader } from './helpers.mjs'
+import { standInProxy, standInTailscale, writePicture, writeReader } from './helpers.mjs'
 
 const from = process.env.REVIEW_PLAYWRIGHT_FROM
 const skip = from ? false : 'set REVIEW_PLAYWRIGHT_FROM to a package.json that has Playwright'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 let browser
+let chromium
+// No question from the Mac's keychain while a test runs.
+const CHROME = { headless: true, ...(process.env.REVIEW_CHROME ? { executablePath: process.env.REVIEW_CHROME } : {}) }
+const CHROME_ARGS = ['--use-mock-keychain', '--password-store=basic']
 /** A port nothing else is on: another wizard running here must not answer for this one. */
 const freePort = () => new Promise((resolve, reject) => {
   const probe = createServer()
@@ -33,8 +37,8 @@ const cleanups = []
 
 before(async () => {
   if (skip) return
-  const { chromium } = createRequire(from)('playwright')
-  browser = await chromium.launch({ headless: true, ...(process.env.REVIEW_CHROME ? { executablePath: process.env.REVIEW_CHROME } : {}) })
+  chromium = createRequire(from)('playwright').chromium
+  browser = await chromium.launch({ ...CHROME, args: CHROME_ARGS })
 })
 after(async () => {
   await browser?.close()
@@ -45,11 +49,12 @@ after(async () => {
  * A store and a server for one test. With no reader: a computer that cannot read words off a picture, unless a test gives
  * a stand-in, so no test waits on the real one.
  */
-async function rig({ reader = null } = {}) {
+async function rig({ reader = null, ...more } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'review-browser-'))
   const port = await freePort()
   // REVIEW_CHROME here is for driving these tests; a picture of an app is taken by the Chrome a person would have.
-  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_CHROME: '', REVIEW_TESSERACT: reader ? writeReader(join(home, 'reader.mjs'), ...reader) : join(home, 'no-reader') }
+  // A Tailscale that is not there, unless a test gives its stand-in: the real one is never run.
+  const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: port, REVIEW_CHROME: '', REVIEW_TESSERACT: reader ? writeReader(join(home, 'reader.mjs'), ...reader) : join(home, 'no-reader'), REVIEW_TAILSCALE: join(home, 'no-tailscale'), REVIEW_PHONE_WARM: 'off', ...more }
   // Wide: it fills the room, and what to check is the line under the bar. `tall` leaves room beside it.
   const picture = join(home, 'p.png')
   writePicture(picture, 1600, 900)
@@ -84,8 +89,8 @@ async function rig({ reader = null } = {}) {
   const read = app => JSON.parse(execFileSync('node', [join(ROOT, 'review.mjs'), 'read', '--app', app, '--json'], { env, encoding: 'utf8' }))
   const queue = async slug => (await (await fetch(`http://127.0.0.1:${port}/api/queue`)).json()).apps.find(a => a.slug === slug)
   /** `undo` is how long an answer can be taken back. Long: it stays here. Short: it goes at once. */
-  const open = async (app, { undo = 40, width = 1500, height = 960, colorScheme = 'light', seed = null, film = 0 } = {}) => {
-    const context = await browser.newContext({ viewport: { width, height }, colorScheme })
+  const open = async (app, { undo = 40, width = 1500, height = 960, colorScheme = 'light', seed = null, film = 0, touch = false } = {}) => {
+    const context = await browser.newContext({ viewport: { width, height }, colorScheme, hasTouch: touch })
     const page = await context.newPage()
     const errors = []
     page.on('pageerror', e => errors.push(e.message))
@@ -2859,6 +2864,308 @@ test('select the words themselves: where a picture has a word list, the words to
   assert.deepEqual(errors, [])
 })
 
+/* ---------- review from a phone ---------- */
+
+/** One finger on the picture: down at the first place, along the rest, and up. Places are parts of the picture's width and height. */
+const finger = async (page, ...places) => {
+  const b = await page.locator('#canvas').boundingBox()
+  const cdp = await page.context().newCDPSession(page)
+  const touch = (type, at) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: at ? [{ x: Math.round(b.x + b.width * at[0]), y: Math.round(b.y + b.height * at[1]) }] : [] })
+  await touch('touchStart', places[0])
+  for (const at of places.slice(1)) await touch('touchMove', at)
+  await touch('touchEnd')
+  await cdp.detach()
+  await page.waitForTimeout(40)
+}
+const PHONE = { width: 390, height: 844, touch: true }
+
+test('on a phone: a name, a count and three large buttons; a finger draws a box, an arrow and a line once Mark is pressed, and Send sends them', { skip }, async () => {
+  const r = await rig()
+  r.push('Pocket', ['One', 'Two'], () => 'Do the rows line up?')
+  const { page, errors } = await r.open('pocket', PHONE)
+  const sizeOf = sel => page.locator(sel).boundingBox()
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390, 'nothing is wider than the phone')
+  assert.equal(await page.locator('#crumbs').innerText(), 'Pocket')
+  assert.equal(await page.locator('#overall').innerText(), '1 of 2')
+  assert.match(await page.locator('#aboutNote').innerText(), /Do the rows line up\?/)
+  for (const sel of ['#markBtn', '#talkBtn', '#footActions [data-act=good]']) {
+    const b = await sizeOf(sel)
+    assert.ok(b.height >= 44 && b.width >= 100 && b.x >= 0 && b.x + b.width <= 390, `${sel} is a finger wide and on the screen`)
+  }
+  assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Hold to talk', 'Looks good'])
+  assert.equal(await page.locator('#toolButtons').isVisible(), false, 'the tools are folded away')
+  const about = await sizeOf('#about')
+  const picture = await sizeOf('#canvas')
+  assert.ok(about.y > picture.y + picture.height, 'what to look at is under the picture, by the buttons')
+  // Until Mark is pressed a finger moves the picture: it leaves no mark.
+  await finger(page, [0.2, 0.2], [0.4, 0.5], [0.6, 0.7])
+  assert.equal(await saved(page, 'pocket', 'one'), null)
+  assert.equal(await page.locator('#canvas').evaluate(el => getComputedStyle(el).touchAction), 'auto')
+
+  await page.locator('#markBtn').tap()
+  assert.equal(await page.locator('#markBtn').getAttribute('aria-pressed'), 'true')
+  assert.equal(await page.locator('#canvas').evaluate(el => getComputedStyle(el).touchAction), 'none', 'now a finger draws, and the page does not scroll under it')
+  for (const b of await page.locator('#bar .tool:visible').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) {
+    assert.ok(b.width >= 44 && b.height >= 44 && b.left >= 0 && b.right <= 390, 'each tool is a finger wide and on the screen')
+  }
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390)
+  assert.ok(await page.locator('#notes').isVisible(), 'and there is a box for notes')
+  await page.locator('#toolButtons [data-tool=box]').tap()
+  await finger(page, [0.1, 0.2], [0.2, 0.3], [0.3, 0.45])
+  // A second finger put down while one draws is not a second mark.
+  await page.locator('#toolButtons [data-tool=arrow]').tap()
+  await finger(page, [0.8, 0.8], [0.7, 0.6], [0.6, 0.5])
+  await page.locator('#toolButtons [data-tool=pen]').tap()
+  await finger(page, [0.4, 0.7], [0.45, 0.75], [0.5, 0.7], [0.55, 0.75])
+  const marks = (await saved(page, 'pocket', 'one')).marks
+  assert.deepEqual(marks.map(m => m.tool), ['box', 'arrow', 'pen'])
+  assert.ok(Math.abs(marks[0].a[0] - 160) < 12 && Math.abs(marks[0].b[0] - 480) < 12, 'the box is where the finger went')
+  assert.ok(await inked(page) > 0)
+  await page.locator('#notes').fill('The fourth row sits too far in.')
+  // With something to send, the one large answer is Send.
+  assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Hold to talk', 'Send'])
+  await page.locator('#footActions [data-act=send]').tap()
+  const sent = await waitFor(() => r.read('Pocket').find(x => x.screenId === 'one'))
+  assert.deepEqual(sent.shapes.map(s => s.type), ['box', 'arrow', 'freehand'])
+  assert.equal(sent.notes, 'The fourth row sits too far in.')
+  assert.ok(sent.annotatedImage)
+  // On to the next, where Looks good is the answer again.
+  await page.waitForFunction(() => document.getElementById('overall').innerText === '2 of 2')
+  assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Hold to talk', 'Looks good'])
+  await page.locator('#footActions [data-act=good]').tap()
+  const good = await waitFor(() => r.read('Pocket').find(x => x.screenId === 'two'))
+  assert.equal(good.verdict, 'approved')
+  assert.deepEqual(errors, [])
+})
+
+test('on a phone: the speak tool drops a pin where a finger taps, and Hold to talk fills the notes while it is held', { skip }, async () => {
+  const r = await rig()
+  r.push('Voice', ['A', 'B'], null)
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true })
+  await context.addInitScript(fakeSpeech())
+  const page = await context.newPage()
+  const errors = []
+  page.on('pageerror', e => errors.push(e.message))
+  await page.goto(`http://localhost:${r.port}/?undo=40#voice`)
+  await page.locator('#canvas').waitFor()
+  await page.waitForFunction(() => document.getElementById('canvas').width > 300)
+  await page.locator('#markBtn').tap()
+  await page.locator('#toolButtons [data-tool=speak]').tap()
+  const c = await page.locator('#canvas').boundingBox()
+  await page.touchscreen.tap(c.x + c.width * 0.25, c.y + c.height * 0.3)
+  await page.waitForFunction(() => window.FAKE)
+  assert.equal(await page.locator('#pinGlow').evaluate(el => el.hidden), false, 'the pin listens where the finger tapped')
+  await page.evaluate(() => window.say('this heading is too big', true))
+  // A tap somewhere else ends that pin and starts the next.
+  await page.touchscreen.tap(c.x + c.width * 0.7, c.y + c.height * 0.7)
+  await settled(page)
+  await page.evaluate(() => window.say('and that button', true))
+  // Mark again puts the tools away, and the pin that listened ends with its words.
+  await page.locator('#markBtn').tap()
+  await settled(page)
+  const marks = (await saved(page, 'voice', 'a')).marks
+  assert.deepEqual(marks.map(m => [m.tool, m.n, m.text]), [['pin', 1, 'this heading is too big'], ['pin', 2, 'and that button']])
+  assert.ok(Math.abs(marks[0].a[0] - 1600 * 0.25) < 12 && Math.abs(marks[0].a[1] - 900 * 0.3) < 12, 'the pin is where the tap was')
+  assert.equal(await page.locator('#talkBtn').evaluate(el => el.classList.contains('listening')), false)
+
+  // Hold to talk: it listens while the finger is down, and what is said goes to the notes.
+  const t = await page.locator('#talkBtn').boundingBox()
+  const cdp = await context.newCDPSession(page)
+  const at = [{ x: Math.round(t.x + t.width / 2), y: Math.round(t.y + t.height / 2) }]
+  const starts = await page.evaluate(() => window.FAKE_STARTS)
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at })
+  await page.waitForFunction(n => window.FAKE_STARTS > n, starts)
+  assert.equal(await page.locator('#talkBtn').innerText(), 'Listening…')
+  await page.evaluate(() => window.say('the whole page feels tight', true))
+  assert.equal(await page.locator('#notes').inputValue(), 'the whole page feels tight')
+  assert.ok(await page.locator('#notes').isVisible(), 'the notes show once there are words in them')
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await page.waitForFunction(() => document.getElementById('talkBtn').innerText === 'Hold to talk')
+  assert.equal(await page.locator('#talkBtn').evaluate(el => el.classList.contains('listening')), false, 'lifting the finger stops it')
+  assert.equal((await saved(page, 'voice', 'a')).marks.length, 2, 'and it made no pin')
+
+  await page.locator('#footActions [data-act=send]').tap()
+  const sent = await waitFor(() => r.read('Voice').find(x => x.screenId === 'a'))
+  assert.deepEqual(sent.shapes.map(s => [s.type, s.n, s.text]), [['pin', 1, 'this heading is too big'], ['pin', 2, 'and that button']])
+  assert.equal(sent.notes, 'the whole page feels tight')
+  assert.deepEqual(errors, [])
+})
+
+/** What Chrome's own reader reads in the code the page shows, or null where this Chrome has no reader. */
+async function readCode(svg) {
+  const reader = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--enable-experimental-web-platform-features'] })
+  try {
+    const page = await reader.newPage()
+    // The reader is for secure pages only, as localhost is.
+    const server = (await import('node:http')).createServer((req, res) => res.end('<body></body>')).listen(0, '127.0.0.1')
+    await new Promise(resolve => server.once('listening', resolve))
+    await page.goto(`http://localhost:${server.address().port}/`)
+    server.close()
+    return await page.evaluate(async svg => {
+      if (typeof BarcodeDetector === 'undefined') return null
+      const img = new Image()
+      img.src = `data:image/svg+xml;base64,${btoa(svg)}`
+      await img.decode()
+      const c = document.createElement('canvas')
+      c.width = c.height = 400
+      c.getContext('2d').drawImage(img, 0, 0, 400, 400)
+      return (await new BarcodeDetector({ formats: ['qr_code'] }).detect(c))[0]?.rawValue ?? ''
+    }, svg)
+  } finally {
+    await reader.close()
+  }
+}
+
+test('review from a phone: the page turns it on, shows a code that reads as the address, says so in the bar, says what stops it, and turns it off', { skip }, async t => {
+  const tail = standInTailscale(mkdtempSync(join(tmpdir(), 'review-tailscale-')), { https: false })
+  const r = await rig({ REVIEW_TAILSCALE: tail.program })
+  r.push('Desk', ['One'])
+  const { page, errors } = await r.open('desk')
+  assert.equal(await page.locator('#phoneOn').isVisible(), false, 'off until it is turned on')
+  await page.locator('#menuOpen').click()
+  await page.locator('[data-menu=phone]').click()
+  const modal = page.locator('#phoneModal')
+  await modal.getByText('Only your own devices can reach this').waitFor()
+  await modal.getByText('It needs Tailscale on this computer and on your phone, signed in as the same person.', { exact: false }).waitFor()
+  await modal.getByText('It turns itself off after 30 minutes, and when Markback stops.').waitFor()
+  assert.deepEqual(tail.calls(), [], 'opening the window asks Tailscale nothing')
+  // What stops it is said in the window, in plain words.
+  await modal.getByRole('button', { name: 'Turn it on' }).click()
+  await modal.getByText('HTTPS is not turned on for your tailnet.', { exact: false }).waitFor()
+  assert.equal(await page.locator('.phone-code').count(), 0)
+  tail.set({ https: true })
+  await modal.getByRole('button', { name: 'Turn it on' }).click()
+  await page.locator('.phone-code svg').waitFor()
+  assert.equal(await page.locator('.phone-address a').innerText(), 'https://my-mac.example.ts.net')
+  await modal.getByText('The first time, it can take half a minute to open.', { exact: false }).waitFor()
+  assert.ok(tail.calls().some(call => /^serve --bg --https=443 http:\/\/127\.0\.0\.1:\d+\/[\w-]{32}$/.test(call) && !call.includes(`:${r.port}/`)), 'the door with its secret path, not the page\'s own port')
+  const read = await readCode(await page.locator('.phone-code').innerHTML())
+  if (read === null) t.diagnostic('this Chrome has no code reader: the code was not read back')
+  else assert.equal(read, 'https://my-mac.example.ts.net', 'a camera reads the https address from the code')
+  // The window can be closed with it still on: the bar then says so in words, until it is off.
+  await page.keyboard.press('Escape')
+  assert.equal(await modal.isVisible(), false)
+  assert.equal(await page.locator('#phoneOn').innerText(), 'Open to your phone')
+  await page.locator('#phoneOn').click()
+  await modal.getByRole('button', { name: 'Turn it off' }).click()
+  await modal.getByRole('button', { name: 'Turn it on' }).waitFor()
+  assert.deepEqual(tail.state().serve.Web, {})
+  assert.equal(await page.locator('#phoneOn').isVisible(), false)
+  assert.equal(tail.calls().some(call => /funnel/.test(call)), false)
+  // Tailscale cannot take it down: the window says so, with the command, and it stays shown as open until it is.
+  await modal.getByRole('button', { name: 'Turn it on' }).click()
+  await page.locator('.phone-code svg').waitFor()
+  tail.set({ down: true })
+  await modal.getByRole('button', { name: 'Turn it off' }).click()
+  await modal.getByText('Still open in Tailscale.').waitFor()
+  await modal.getByText('Run: tailscale serve --https=443 off', { exact: false }).waitFor()
+  assert.equal(await page.locator('#phoneOn').isVisible(), true)
+  tail.set({ down: false })
+  await modal.getByRole('button', { name: 'Try again' }).click()
+  await modal.getByRole('button', { name: 'Turn it on' }).waitFor()
+  assert.equal(await page.locator('#phoneOn').isVisible(), false)
+  assert.deepEqual(tail.state().serve.Web, {})
+  // The one refusal on the way, which the window said in words, is all the browser complains of.
+  assert.deepEqual(errors.filter(e => !/400 \(Bad Request\) .*\/api\/phone$/.test(e)), [])
+})
+
+test('review from a phone: the page opened at the tailnet name, on a phone, marks, holds to talk and sends; others and the closed address get nothing', { skip }, async () => {
+  const tail = standInTailscale(mkdtempSync(join(tmpdir(), 'review-tailscale-')))
+  const r = await rig({ REVIEW_TAILSCALE: tail.program })
+  r.push('Afar', ['One', 'Two'], null)
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, stdio: 'ignore' })
+  // The name is this computer for this browser, as Tailscale's proxy makes it for a phone. The proxy also says who is asking.
+  // Tailscale's address is https, which a browser counts as secure; this plain one is counted so too, as it would be.
+  // A stand-in for Tailscale's proxy hands the phone's requests to the door, with the door's secret path in front and the login.
+  const proxy = await standInProxy(tail, 'my-mac.example.ts.net:443')
+  cleanups.push(proxy.close)
+  const at = `http://my-mac.example.ts.net:${proxy.port}`
+  const far = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--host-resolver-rules=MAP my-mac.example.ts.net 127.0.0.1', `--unsafely-treat-insecure-origin-as-secure=${at}`] })
+  try {
+    const context = await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    await context.addInitScript(fakeSpeech())
+    const page = await context.newPage()
+    const errors = []
+    page.on('pageerror', e => errors.push(e.message))
+    await page.goto(`${at}/?undo=40#afar`)
+    await page.locator('#canvas').waitFor()
+    await page.waitForFunction(() => document.getElementById('canvas').width > 300)
+    assert.equal(await page.evaluate(() => window.isSecureContext), true)
+    // The microphone can work at a secure address: Hold to talk is there.
+    await page.locator('#talkBtn').waitFor()
+    assert.deepEqual(await page.locator('.foot .btn:visible').allInnerTexts(), ['Mark', 'Hold to talk', 'Looks good'])
+    assert.equal(await page.locator('#notes').getAttribute('placeholder'), 'Notes', 'no key to press on a phone')
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390)
+    await page.locator('#markBtn').tap()
+    await page.locator('#toolButtons [data-tool=box]').tap()
+    await finger(page, [0.1, 0.2], [0.2, 0.3], [0.3, 0.45])
+    // Held, it listens, and what is said goes to the notes.
+    const t = await page.locator('#talkBtn').boundingBox()
+    const cdp = await context.newCDPSession(page)
+    const point = [{ x: Math.round(t.x + t.width / 2), y: Math.round(t.y + t.height / 2) }]
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point })
+    await page.waitForFunction(() => window.FAKE_STARTS > 0)
+    await page.evaluate(() => window.say('the title wraps too soon', true))
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await page.waitForFunction(() => document.getElementById('talkBtn').innerText === 'Hold to talk')
+    assert.equal(await page.locator('#notes').inputValue(), 'the title wraps too soon')
+    await page.locator('#footActions [data-act=send]').tap()
+    const sent = await waitFor(() => r.read('Afar').find(x => x.screenId === 'one'))
+    assert.deepEqual(sent.shapes.map(s => s.type), ['box'], 'sent from the tailnet name, and written on this computer')
+    assert.equal(sent.notes, 'the title wraps too soon')
+    await page.waitForFunction(() => document.getElementById('overall').innerText === '2 of 2')
+    await page.locator('#footActions [data-act=good]').tap()
+    assert.equal((await waitFor(() => r.read('Afar').find(x => x.screenId === 'two'))).verdict, 'approved')
+    // The menu is there, a finger wide, and offers only what a phone can do.
+    await page.locator('#menuOpen').tap()
+    const entries = await page.locator('#menu [role=menuitem]').allInnerTexts()
+    assert.ok(entries.some(text => /Apps and screens/.test(text)), entries.join(' | '))
+    for (const computerOnly of [/New project/, /Ideas and queue/, /Wake/, /Review from your phone/, /Keyboard shortcuts/]) assert.equal(entries.some(text => computerOnly.test(text)), false, `${computerOnly} is not offered`)
+    await page.locator('#menuOpen').tap()
+    // From the phone, nothing that runs things on the computer.
+    assert.equal(await page.evaluate(async () => (await fetch('/api/show', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'http://localhost:1/' }) })).status), 403)
+    // A page that renamed itself to the door, without the secret the proxy adds: nothing.
+    const door = new URL(tail.state().serve.Web['my-mac.example.ts.net:443'].Handlers['/'].Proxy).port
+    const stranger = await (await far.newContext({ extraHTTPHeaders: { 'Tailscale-User-Login': 'alice@example.com' } })).newPage()
+    assert.equal((await stranger.goto(`http://my-mac.example.ts.net:${door}/`)).status(), 404)
+    execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'off'], { env: r.env, stdio: 'ignore' })
+    await assert.rejects(page.goto(`${at}/`), 'off: Tailscale serves nothing there, and the same phone reaches nothing')
+    assert.deepEqual(errors, [])
+  } finally {
+    await far.close()
+  }
+})
+
+test('no sideways scroll at any width, open to a phone or not, and a phone held sideways keeps room to mark', { skip }, async () => {
+  const tail = standInTailscale(mkdtempSync(join(tmpdir(), 'review-tailscale-')))
+  const r = await rig({ REVIEW_TAILSCALE: tail.program })
+  // A before picture brings out the views too: the fullest bar there is.
+  const before = join(r.home, 'before.png')
+  writePicture(before, 1600, 900, { x: 10, w: 300, y: 10, h: 40 })
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'push', '--app', 'A rather long app name here', '--screen', 'Home', '--after', join(r.home, 'p.png'), '--before', before, '--check', 'Do the cards line up?'], { env: r.env })
+  for (const on of [false, true]) {
+    if (on) execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, stdio: 'ignore' })
+    for (const width of [641, 760, 844, 932, 1006, 1100, 1280]) {
+      const { page } = await r.open('a-rather-long-app-name-here', { width, height: 800 })
+      await page.waitForFunction(want => !document.getElementById('phoneOn').hidden === want, on)
+      const m = await page.evaluate(() => ({ page: document.documentElement.scrollWidth, more: document.getElementById('menuOpen').getBoundingClientRect().right, bar: document.getElementById('phoneOn').getBoundingClientRect().right }))
+      assert.ok(m.page <= width && m.more <= width && m.bar <= width, `${width} px, ${on ? 'on' : 'off'}: ${JSON.stringify(m)}`)
+      await page.context().close()
+    }
+  }
+  // Sideways: the picture beside the buttons, not behind them, and a finger draws on it.
+  const { page } = await r.open('a-rather-long-app-name-here', { width: 640, height: 360, touch: true })
+  await page.locator('#markBtn').tap()
+  const c = await page.locator('#canvas').boundingBox()
+  const foot = await page.locator('#foot').boundingBox()
+  assert.ok(c.height >= 200, `the picture has room: ${Math.round(c.height)} px tall`)
+  assert.ok(foot.x >= c.x + c.width - 1, 'the buttons stand beside it')
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 640)
+  await page.locator('#toolButtons [data-tool=box]').tap()
+  await finger(page, [0.2, 0.2], [0.4, 0.4], [0.6, 0.6])
+  assert.deepEqual((await saved(page, 'a-rather-long-app-name-here', 'home')).marks.map(m => m.tool), ['box'])
+})
+
 test('a drag along one row takes that row, and a drag down a card stays in the card, whatever order the list is in', { skip }, async () => {
   const { readFileSync, writeFileSync } = await import('node:fs')
   const r = await rig()
@@ -3315,6 +3622,78 @@ test('letting half a phrase go never costs the next whole phrase, and the foot m
   assert.equal(await page.locator('#micBtn').getAttribute('aria-pressed'), 'false')
   assert.equal(await page.locator('#notes').inputValue(), 'half a note')
   assert.deepEqual(errors, [])
+})
+
+test('on a phone through Tailscale, the film of a screen plays, and cannot be saved: making the file runs on the computer', { skip }, async () => {
+  const tail = standInTailscale(mkdtempSync(join(tmpdir(), 'review-tailscale-')))
+  const r = await rig({ REVIEW_TAILSCALE: tail.program })
+  await threeRounds(r, 'Film')
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, stdio: 'ignore' })
+  const proxy = await standInProxy(tail, 'my-mac.example.ts.net:443')
+  cleanups.push(proxy.close)
+  const at = `http://my-mac.example.ts.net:${proxy.port}`
+  const far = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--host-resolver-rules=MAP my-mac.example.ts.net 127.0.0.1', `--unsafely-treat-insecure-origin-as-secure=${at}`] })
+  try {
+    const page = await (await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })).newPage()
+    const errors = []
+    page.on('pageerror', e => errors.push(e.message))
+    await page.goto(`${at}/?undo=40&film=150#film/home`)
+    await page.locator('#canvas').waitFor()
+    await page.locator('#menuOpen').tap()
+    await page.getByRole('menuitem', { name: /The film of this screen/ }).tap()
+    await page.locator('#film').waitFor()
+    assert.deepEqual(await page.locator('.film-round').allInnerTexts(), ['Round 1', 'Round 2', 'Finished'])
+    assert.equal(await page.locator('#filmSave').isHidden(), true, 'no Save on a phone')
+    // Asked for anyway, the file is refused at the door's list: ffmpeg never runs for a phone.
+    assert.equal(await page.evaluate(async () => (await fetch('/api/film/file?app=film&id=home')).status), 403)
+    assert.equal(await page.evaluate(async () => (await fetch('/api/film?app=film&id=home')).status), 200)
+    assert.deepEqual(errors, [])
+  } finally {
+    await far.close()
+  }
+})
+
+test('on a phone through Tailscale, what the agent read each mark to mean is shown on the screen, and Yes or a few words back are kept', { skip }, async () => {
+  const tail = standInTailscale(mkdtempSync(join(tmpdir(), 'review-tailscale-')))
+  const r = await rig({ REVIEW_TAILSCALE: tail.program })
+  r.push('Readings', ['One', 'Two'], null)
+  await answerAs(r, 'readings', 'one', { marks: 2 })
+  for (const [mark, text] of [['1', 'Make the heading bigger'], ['2', 'Move this button up']]) execFileSync('node', [join(ROOT, 'review.mjs'), 'inferred', '--app', 'Readings', '--screen', 'One', '--mark', mark, '--text', text], { env: r.env, stdio: 'ignore' })
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, stdio: 'ignore' })
+  const proxy = await standInProxy(tail, 'my-mac.example.ts.net:443')
+  cleanups.push(proxy.close)
+  const at = `http://my-mac.example.ts.net:${proxy.port}`
+  const far = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--host-resolver-rules=MAP my-mac.example.ts.net 127.0.0.1', `--unsafely-treat-insecure-origin-as-secure=${at}`] })
+  try {
+    const page = await (await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })).newPage()
+    const errors = []
+    page.on('pageerror', e => errors.push(e.message))
+    await page.goto(`${at}/?undo=40#readings/one`)
+    await page.locator('.reading').nth(1).waitFor()
+    assert.deepEqual(await page.locator('.reading .rt').allInnerTexts(), ['Claude read:Make the heading bigger', 'Claude read:Move this button up'])
+    for (const box of await page.locator('.reading').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) {
+      assert.ok(box.left >= 0 && box.right <= 390 && box.top >= 0 && box.bottom <= 844, `each reading is on the screen: ${JSON.stringify(box)}`)
+    }
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390)
+    // The bar's sign of whether an agent hears is a finger wide, and covers nothing.
+    const sign = await page.locator('#heardSign').boundingBox()
+    const count = await page.locator('#overall').boundingBox()
+    assert.ok(!sign || sign.x >= count.x + count.width - 1 || sign.x + sign.width <= count.x + 1, `the sign beside the count: ${JSON.stringify([sign, count])}`)
+    // Under the picture, above the buttons: the list opens upwards over the picture.
+    const bar = await page.locator('#readingsBar').boundingBox()
+    assert.ok(bar.y > (await page.locator('#canvas').boundingBox()).y && bar.y + bar.height <= (await page.locator('#foot').boundingBox()).y + 1)
+    await page.screenshot({ path: process.env.REVIEW_SHOTS ? join(process.env.REVIEW_SHOTS, 'phone-readings.png') : join(r.home, 'readings.png') })
+    await page.locator('.reading[data-reading$="|1"] [data-yes]').tap()
+    await page.locator('.reading[data-reading$="|2"] [data-no]').tap()
+    await page.locator('.reading[data-reading$="|2"] [data-correct]').fill('The button, not the link')
+    await page.locator('.reading[data-reading$="|2"] [data-send]').tap()
+    await page.locator('.reading[data-reading$="|2"].corrected').waitFor()
+    const said = execFileSync('node', [join(ROOT, 'review.mjs'), 'read', '--app', 'Readings', '--latest'], { env: r.env, encoding: 'utf8' })
+    assert.match(said, /The button, not the link/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await far.close()
+  }
 })
 
 /* ---------- marks become checks ---------- */
@@ -4035,5 +4414,64 @@ test('on a lineup the letters are off while the menu is open, and help says D ch
   assert.equal((await saved(page, 'menu', s.id)).choice, 'D', 'with four options, D chooses')
   await page.keyboard.press('?')
   assert.match(await page.locator('#keys').innerText(), /On a choice of four or more, D chooses D: use the speak button/)
+  assert.deepEqual(errors, [])
+})
+
+test('with changes sent on this picture, the partial-ticks hint says Send, and never points to Looks good', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Hintsent', three)
+  r.push('Hintsent', ['Two'], null)
+  const { page, errors } = await r.open('hintsent', { undo: 40 })
+  await page.locator('#asked').waitFor()
+  await page.locator('#asked [data-ask="1"] [data-ask-say="fixed"]').click()
+  await draw(page, 0.5, 0.05, 0.6, 0.15)
+  await page.keyboard.press('Meta+Enter')
+  await waitFor(() => r.read('Hintsent').find(x => x.round === 2))
+  await page.goto(`http://127.0.0.1:${r.port}/?undo=40#hintsent/one`)
+  await page.reload()
+  await page.locator('#asked').waitFor()
+  await page.waitForFunction(() => document.querySelector('#asked [data-ask="1"]')?.classList.contains('said-fixed'))
+  assert.equal(await page.locator('#asked .ask-hint').innerText(), '2 still to check. Tick them or say which still stand, then press Send.')
+  await page.locator('#asked [data-ask="2"] [data-ask-say="fixed"]').click()
+  assert.equal(await page.locator('#asked .ask-hint').innerText(), '1 still to check. Tick it or say it still stands, then press Send.')
+  assert.doesNotMatch(await page.locator('[data-act=good]').getAttribute('class'), /good-lit/)
+  assert.deepEqual(errors, [])
+})
+
+test('readings and earlier marks on one picture are told apart: readings keep the mark\'s number, earlier marks are lettered', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Apartnames', three.slice(0, 2))
+  r.push('Apartnames', ['Two'], null)
+  const { page, errors } = await r.open('apartnames', { undo: 40 })
+  await page.locator('#asked').waitFor()
+  assert.deepEqual(await page.locator('#asked .ask-n').allInnerTexts(), ['A', 'B'])
+  await draw(page, 0.5, 0.6, 0.6, 0.7)
+  await page.keyboard.press('Meta+Enter')
+  await waitFor(() => r.read('Apartnames').find(x => x.round === 2))
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'inferred', '--app', 'Apartnames', '--screen', 'One', '--mark', '1', '--text', 'Make it bigger'], { env: r.env, stdio: 'ignore' })
+  await page.keyboard.press('ArrowLeft')
+  await page.locator('.reading').first().waitFor({ timeout: 8000 })
+  assert.equal(await page.locator('.reading .rn').first().innerText(), '1')
+  assert.deepEqual(await page.locator('#asked .ask-n').allInnerTexts(), ['A', 'B'], 'never a second 1')
+  const text = execFileSync('node', [join(ROOT, 'review.mjs'), 'read', '--app', 'Apartnames', '--latest'], { env: r.env, encoding: 'utf8' })
+  assert.match(text, /\n {4}A\. not ticked, so still to do, from round 1: box/)
+  assert.match(text, /\n {2}1\. box \(red\)[^\n]*\n {5}Read as: "Make it bigger"/)
+  assert.deepEqual(errors, [])
+})
+
+test('on a phone, before Mark, a tap on an option chooses it, and the lineup is whole on the screen', { skip }, async () => {
+  const r = await rig()
+  const s = await lineup(r, 'Tap')
+  const { page, errors } = await r.open('tap', { width: 390, height: 844, touch: true })
+  await settled(page)
+  const c = await page.locator('#canvas').boundingBox()
+  assert.ok(c.x >= 0 && c.x + c.width <= 390, 'every option on the screen')
+  const b = await overOption(page, s, 'B')
+  await page.touchscreen.tap(b.x, b.y)
+  await settled(page)
+  assert.equal((await saved(page, 'tap', s.id))?.choice, 'B')
+  assert.equal((await saved(page, 'tap', s.id)).marks.length, 0)
+  await page.locator('[data-choose="C"]').tap()
+  assert.equal((await saved(page, 'tap', s.id)).choice, 'C')
   assert.deepEqual(errors, [])
 })

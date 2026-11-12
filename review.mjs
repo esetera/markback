@@ -52,6 +52,9 @@
  *   review project --store .markback-store [--port 5760]   writes .markback here: this project's store and port, for a
  *                                               sandbox that drops REVIEW_HOME or cannot write outside the project
  *   review open [--app MyApp | --new] [--no-open] opens the review page or the New project example
+ *   review phone [on|off] [--code]              review from a phone, over your own Tailscale network: off until turned on,
+ *                                               and off again by itself after 30 minutes. Alone, it says whether it is on.
+ *                                               --code prints the code to scan even where this is not a terminal
  *
  *   review plugin add <folder or git address> [--yes]   review plugin list   review plugin remove <name>
  *   review <plugin> [<command>] ...             a command a plugin adds
@@ -84,9 +87,12 @@ import { addPlugins, addsWords, fetchSource, listPlugins, pluginsIn, removePlugi
 import { findApp, openPage, shootScreens, startApp } from './lib/project.mjs'
 import { runChecks, sayResult, sayVerdict, up } from './lib/check.mjs'
 import { addNote, closeRequest, decidedPhase, itemConfirmed, requestConfirmed, wentBack, listWork, noteConfirmed, openRequests, postIdea, pushedFor, setStage, take } from './lib/work.mjs'
+import { WORDS as PHONE_WORDS, cleanStale, leftWords, warmUp } from './lib/phone.mjs'
+import { qr } from './public/qr.js'
 import { listen, markDelivered, noteProject, projectOf, queuedSince, unread, waitingWork } from './lib/listen.mjs'
 import { clearDesktopWake, clearWake, lastRun, listWakes, projectFolder, readDesktopWake, readWake, setDesktopWake, setKimiWake, setWake, switchWake } from './lib/wake.mjs'
 import { installHooks, removeHooks, sayHook } from './lib/hook.mjs'
+import { askLetter } from './public/flow.js'
 
 const args = process.argv.slice(2)
 // The store reads --home itself (lib/home.mjs), so it can come before the command or after it. It is taken out here.
@@ -210,7 +216,8 @@ function describe(r) {
     lines.push(`  Earlier marks: ${asked.length - open} of ${asked.length} ticked fixed${open ? `, ${open} still to do` : ''}${r.noComment && open ? ' (sent with the rest, not looked at)' : ''}`)
     // Sent unseen, an unticked mark was not looked at: not the same as left unticked. `n` is its number here, not a pin's.
     const unticked = r.noComment ? 'not looked at, so still to do' : 'not ticked, so still to do'
-    for (const a of asked) lines.push(`    ${a.n}. ${a.said === 'fixed' ? (a.fixedIn ? `still fixed (fixed in round ${a.fixedIn})` : 'fixed') : a.cameBack ? (a.said === 'stands' ? 'came back' : 'came back? not answered, so look again') : a.said === 'stands' ? 'still stands' : unticked}, from round ${a.round}: ${a.type === 'notes' ? `notes "${printable(a.text)}"` : markLine({ ...a, n: undefined })}`)
+    // Lettered as the page letters them, so they are never taken for the numbered marks and readings below.
+    for (const a of asked) lines.push(`    ${askLetter(a.n)}. ${a.said === 'fixed' ? (a.fixedIn ? `still fixed (fixed in round ${a.fixedIn})` : 'fixed') : a.cameBack ? (a.said === 'stands' ? 'came back' : 'came back? not answered, so look again') : a.said === 'stands' ? 'still stands' : unticked}, from round ${a.round}: ${a.type === 'notes' ? `notes "${printable(a.text)}"` : markLine({ ...a, n: undefined })}`)
   }
   if (r.notes) lines.push(`  Notes: ${r.notes.replace(/\n/g, '\n         ')}`)
   for (const [i, s] of r.shapes.entries()) {
@@ -556,6 +563,11 @@ async function servesThisStore(pid) {
 }
 
 async function stop() {
+  // Review from a phone goes off with the page: asked of the page first, so what it could not do is said.
+  if (await up(PORT)) {
+    const was = await askPhone().catch(() => null)
+    if (was?.on) sayOff(await askPhone(false))
+  }
   if (!existsSync(PID_FILE)) return console.log('It is not running from here.')
   const pid = readPid()
   if (ourServer(pid) && (await servesThisStore(pid))) {
@@ -563,6 +575,59 @@ async function stop() {
     console.log('Stopped.')
   } else console.log('It was not running.')
   rmSync(PID_FILE, { force: true })
+}
+
+/**
+ * The code as text for a terminal: two rows of the code to a line. The light parts are drawn in the terminal's own letters, and
+ * so is the clear edge of four a reader needs, since a terminal's background is often dark.
+ */
+const qrText = text => {
+  const m = qr(text)
+  if (!m) return ''
+  const n = m.length
+  const on = (x, y) => x >= 0 && y >= 0 && x < n && y < n && m[y][x]
+  const lines = []
+  for (let y = -4; y < n + 4; y += 2) lines.push(Array.from({ length: n + 8 }, (_, i) => (on(i - 4, y) ? (on(i - 4, y + 1) ? ' ' : '▄') : on(i - 4, y + 1) ? '▀' : '█')).join(''))
+  return lines.join('\n')
+}
+/** Asks the running page about the phone's door, which only it can open or close. It throws when the page is not running. */
+async function askPhone(on) {
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/phone`, on === undefined ? { signal: AbortSignal.timeout(5000) } : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on }), signal: AbortSignal.timeout(60000) })
+  const got = await res.json()
+  if (!res.ok) fail(got.error ?? 'It could not be changed.')
+  return got
+}
+/** Off, or what stopped it going off: it is said plainly, with the command that does it by hand. */
+const sayOff = status => console.log(status.stuck ? status.problem : 'Review from your phone is off.')
+const sayPhone = status => {
+  if (status.stuck) return console.log(`Review from your phone is still open in Tailscale. ${status.problem}`)
+  if (!status.on) return console.log(`Review from your phone is off. Turn it on with: review phone on\nIt needs Tailscale on this computer and on the phone, signed in as the same person. Nothing is opened to the internet.`)
+  const at = new Date(status.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const code = process.stdout.isTTY || flags.code ? qrText(status.url) : ''
+  console.log(`Review from your phone is on.\nOpen ${status.url} on your phone.${code ? `\n\n${code}\n` : ''}\nOnly devices signed in to your Tailscale as ${status.login} can reach it. Nothing is open to the internet.\nIt turns itself off at ${at}, in ${leftWords(status.until)}. To turn it off now: review phone off`)
+}
+async function phone(what) {
+  // Said plainly, whatever else was asked: this never opens to the internet.
+  if (flags.funnel || flags.public || flags.internet || what === 'funnel') fail(PHONE_WORDS.never)
+  if (what && what !== 'on' && what !== 'off') fail('review phone | phone on | phone off')
+  if (!(await up(PORT))) {
+    if (what === 'on') fail('The review page is not running. Start it with: review start')
+    // No page, no door. What a server that is gone left in Tailscale is taken down now, so what is said is true.
+    const problems = await cleanStale()
+    if (problems.length) return console.log(`Review from your phone is still open in Tailscale. ${problems.join('\n')}`)
+    return console.log(what === 'off' ? 'Review from your phone is off.' : 'Review from your phone is off. The review page is not running.')
+  }
+  if (what === 'off') {
+    const was = await askPhone()
+    const now = await askPhone(false)
+    return was.on || now.stuck ? sayOff(now) : console.log('Review from your phone was not on.')
+  }
+  if (what !== 'on') return sayPhone(await askPhone())
+  const status = await askPhone(true)
+  sayPhone(status)
+  // Tailscale makes the address's certificate on its first visit. Made now, so the phone's first load is quick.
+  console.log('Getting it ready for the phone: the first time can take half a minute…')
+  console.log((await warmUp(status.url)) ? 'Ready.' : 'It did not answer yet. The phone\'s first load may take half a minute.')
 }
 
 if (command === 'push') {
@@ -764,6 +829,8 @@ if (command === 'push') {
   if (running === 'none') fail('The review page is not running. Start it with: review start')
   if (running === 'other') fail(`The review page on port ${PORT} shows another store. Start this store's page with: review start`)
   console.log((!flags['no-open'] && await openPage(page)) ? `I've opened it in your browser. (${page})` : `Open ${page}`)
+} else if (command === 'phone') {
+  await phone(rest[0] && !rest[0].startsWith('--') ? rest[0] : '')
 } else if (command === 'install-skills' && flags['remove-hooks']) {
   // Only Markback's own entries go. The person's other hooks and settings stay as they are.
   const folder = flags['remove-hooks'] === true ? process.cwd() : String(flags['remove-hooks']).replace(/^~(?=\/|$)/, homedir())
@@ -943,6 +1010,6 @@ if (command === 'push') {
     fail(error.message)
   }
 } else {
-  console.log(`review start | stop | check | see | pdf | demo | sketch | push | choose | list | wait | read | inferred | clear | film | ideas | queue | take | show | note | stage | work | wake | project | open | install-skills | plugin | export   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
+  console.log(`review start | stop | check | see | pdf | demo | sketch | push | choose | list | wait | read | inferred | clear | film | ideas | queue | take | show | note | stage | work | wake | project | open | phone | install-skills | plugin | export   (files under ${HOME}${existsSync(INBOX) ? `, ${readdirSync(INBOX).length} apps with feedback` : ''})`)
   if (command) process.exit(1)
 }

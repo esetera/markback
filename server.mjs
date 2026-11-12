@@ -16,6 +16,7 @@ import { linkIn, LINK_OUT } from './lib/home.mjs'
 import { makeSecret } from './lib/trust.mjs'
 import { hasReader, stopReading, wordsForPicture } from './lib/read-words.mjs'
 import { addNote, answered, askForIdeas, decide, listRequests, listWork, reorder, requestBuild } from './lib/work.mjs'
+import { PhoneProblem, WORDS as PHONE_WORDS, cleanStale, phoneDoor, phoneMay, warmUp } from './lib/phone.mjs'
 import { appsOf, madeBy, serverBeat, serverGone, standing } from './lib/listen.mjs'
 // Only what reads the wake command and turns it on and off. What sets the command is not imported here, on purpose:
 // nothing a web page can reach may decide what this computer runs.
@@ -155,8 +156,9 @@ const hostOf = text => {
     return ''
   }
 }
-function isLocal(req) {
-  if (!LOCAL_HOSTS.has(hostOf(`http://${req.headers.host}`))) return false
+const localHost = req => LOCAL_HOSTS.has(hostOf(`http://${req.headers.host}`))
+/** Asked by this site's own page, not by another site open in the same browser. */
+function ownPage(req) {
   // A picture or script tag on another site sends no origin, but the browser says where it came from.
   // Following a link here is fine: that opens the page, and the other site sees nothing.
   if (['cross-site', 'same-site'].includes(req.headers['sec-fetch-site']) && req.headers['sec-fetch-mode'] !== 'navigate') return false
@@ -167,19 +169,95 @@ function isLocal(req) {
     return false
   }
 }
+/** A request a proxy handed on: Tailscale's own headers, or the ones any proxy adds. The page's own listener never takes one. */
+const proxied = req => Object.keys(req.headers).some(name => name.startsWith('tailscale-') || ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto'].includes(name))
 
-const server = createServer(async (req, res) => {
+/**
+ * Review from a phone: the door, a listener of its own on this computer, open only while it is on. Tailscale serves the door,
+ * and only the door, so every request on it is a phone's, whatever name it gives: the door lets in only the person's own login,
+ * and the handler lets those use only what phoneMay names.
+ */
+const phone = phoneDoor({ serverPort: PORT, handle: (req, res) => handle(req, res, true) })
+
+/**
+ * What a phone is sent, built from short lists of fields rather than by taking some away: nothing of this computer goes, no
+ * path, no folder, no command an agent is woken with, no line of its log. A field added later is not sent until it is put here.
+ */
+const pick = (from, names) => Object.fromEntries(names.filter(name => from?.[name] !== undefined).map(name => [name, from[name]]))
+const SCREEN = ['app', 'appSlug', 'id', 'screen', 'mode', 'note', 'check', 'from', 'kind', 'item', 'order', 'round', 'after', 'before', 'words', 'status', 'pushedAt', 'sentAt']
+const forPhone = {
+  apps: apps => apps.map(a => ({
+    slug: a.slug,
+    name: a.name,
+    // Feedback is only counted by the page: its names, never where they are.
+    screens: a.screens.map(s => ({ ...pick(s, SCREEN), feedback: (s.feedback ?? []).map(() => 'sent'), ...(s.inferred ? { inferred: pick(s.inferred, ['posted', 'from', 'changed']) } : {}) })),
+    ...(a.setAside ? { setAside: pick(a.setAside, ['at', 'isNew']) } : {}),
+  })),
+  listening: l => ({
+    agents: (l.agents ?? []).map(a => pick(a, ['by', 'what', 'app', 'told'])),
+    heard: l.heard,
+    unheard: pick(l.unheard, ['queue', 'ideas', 'marks']),
+    // Whether an agent is being woken, and by whom: never how.
+    wake: l.wake ? pick(l.wake, ['status', 'on', 'by']) : null,
+    wakes: [],
+    desktop: Object.fromEntries(Object.entries(l.desktop ?? {}).map(([slug, d]) => [slug, pick(d, ['on', 'pending'])])),
+  }),
+  phone: status => pick(status, ['on', 'stuck', 'minutes']),
+  records: records => records.map(r => ({
+    ...pick(r, ['round', 'verdict', 'notes', 'marks', 'noComment', 'olderPicture', 'sentAt', 'annotatedUrl', 'afterUrl', 'beforeUrl', 'answer']),
+    ...(r.readings ? { readings: r.readings.map(forPhone.reading) } : {}),
+  })),
+  // The person's reply as words and a time: never its stamp.
+  reading: x => ({ ...pick(x, ['n', 'text', 'from']), reply: x.reply ? pick(x.reply, ['yes', 'text', 'at']) : null, ...(x.box ? { box: pick(x.box, ['x', 'y', 'w', 'h']) } : {}) }),
+  // The word list's name in the store, or why there is none: never where the store is.
+  words: got => pick(got, ['words', 'why', 'reading']),
+  film: f => f && {
+    ...pick(f, ['screen', 'mode', 'finished', 'missing', 'seconds']),
+    rounds: f.rounds.map(r => ({ round: r.round, url: r.url, answer: r.answer && pick(r.answer, ['verdict', 'notes', 'marks', 'noComment']) })),
+    steps: f.steps.map(step => pick(step, ['at', 'url', 'marked', 'seconds'])),
+    save: pick(f.save, ['why']),
+  },
+  record: record => pick(record, ['verdict', 'round', 'sentAt', 'olderPicture']),
+  made: made => made && pick(made, ['what', 'title', 'heard']),
+}
+
+/** Every request: from this computer on the page's own listener, or from a phone through the door. */
+async function handle(req, res, fromPhone = false) {
   const url = new URL(req.url, 'http://localhost')
   // Only this computer's own pages: another site open in the browser must not write here, or read by renaming itself.
-  if (!isLocal(req)) return json(res, 403, { error: 'Only this computer can use this.' })
+  if (fromPhone ? !ownPage(req) : proxied(req) || !localHost(req) || !ownPage(req)) return json(res, 403, { error: 'Only this computer can use this.' })
+  if (fromPhone && !phoneMay(req.method, url.pathname)) return json(res, 403, { error: PHONE_WORDS.atComputer })
   try {
     // Which store this page shows: a command on the same port can then tell whether its pushes are here. `reader`: whether this
     // computer can read words off a picture, so the page shows the words tool only where it can work.
     if (req.method === 'GET' && url.pathname === '/api/queue') {
       const apps = listApps()
       const status = listening(apps)
+      // `remote`: asked through the phone's door, so the page offers only what a phone may do. No build targets or idea
+      // requests: those are for the computer's own page.
+      if (fromPhone) return json(res, 200, { apps: forPhone.apps(apps), listening: forPhone.listening(status), phone: forPhone.phone(phone.status()), reader: hasReader(), remote: true })
       const ideaRequests = listRequests().filter(r => r.status === 'open' || r.posted).slice(-8)
-      return json(res, 200, { apps, listening: status, buildTargets: workTargets(apps, status), ideaRequests, reader: hasReader(), store: storeIdNow(), pid: process.pid })
+      return json(res, 200, { apps, listening: status, buildTargets: workTargets(apps, status), ideaRequests, reader: hasReader(), store: storeIdNow(), pid: process.pid, phone: phone.status() })
+    }
+    if (req.method === 'GET' && url.pathname === '/api/phone') return json(res, 200, fromPhone ? forPhone.phone(phone.status()) : phone.status())
+    if (req.method === 'POST' && url.pathname === '/api/phone') {
+      const input = JSON.parse(await body(req))
+      // Turned on only from this computer itself: a phone can turn it off, never on or on for longer.
+      if (input.on === true && fromPhone) return json(res, 403, { error: 'Turn it on at the computer.' })
+      if (input.on !== true && fromPhone) {
+        // Closing the door drops every connection through it, this one too: the answer goes first.
+        res.on('finish', () => void phone.off())
+        return json(res, 200, { on: false, minutes: phone.status().minutes })
+      }
+      try {
+        if (input.on !== true) await phone.off()
+        // The certificate is made while the person reaches for the phone, not while the phone waits.
+        else void warmUp((await phone.on()).url)
+        return json(res, 200, phone.status())
+      } catch (error) {
+        if (error instanceof PhoneProblem) return json(res, 400, { error: error.message })
+        throw error
+      }
     }
     // A store a project's .markback named may hold no link: one added while the page runs would send this write anywhere.
     if (req.method === 'POST' && WHERE.project && linkIn(HOME)) return json(res, 409, { error: `Not saved: ${LINK_OUT}.` })
@@ -187,7 +265,8 @@ const server = createServer(async (req, res) => {
       // A picture pushed with no word list: its words are read here, once, and the list is kept beside it. The answer comes at
       // once, reading or not, so a read never holds one of the few connections a browser opens to a server.
       const input = JSON.parse(await body(req))
-      return json(res, 200, wordsForPicture(String(input.after ?? '')))
+      const got = wordsForPicture(String(input.after ?? ''))
+      return json(res, 200, fromPhone ? forPhone.words(got) : got)
     }
     if (req.method === 'GET' && url.pathname.startsWith('/images/')) {
       const path = inside(IMAGES, decodeURIComponent(url.pathname.slice('/images/'.length)))
@@ -195,10 +274,12 @@ const server = createServer(async (req, res) => {
       return path ? sendFile(res, path, 'max-age=31536000, immutable') : json(res, 404, { error: 'No such picture' })
     }
     if (req.method === 'GET' && url.pathname === '/api/history') {
-      return json(res, 200, { records: history(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '') })
+      const records = history(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '')
+      return json(res, 200, { records: fromPhone ? forPhone.records(records) : records })
     }
     if (req.method === 'GET' && url.pathname === '/api/film') {
-      return json(res, 200, { film: film(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '') })
+      const made = film(url.searchParams.get('app') ?? '', url.searchParams.get('id') ?? '')
+      return json(res, 200, { film: fromPhone ? forPhone.film(made) : made })
     }
     if (req.method === 'GET' && url.pathname === '/api/film/file') {
       // The film as a video, made when asked for and not kept. It needs ffmpeg: without it, a plain line says so.
@@ -291,7 +372,7 @@ const server = createServer(async (req, res) => {
       const input = JSON.parse(await body(req))
       try {
         const reading = replyToReading({ appSlug: String(input.appSlug), id: String(input.id), answer: String(input.answer), n: Number(input.n), yes: input.yes === true, text: typeof input.text === 'string' ? input.text : '' })
-        return json(res, 200, { ok: true, reading })
+        return json(res, 200, { ok: true, reading: fromPhone ? forPhone.reading(reading) : reading })
       } catch (error) {
         return json(res, 400, { error: error.message })
       }
@@ -320,6 +401,7 @@ const server = createServer(async (req, res) => {
       const stageBefore = record.item ? listWork().find(i => i.id === record.item)?.stage : null
       const made = madeBy(record, stageBefore, answered(record))
       console.log(`received ${record.app} / ${record.screen}${record.mode ? ` (${record.mode})` : ''}: ${record.verdict}, ${record.shapes.length} marks`)
+      if (fromPhone) return json(res, 200, { ok: true, record: forPhone.record(record), ...(made ? { made: forPhone.made(made) } : {}), listening: forPhone.listening(listening()) })
       return json(res, 200, { ok: true, record, ...(made ? { made } : {}), listening: listening() })
     }
     if (req.method === 'GET') {
@@ -330,7 +412,8 @@ const server = createServer(async (req, res) => {
   } catch (error) {
     json(res, 500, { error: error instanceof Error ? error.message : String(error) })
   }
-})
+}
+const server = createServer(handle)
 
 if (WAKES_IN_STORE) console.error(`Not running the wake commands in ${join(HOME, 'work', 'wake')}: they came with the project's store. Set one on this computer with review wake set, kept in ${WAKES}.`)
 
@@ -351,6 +434,10 @@ server.on('error', error => {
   console.error(`Port ${PORT} is taken. Choose another: review start --port ${PORT + 1}`)
   process.exit(1)
 })
+// Review from a phone turns itself off when its time is up.
+setInterval(() => void phone.tick().catch(() => undefined), 1000).unref()
+// Whoever starts this server: what one before it left in Tailscale is taken down first, before anything listens.
+for (const problem of await cleanStale(PORT)) console.error(problem)
 // This computer only: nothing here is reachable from another machine.
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Markback on http://localhost:${PORT}, with screens and marks in ${HOME}`)
@@ -375,6 +462,10 @@ server.listen(PORT, '127.0.0.1', () => {
   setInterval(beat, wakeEvery)
 })
 // Stopped, it must not look as if it runs: the hooks ask before they hold an agent back.
-process.on('exit', serverGone)
+process.on('exit', () => {
+  // Review from a phone goes off with the server: its door closes, and its entry in Tailscale is taken down.
+  phone.offSync()
+  serverGone()
+})
 // Stopped (review stop, or Ctrl-C): a reader still at work stops too, rather than go on after the server.
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => void stopReading().finally(() => process.exit(0)))

@@ -224,9 +224,9 @@ test('what was said of each earlier mark: fixed ones are held, the rest stay ope
   assert.equal(record.asked[0].state, undefined, 'the agent reads what was said, not how the page keeps it')
   const text = execFileSync('node', [CLI, 'read', '--app', 'Ticked', '--latest'], { env, encoding: 'utf8' })
   assert.match(text, /Earlier marks: 1 of 3 ticked fixed, 2 still to do/)
-  assert.match(text, /1\. fixed, from round 1: box \(red\) at x 1, y 1, 2x2/)
-  assert.match(text, /2\. still stands, from round 1: box/)
-  assert.match(text, /3\. not ticked, so still to do, from round 1: box/)
+  assert.match(text, /A\. fixed, from round 1: box \(red\) at x 1, y 1, 2x2/)
+  assert.match(text, /B\. still stands, from round 1: box/)
+  assert.match(text, /C\. not ticked, so still to do, from round 1: box/)
   const [json] = JSON.parse(execFileSync('node', [CLI, 'read', '--app', 'Ticked', '--latest', '--json'], { env, encoding: 'utf8' }))
   assert.deepEqual(json.asked.map(a => a.said), ['fixed', 'stands', null])
   const third = push({ app: 'Ticked', screen: 'One', after: picture })
@@ -238,7 +238,7 @@ test('what was said of each earlier mark: fixed ones are held, the rest stay ope
   later()
   const back = receive({ appSlug: 'ticked', id: 'one', png: null, shapes: [], notes: '', verdict: 'changes', imageSize: null, said: { 1: 'stands' } })
   assert.deepEqual(back.asked[0], { n: 1, round: 1, type: 'box', colour: 'red', box: { x: 1, y: 1, w: 2, h: 2 }, said: 'stands', cameBack: true, fixedIn: 2 })
-  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Ticked', '--latest'], { env, encoding: 'utf8' }), /1\. came back, from round 1/)
+  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Ticked', '--latest'], { env, encoding: 'utf8' }), /A\. came back, from round 1/)
   const fourth = push({ app: 'Ticked', screen: 'One', after: picture })
   assert.deepEqual(fourth.asked.filter(a => a.n === 1).map(a => [a.state, a.cameBack]), [['open', true]], 'it is open again, and says it came back')
 })
@@ -333,7 +333,7 @@ test('Looks good for the rest ticks no earlier mark: sent unseen, they stay open
   assert.deepEqual(rest.asked.map(a => a.said), [null])
   const text = execFileSync('node', [CLI, 'read', '--app', 'Unseen', '--latest'], { env, encoding: 'utf8' })
   assert.match(text, /Earlier marks: 0 of 1 ticked fixed, 1 still to do \(sent with the rest, not looked at\)/)
-  assert.match(text, /1\. not looked at, so still to do/)
+  assert.match(text, /A\. not looked at, so still to do/)
   assert.deepEqual(push({ app: 'Unseen', screen: 'One', after: picture }).asked.map(a => a.state), ['open'])
 })
 
@@ -373,7 +373,7 @@ test('a tick never changes a verdict: the store records what it is sent', () => 
   // A held one ticked still fixed is told, with a pressed Looks good.
   const still = receive({ appSlug: 'only-ticks', id: 'one', png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null, said: { 1: 'fixed' } })
   assert.deepEqual(still.asked.map(a => [a.n, a.said, a.fixedIn]), [[1, 'fixed', 2], [3, 'fixed', undefined]])
-  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Only ticks', '--latest'], { env, encoding: 'utf8' }), /1\. still fixed \(fixed in round 2\)/)
+  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Only ticks', '--latest'], { env, encoding: 'utf8' }), /A\. still fixed \(fixed in round 2\)/)
 })
 
 test('Looks good for the rest applies no tick that rode along, and a came back? left unanswered is never told as fixed', () => {
@@ -389,7 +389,7 @@ test('Looks good for the rest applies no tick that rode along, and a came back? 
   // Both held; the page flagged 1 as came back? and the person pressed Looks good without saying.
   const good = receive({ appSlug: 'rest-ticks', id: 'one', png: null, shapes: [], notes: '', verdict: 'approved', imageSize: null, said: {}, unanswered: [1] })
   assert.deepEqual(good.asked, [{ n: 1, round: 1, type: 'box', colour: 'red', box: { x: 1, y: 1, w: 2, h: 2 }, said: null, cameBack: true, fixedIn: 3 }])
-  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Rest ticks', '--latest'], { env, encoding: 'utf8' }), /1\. came back\? not answered, so look again/)
+  assert.match(execFileSync('node', [CLI, 'read', '--app', 'Rest ticks', '--latest'], { env, encoding: 'utf8' }), /A\. came back\? not answered, so look again/)
   assert.deepEqual(push({ app: 'Rest ticks', screen: 'One', after: picture }).asked.map(a => [a.n, a.state]), [[1, 'open'], [2, 'fixed']], 'asked again')
 })
 

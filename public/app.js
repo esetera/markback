@@ -1,7 +1,8 @@
 import { burnCanvas, changesBetween, COLOURS, fitZoom, isReal, paintChanged, paintMarks, redone, shapeOf, strokeFor, textFor, undone, withMark, withMarks, ZOOM_STEP, ZOOM_WHEEL_STEP, zoomedBy } from './annotate.js'
 import { createListener, findRoute, installPack } from './mic.js'
+import { qrSvg } from './qr.js'
 import { agentsWords, heardWords, ideaProgress, SETUP_LINE, signOf, signShows, unheardCount, unheardWords } from './listen.js'
-import { afterSend, answerWords, askedCount, askedOf, askWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeOn, placeWords, standingAnswer, submitJobs } from './flow.js'
+import { afterSend, answerWords, askedCount, askedOf, askLetter, askWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeOn, placeWords, standingAnswer, submitJobs } from './flow.js'
 
 /**
  * The wizard is the review: the picture fills the window, with one thin bar above it, what it is about under that, and a slim
@@ -48,6 +49,7 @@ const ICONS = {
   listen: svg('<circle cx="8" cy="8" r="1.1" fill="currentColor"/><path d="M5.4 5.4a3.7 3.7 0 0 0 0 5.2M10.6 5.4a3.7 3.7 0 0 1 0 5.2M3.4 3.4a6.5 6.5 0 0 0 0 9.2M12.6 3.4a6.5 6.5 0 0 1 0 9.2"/>'),
   deaf: svg('<circle cx="8" cy="8" r="1.1" fill="currentColor"/><path d="M5.4 5.4a3.7 3.7 0 0 0 0 5.2M10.6 5.4a3.7 3.7 0 0 1 0 5.2M3.4 3.4a6.5 6.5 0 0 0 0 9.2M12.6 3.4a6.5 6.5 0 0 1 0 9.2" opacity="0.45"/><path d="M2.5 13.5l11-11"/>'),
   more: svg('<circle cx="3.5" cy="8" r="0.6"/><circle cx="8" cy="8" r="0.6"/><circle cx="12.5" cy="8" r="0.6"/>'),
+  phone: svg('<rect x="4.5" y="1.5" width="7" height="13" rx="1.3"/><path d="M7.2 12.2h1.6"/>'),
 }
 const TOOLS = [
   { id: 'box', tip: 'Box round what is wrong', key: 'B' },
@@ -149,6 +151,10 @@ const state = {
   moreOf: '',
   lineCut: false,
   changesOn: true,
+  // On a phone: the marking tools are out, and a finger on the picture draws. Otherwise a finger moves the picture.
+  marking: false,
+  // Opened on a phone through Tailscale: what runs things on the computer, or only it can do, is not offered.
+  remote: false,
   // Screens whose list of earlier marks was closed, and the one lit on the picture.
   askedShut: new Set(),
   askLit: null,
@@ -158,6 +164,19 @@ const state = {
   buildTargets: [],
   ideaRequests: [],
 }
+/**
+ * A phone, or a window as narrow as one: a name and a count above, the picture, and three large buttons under it. The marking
+ * tools fold away until Mark is pressed.
+ */
+// A phone held sideways is wider than that, but short, and touched: it is a phone too.
+const narrow = matchMedia('(max-width: 640px), (max-height: 500px) and (pointer: coarse)')
+const onPhone = () => narrow.matches
+/** A phone has no N key to press, so the notes box does not offer one. */
+const phoneLook = () => {
+  document.body.classList.toggle('phone', onPhone())
+  $('notes').placeholder = onPhone() ? 'Notes' : 'Notes (N)'
+}
+phoneLook()
 if (prefs.get('strip') === 'hidden') document.body.classList.add('no-strip')
 if (prefs.get('details') === 'hidden') document.body.classList.add('no-details')
 const panels = () => document.body.classList.contains('panels')
@@ -284,7 +303,8 @@ const liveScreen = s => state.apps.find(a => a.slug === s.appSlug)?.screens.find
 
 async function loadQueue() {
   const res = await fetch('/api/queue', { cache: 'no-store' })
-  const { apps, reader, listening, buildTargets, ideaRequests } = await res.json()
+  const { apps, reader, listening, buildTargets, ideaRequests, phone: phoneNow, remote } = await res.json()
+  state.remote = remote === true
   state.buildTargets = buildTargets ?? []
   state.ideaRequests = ideaRequests ?? []
   syncBuildForms()
@@ -295,6 +315,7 @@ async function loadQueue() {
   state.loaded = true
   document.body.classList.remove('loading')
   resendKept()
+  setPhone(phoneNow)
   if (text === lastQueue) {
     renderDrawer()
     return sayLooks()
@@ -848,7 +869,8 @@ async function openFilm() {
   const why = data.save?.why ?? ''
   $('filmLength').textContent = `${data.rounds.length} round${data.rounds.length === 1 ? '' : 's'} · ${seconds} second${seconds === 1 ? '' : 's'}${data.missing > 0 ? ` · ${data.missing} older ${data.missing === 1 ? 'picture is' : 'pictures are'} gone` : ''}${why ? ' · Plays here only: a film of a sketch cannot be saved as a file' : ''}`
   $('filmLength').title = why || $('filmLength').textContent
-  $('filmSave').hidden = !!why
+  // Saving runs ffmpeg on the computer: a phone plays the film, and saves nothing.
+  $('filmSave').hidden = !!why || state.remote
   // A long story is saved as its newest rounds. The button says so before it is pressed, and the note after.
   $('filmSave').dataset.tip = `Save the film as a video file${data.save?.leftOut ? `. ${data.save.leftOut}` : ''}`
   // What was said in a round is words, and not in its picture: it is on the round's name, for a pointer that rests there.
@@ -1108,7 +1130,7 @@ function paintPins(ctx, pins, wide, listening = null) {
     const room = Math.min(picture.w - line * 2 - pad * 2, Math.max(size * 6, Math.min(most, onRight ? right : x - gap - size * 0.5) - pad * 2))
     const lines = linesOf(ctx, m.text, room)
     ctx.font = `500 ${size * 0.72}px -apple-system, system-ui, sans-serif`
-    const hints = live ? linesOf(ctx, 'Listening · click, Esc or a pause stops', room) : []
+    const hints = live ? linesOf(ctx, onPhone() ? 'Listening · a tap or a pause stops' : 'Listening · click, Esc or a pause stops', room) : []
     const hintWide = Math.max(0, ...hints.map(l => ctx.measureText(l).width))
     ctx.font = `600 ${size}px -apple-system, system-ui, sans-serif`
     const wideBox = Math.min(picture.w - line * 2, Math.max(...lines.map(l => ctx.measureText(l).width), hintWide, size * 2) + pad * 2)
@@ -1177,8 +1199,14 @@ function renderMic() {
   const button = $('micBtn')
   const route = mic.route
   button.hidden = !route
-  if (!route) return
   const on = !!mic.listener?.on
+  // The large button on a phone. Its words change in place, so a finger held on it stays on the same button.
+  $('talkBtn').classList.toggle('listening', on)
+  $('talkBtn').textContent = on ? 'Listening…' : 'Hold to talk'
+  // No way to listen here: the phone keeps two large buttons, and the notes box stays out to type in.
+  $('talkBtn').hidden = !route || route.route === 'none'
+  document.body.classList.toggle('no-talk', $('talkBtn').hidden)
+  if (!route) return
   button.classList.toggle('listening', on)
   button.classList.toggle('with-words', route.route === 'cloud' || on)
   button.setAttribute('aria-pressed', String(on))
@@ -1246,7 +1274,8 @@ async function startMic() {
   return true
 }
 void findRoute().then(route => {
-  mic.route = route
+  // A browser lets a page use the microphone only at a secure address: localhost, or the HTTPS name Tailscale serves.
+  mic.route = window.isSecureContext ? route : null
   renderMic()
 })
 
@@ -1310,7 +1339,8 @@ function renderFoot(a, s) {
   const v = s ? verdictOf(s) : null
   const good = s && draftOf(s).good && v === 'approved'
   // Every earlier mark ticked fixed, and nothing else on it: Looks good is the answer, so it is lit.
-  const lit = s && !v && allChecked(s)
+  // Not where changes were sent on this picture: there Looks good would drop them.
+  const lit = s && !v && s.status !== 'sent' && allChecked(s)
   const off = !s ? ' disabled' : ''
   // A choice made goes by Send too: choosing is the answer.
   const sends = v === 'changes' || (!!s?.choice && v === 'approved')
@@ -1471,8 +1501,8 @@ function renderMenu() {
     <button data-menu="sheet" role="menuitem"${a ? '' : ' disabled'}><span>All screens of this review</span><span class="kbd">O</span></button>
     <button data-menu="film" role="menuitem"${screen() && !onDonePage() ? '' : ' disabled'}><span>The film of this screen</span><span class="kbd">R</span></button>
     <button data-menu="list" role="menuitem"><span>Apps and screens</span><span class="kbd">L</span></button>
-    <button data-menu="new" role="menuitem"><span>New project</span></button>
-    <button data-menu="work" role="menuitem" aria-description="Beta features"><span>Ideas and queue <span class="beta-badge" aria-hidden="true">Beta</span></span><span class="kbd">W</span></button>
+    ${state.remote ? '' : `<button data-menu="new" role="menuitem"><span>New project</span></button>
+    <button data-menu="work" role="menuitem" aria-description="Beta features"><span>Ideas and queue <span class="beta-badge" aria-hidden="true">Beta</span></span><span class="kbd">W</span></button>`}
     <button data-menu="rest" role="menuitem"${left ? '' : ' disabled'}><span>Looks good for the rest${left ? ` (${left})` : ''}</span><span class="kbd">⇧⌘↩</span></button>
     <button data-menu="aside-one" role="menuitem"${a ? '' : ' disabled'}><span>Set ${group ? `this ${placeOf(a).noun.trim() || 'one'}` : 'this'} aside</span></button>
     ${group ? '<button data-menu="aside-group" role="menuitem"><span>Set this group aside</span></button>' : ''}
@@ -1482,9 +1512,10 @@ function renderMenu() {
     ${panels() ? `<button data-menu="strip" role="menuitem"><span>${document.body.classList.contains('no-strip') ? 'Show' : 'Hide'} the screens</span></button><button data-menu="details" role="menuitem"><span>${document.body.classList.contains('no-details') ? 'Show' : 'Hide'} the details</span></button>` : ''}
     <button data-menu="full" role="menuitem"><span>Full screen</span><span class="kbd">F</span></button>
     <button data-menu="notices" role="menuitem"><span>${noticesLabel()}</span></button>
-    ${desktopWake() ? `<button data-menu="wake" role="menuitem"><span>Wake Codex Desktop for this review: ${desktopWake().on ? 'on' : 'off'}</span></button>` : projectWake() ? `<button data-menu="wake" role="menuitem"><span>Wake my agent when work waits: ${projectWake().on ? 'on' : 'off'}</span></button><div class="menu-note">It runs <code>${esc(projectWake().run)}</code> in ${esc(projectWake().in)}</div>` : ''}
+    ${state.remote ? '' : desktopWake() ? `<button data-menu="wake" role="menuitem"><span>Wake Codex Desktop for this review: ${desktopWake().on ? 'on' : 'off'}</span></button>` : projectWake() ? `<button data-menu="wake" role="menuitem"><span>Wake my agent when work waits: ${projectWake().on ? 'on' : 'off'}</span></button><div class="menu-note">It runs <code>${esc(projectWake().run)}</code> in ${esc(projectWake().in)}</div>` : ''}
+    ${state.remote ? '' : `<button data-menu="phone" role="menuitem"><span>Review from your phone${phone.status.on ? ': on' : ''}</span></button>
     <hr>
-    <button data-menu="keys" role="menuitem"><span>Keyboard shortcuts</span><span class="kbd">?</span></button>`)
+    <button data-menu="keys" role="menuitem"><span>Keyboard shortcuts</span><span class="kbd">?</span></button>`}`)
 }
 const closeMenu = () => {
   $('menu').hidden = true
@@ -1628,7 +1659,7 @@ function render() {
   // Nothing to draw on until a picture is up: the overlay hides the tools and the views with it.
   document.body.classList.toggle('covered', covered)
   // One count, and only where a picture is: the overlay says it in full.
-  $('overall').textContent = s && a ? countWords(openOf(a).length, waitingInAll(), { short: true }) : ''
+  $('overall').textContent = s && a ? (onPhone() ? `${state.index + 1} of ${a.screens.length}` : countWords(openOf(a).length, waitingInAll(), { short: true })) : ''
   // The tab says how many wait, for someone working in another one.
   document.title = titleNow()
   $('overall').title = s && a ? `Screen ${state.index + 1} of ${a.screens.length}. ${countWords(openOf(a).length, waitingInAll())}.` : ''
@@ -1649,7 +1680,10 @@ function render() {
   const here = placeOf(a)
   // A group called Proposal or Built only says again what the label says: the name alone is enough.
   const kindGroup = /^(proposal|built|qa)$/i.test(here.group ?? '')
-  setHtml($('crumbs'), here.group
+  // On a phone there is room for the name only. The count beside it says which screen.
+  setHtml($('crumbs'), onPhone()
+    ? `<span class="crumb-app" title="${esc(a.name)}">${esc(here.group ? here.title : barName(a.name))}</span>`
+    : here.group
     ? `${kindGroup ? '' : `<span class="crumb-app" title="${esc(a.name)}">${esc(placeWords(here))}</span><span class="sep-slash">/</span>`}<span class="crumb-app" title="${esc(a.name)}">${esc(here.title)}</span>${s ? `<span class="sep-slash">/</span>${screenCrumb(s)}` : ''}`
     : `<span class="crumb-app" title="${esc(a.name)}">${esc(barName(a.name))}</span>${s ? `<span class="sep-slash">/</span>${screenCrumb(s)}` : ''}`)
   $('back').disabled = !s || state.index === 0
@@ -1733,7 +1767,7 @@ function renderLineup(s) {
   setHtml($('lineupRow'), s.choice.options.map(o => {
     const is = o.key === chosen
     const name = `${is ? 'Chosen' : 'Choose'} ${o.key}${o.label ? `: ${o.label}` : ''}`
-    return `<button class="choose${is ? ' on' : ''}" data-choose="${esc(o.key)}" aria-pressed="${is}" aria-label="${esc(name)}" title="${esc(name)}">${is ? ICONS.check : ''}<span class="choose-word">${is ? 'Chosen' : 'Choose'} </span><span class="choose-key">${esc(o.key)}</span><kbd aria-hidden="true">${esc(o.key)}</kbd>${o.label ? `<span class="choose-label">${esc(o.label)}</span>` : ''}</button>`
+    return `<button class="choose${is ? ' on' : ''}" data-choose="${esc(o.key)}" aria-pressed="${is}" aria-label="${esc(name)}" title="${esc(name)}">${is ? ICONS.check : ''}<span class="choose-key"><span class="choose-word">${is ? 'Chosen' : 'Choose'} </span>${esc(o.key)}</span><kbd aria-hidden="true">${esc(o.key)}</kbd>${o.label ? `<span class="choose-label">${esc(o.label)}</span>` : ''}</button>`
   }).join(''))
   placeLineup()
 }
@@ -2245,7 +2279,7 @@ function renderAsked(s) {
     const moved = !!a.box && !!state.size && !placeOn(a, state.size)
     const when = `${back ? `You said fixed in round ${a.fixedIn}` : a.cameBack ? `Came back, from round ${a.round}` : `Round ${a.round}`}${moved ? ' · place may have moved' : ''}`
     return `<li class="ask${word ? ` said-${word}` : ''}${back ? ' back' : ''}" data-ask="${a.n}">`
-      + `<button class="ask-n" data-ask-go="${a.n}" ${tip(moved ? 'The picture changed shape: its place may have moved' : a.box ? 'Show where it is' : 'Notes have no place on the picture')}>${a.n}</button>`
+      + `<button class="ask-n" data-ask-go="${a.n}" ${tip(moved ? 'The picture changed shape: its place may have moved' : a.box ? 'Show where it is' : 'Notes have no place on the picture')}>${askLetter(a.n)}</button>`
       + `<div class="ask-body"><span class="ask-words">${back ? '<b>Came back?</b> ' : ''}${esc(askWords(a))}</span><span class="ask-when">${esc(when)}</span>`
       + `<span class="ask-acts"><button class="btn ask-say${word === 'fixed' ? ' on' : ''}" data-ask-say="fixed" aria-pressed="${word === 'fixed'}">${ICONS.check}${back ? 'Still fixed' : 'Fixed'}</button>`
       + `<button class="btn ask-say${word === 'stands' ? ' on' : ''}" data-ask-say="stands" aria-pressed="${word === 'stands'}">${back ? 'Came back' : 'Still stands'}</button></span></div></li>`
@@ -2254,7 +2288,9 @@ function renderAsked(s) {
   const open = unansweredBack(s).length
   const left = asked.open.filter(a => !said[a.n]).length
   const some = asked.rows.some(a => said[a.n])
-  const hint = open ? `${open} came back? Say Still fixed or Came back.` : !verdictOf(s) && allChecked(s) ? 'All checked. Press Looks good.' : !verdictOf(s) && some && left ? `${left} still to check. ${left === 1 ? 'Tick it, say it still stands' : 'Tick them, say which still stand'}, or press Looks good to say all are fixed.` : ''
+  // With changes already sent on this picture, Looks good would drop them: there the way on is Send.
+  const sent = s.status === 'sent'
+  const hint = open ? `${open} came back? Say Still fixed or Came back.` : !verdictOf(s) && allChecked(s) && !sent ? 'All checked. Press Looks good.' : some && left && sent ? `${left} still to check. ${left === 1 ? 'Tick it or say it still stands' : 'Tick them or say which still stand'}, then press Send.` : !verdictOf(s) && some && left ? `${left} still to check. ${left === 1 ? 'Tick it, say it still stands' : 'Tick them, say which still stand'}, or press Looks good to say all are fixed.` : ''
   const head = narrow ? `<span class="asked-count${count.done ? ' done' : ''}">${esc(count.words)}</span>` : `<button class="tool" data-asked-shut ${tip('Hide this list', 'K')}>${ICONS.close}</button>`
   setHtml(box, `<h2><span>You asked for these last time</span>${head}</h2>${hint ? `<p class="ask-hint">${esc(hint)}</p>` : ''}<ol>${asked.rows.map(row).join('')}</ol>${held ? `<p class="ask-held">${held} more you ticked fixed before. Each is flagged here if the picture changes there again.</p>` : ''}`)
   keepApart()
@@ -2351,7 +2387,9 @@ function paintAsked(ctx, s) {
       ctx.strokeRect(p.x, p.y, p.w, p.h)
     }
     ctx.setLineDash([])
-    const tag = word === 'fixed' ? `✓ ${a.n}` : word === 'stands' ? `${a.n} ${back ? 'came back' : 'stands'}` : back ? `${a.n} Came back?` : String(a.n)
+    // Lettered, not numbered: the agent's readings on the same picture are numbered by the marks they read.
+    const name = askLetter(a.n)
+    const tag = word === 'fixed' ? `✓ ${name}` : word === 'stands' ? `${name} ${back ? 'came back' : 'stands'}` : back ? `${name} Came back?` : name
     const tw = ctx.measureText(tag).width + size * 0.8
     const th = Math.round(size * 1.5)
     // Above the outline, or inside its top when there is no room above; never off the picture.
@@ -2945,7 +2983,7 @@ function placeChecks() {
   const room = { width: box.clientWidth - 14 - askedRoom(), height: $('center').clientHeight - foot - 14 }
   const shown = state.size && state.view === 'after' && state.fitted ? fittedZoom(room) * state.size.w : room.width
   const spare = room.width - shown - 16
-  state.sideChecks = items.length > 0 && ((asking && !below) || spare >= 220)
+  state.sideChecks = !onPhone() && items.length > 0 && ((asking && !below) || spare >= 220)
   $('checks').hidden = !state.sideChecks
   placeAsked(below)
   $('sideCol').style.maxHeight = below ? '' : `${room.height}px`
@@ -3046,10 +3084,17 @@ const at = event => {
 let pan = null
 /** Where the press began, to tell a click from a drag. */
 let pressed = null
+/** The finger or mouse that is drawing now. A second finger put down meanwhile is not a second mark. */
+let drawingWith = null
+/** On a phone a finger on the picture moves it, until Mark brings the tools out. */
+// A mouse or a pen draws as it always does, in a narrow window too: only a finger needs Mark first.
+const mayDraw = event => !onPhone() || state.marking || event.pointerType !== 'touch'
 
 $('canvas').addEventListener('pointerdown', event => {
   // Text opens on click, once the press is over, so nothing takes the focus away from the field afterwards.
-  if (!state.size || event.button !== 0 || state.tool === 'text') return
+  if (!state.size || event.button !== 0 || state.tool === 'text' || !mayDraw(event)) return
+  if (!event.isPrimary) return
+  drawingWith = event.pointerId
   event.preventDefault()
   // That also stops the focus moving: a note box would go on taking the keys that follow, and B or G would land in it.
   if (document.activeElement?.matches?.('textarea, input, select')) document.activeElement.blur()
@@ -3059,7 +3104,10 @@ $('canvas').addEventListener('pointerdown', event => {
     // The mark is drawn from the events that arrive.
   }
   const p = at(event)
-  if (state.tool === 'speak') return void startPin(p)
+  if (state.tool === 'speak') {
+    drawingWith = null
+    return void startPin(p)
+  }
   pressed = { x: event.clientX, y: event.clientY, at: p }
   const w = strokeFor(markWidth())
   const words = toolNow() === 'words' ? wordsNow() : null
@@ -3074,6 +3122,7 @@ $('canvas').addEventListener('pointerdown', event => {
   else draft = { tool: state.tool === 'words' ? 'box' : state.tool, a: p, b: p, color: state.colour, w }
 })
 $('canvas').addEventListener('pointermove', event => {
+  if (event.pointerId !== drawingWith) return
   if (pan) {
     $('scroller').scrollLeft = pan.left - (event.clientX - pan.x)
     $('scroller').scrollTop = pan.top - (event.clientY - pan.y)
@@ -3093,10 +3142,12 @@ const finish = event => {
   if (click && screen()?.choice) {
     pan = null
     draft = null
+    drawingWith = null
     paint()
     return choose(optionNear(screen(), click[0])?.key ?? null)
   }
   pan = null
+  drawingWith = null
   if (!draft) return
   const done = draft
   draft = null
@@ -3106,10 +3157,19 @@ const finish = event => {
   else paint()
 }
 $('canvas').addEventListener('click', event => {
-  if (state.size && state.tool === 'text' && !textEntry) openTextEntry(event)
+  const finger = { pointerType: touchLast ? 'touch' : 'mouse' }
+  // On a phone, before Mark, a finger only moves the picture: a tap on a lineup's option still chooses it.
+  if (state.size && screen()?.choice && !mayDraw(finger)) return choose(optionNear(screen(), at(event)[0])?.key ?? null)
+  if (state.size && state.tool === 'text' && !textEntry && mayDraw(finger)) openTextEntry(event)
 })
-$('canvas').addEventListener('pointerup', finish)
-$('canvas').addEventListener('pointercancel', finish)
+$('canvas').addEventListener('pointerup', event => event.pointerId === drawingWith && finish(event))
+// The system took the touch away, for a gesture of its own: half a mark is not a mark.
+$('canvas').addEventListener('pointercancel', event => {
+  if (event.pointerId !== drawingWith) return
+  draft = null
+  finish()
+  paint()
+})
 
 let textEntry = null
 function openTextEntry(event) {
@@ -3659,7 +3719,13 @@ $('toast').onclick = event => {
 
 let tipTimer = null
 let tipFor = null
+let touchLast = false
+document.addEventListener('pointerdown', event => {
+  touchLast = event.pointerType === 'touch'
+}, true)
 document.addEventListener('mouseover', event => {
+  // A finger does not hover: a tip would come up after the tap and stay.
+  if (touchLast) return
   const el = event.target.closest?.('[data-tip]')
   if (el === tipFor) return
   tipFor = el
@@ -3727,6 +3793,8 @@ function growNotes() {
   const box = $('notes')
   box.style.height = '30px'
   if (box.value) box.style.height = `${Math.min(180, box.scrollHeight + 2)}px`
+  // On a phone the box is out of the way until there are words in it, or the tools are out.
+  $('foot').classList.toggle('has-notes', !!box.value)
 }
 
 function go(index) {
@@ -3814,7 +3882,7 @@ function cycleView() {
   if (state.fitted) fit()
 }
 
-for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', newClose: 'close', sheetClose: 'close', viewerClose: 'close', filmClose: 'close' })) $(id).innerHTML = ICONS[icon]
+for (const [id, icon] of Object.entries({ listOpen: 'list', back: 'prev', next: 'next', menuOpen: 'more', undo: 'undo', redo: 'redo', clear: 'clear', changesOn: 'changes', helpClose: 'close', newClose: 'close', sheetClose: 'close', viewerClose: 'close', filmClose: 'close', phoneClose: 'close' })) $(id).innerHTML = ICONS[icon]
 
 $('listOpen').onclick = openDrawer
 $('back').onclick = () => go(state.index - 1)
@@ -3834,6 +3902,7 @@ $('menu').onclick = event => {
   else if (what === 'details') togglePanel('details', 'no-details')
   else if (what === 'full') toggleFull()
   else if (what === 'notices') void toggleNotices()
+  else if (what === 'phone') openPhone()
   else if (what === 'wake') void toggleWake()
   else if (what === 'sheet') openSheet()
   else if (what === 'film') void openFilm()
@@ -4056,7 +4125,7 @@ for (const holder of [$('stateCard'), $('newModal')]) {
 /* New project, from the menu: the first screen's two ways in, over the page, with the projects there left as they are. */
 const newProjectOpen = () => !$('newModal').hidden
 /** A window over the page: while one is up, nothing behind it may change. */
-const otherWindowUp = () => newProjectOpen() || sheetOpen() || filmOpen() || ['helpModal', 'confirmModal', 'submitModal', 'viewer'].some(id => !$(id).hidden)
+const otherWindowUp = () => newProjectOpen() || sheetOpen() || filmOpen() || phoneOpen() || ['helpModal', 'confirmModal', 'submitModal', 'viewer'].some(id => !$(id).hidden)
 const windowUp = () => correctionOpen() || otherWindowUp()
 /** A box is open: what would open over it waits until its words are sent or cancelled, and says so. */
 function wordsFirst() {
@@ -4149,6 +4218,117 @@ $('undo').onclick = undo
 $('redo').onclick = redo
 $('changesOn').onclick = toggleChanges
 $('micBtn').onclick = () => pressMic()
+
+/* ---------- on a phone: Mark brings the tools out, and Hold to talk fills the notes ---------- */
+
+function setMarking(on) {
+  if (!on) closeTextEntry(true)
+  state.marking = on
+  document.body.classList.toggle('marking-on', on)
+  $('markBtn').classList.toggle('on', on)
+  $('markBtn').setAttribute('aria-pressed', String(on))
+  if (state.fitted) fit()
+}
+$('markBtn').onclick = () => setMarking(!state.marking)
+narrow.addEventListener('change', () => {
+  phoneLook()
+  render()
+  if (state.fitted) fit()
+})
+
+/** Listening lasts as long as the finger is down. What is said goes to the notes. */
+let holding = false
+function letGo() {
+  if (!holding) return
+  holding = false
+  removeEventListener('pointerup', letGo)
+  removeEventListener('pointercancel', letGo)
+  if (mic.listener?.on) mic.listener.stop()
+}
+$('talkBtn').addEventListener('pointerdown', async event => {
+  if (event.button !== 0 || holding) return
+  event.preventDefault()
+  holding = true
+  // Heard on the window, not the button: the finger may slide off it before it lifts.
+  addEventListener('pointerup', letGo)
+  addEventListener('pointercancel', letGo)
+  endPin()
+  if (!mic.route) return
+  // A question may come first, about where the sound goes. If the finger has lifted by the answer, nothing listens.
+  const stillHeld = () => holding
+  if ((await startMic()) && !stillHeld() && mic.listener?.on) mic.listener.stop()
+})
+// A long press must not bring up the system's own menu over the button.
+$('talkBtn').addEventListener('contextmenu', event => event.preventDefault())
+// From a keyboard there is nothing to hold: a press turns it on, and the next turns it off.
+$('talkBtn').addEventListener('click', event => {
+  if (event.detail === 0) void pressMic()
+})
+
+/* ---------- review from a phone: off until it is turned on here, and it says what it opens ---------- */
+
+const phone = { status: { on: false, minutes: 30 }, problem: '', busy: false }
+function setPhone(status) {
+  if (!status || JSON.stringify(status) === JSON.stringify(phone.status)) return
+  phone.status = status
+  renderPhone()
+}
+const phoneOpen = () => !$('phoneModal').hidden
+function renderPhone() {
+  const st = phone.status
+  $('phoneOn').hidden = !st.on
+  $('phoneOn').innerHTML = `${ICONS.phone}<span>Open to your phone</span>`
+  $('phoneOn').dataset.tip = st.stuck ? 'Still open in Tailscale: press to see why' : st.on ? `Open to your phone until ${when(st.until)}. Press to see the code, or to turn it off` : ''
+  if (!phoneOpen()) return
+  const promise = `<p><b>Only your own devices can reach this</b>, signed in to Tailscale as you. Nothing is open to the internet.</p>`
+  if (st.stuck) {
+    // Shown as open until Tailscale has really stopped serving it, with the one command that does it by hand.
+    setHtml($('phoneBody'), `<div class="phone-words"><p><b>Still open in Tailscale.</b> The page no longer answers there, but Tailscale still serves the address.</p><p class="phone-problem" role="alert">${esc(st.problem)}</p></div>`)
+    setHtml($('phoneActions'), `<button class="btn" data-phone="close">Close</button><button class="btn primary" data-phone="off"${phone.busy ? ' disabled' : ''}>Try again</button>`)
+  } else if (st.on) {
+    const code = qrSvg(st.url)
+    // An address too long for the code is shown large, to type.
+    setHtml($('phoneBody'), `${code ? `<div class="phone-code">${code}</div>` : ''}<div class="phone-words"><p><b>On until ${esc(when(st.until))}.</b> Scan the code with your phone's camera. The first time, it can take half a minute to open.</p>${promise}<p class="phone-address${code ? '' : ' large'}"><a href="${esc(st.url)}">${esc(st.url)}</a></p></div>`)
+    setHtml($('phoneActions'), `<button class="btn" data-phone="close">Close</button><button class="btn primary" data-phone="off"${phone.busy ? ' disabled' : ''}>Turn it off</button>`)
+  } else {
+    setHtml($('phoneBody'), `<div class="phone-words"><p>Mark the screens from your phone, over Tailscale, your own private network. It needs Tailscale on this computer and on your phone, signed in as the same person.</p>${promise}<p>It turns itself off after ${st.minutes ?? 30} minutes, and when Markback stops.</p>${phone.problem ? `<p class="phone-problem" role="alert">${esc(phone.problem)}</p>` : ''}</div>`)
+    setHtml($('phoneActions'), `<button class="btn" data-phone="close">Not now</button><button class="btn primary" data-phone="on"${phone.busy ? ' disabled' : ''}>${phone.busy ? 'Turning it on…' : 'Turn it on'}</button>`)
+  }
+}
+function openPhone() {
+  closeMenu()
+  phone.problem = ''
+  $('phoneModal').hidden = false
+  renderPhone()
+  $('phoneActions').querySelector('button:last-child')?.focus()
+}
+const closePhone = () => {
+  $('phoneModal').hidden = true
+}
+async function switchPhone(on) {
+  phone.busy = true
+  phone.problem = ''
+  renderPhone()
+  try {
+    const res = await fetch('/api/phone', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on }) })
+    const got = await res.json()
+    if (!res.ok) throw new Error(got.error ?? 'It could not be changed.')
+    phone.status = got
+  } catch (error) {
+    phone.problem = error.message
+  }
+  phone.busy = false
+  renderPhone()
+  $('phoneActions').querySelector('button:last-child')?.focus()
+}
+$('phoneActions').onclick = event => {
+  const what = event.target.closest('[data-phone]')?.dataset.phone
+  if (what === 'close') closePhone()
+  else if (what) void switchPhone(what === 'on')
+}
+$('phoneClose').onclick = closePhone
+$('phoneOn').onclick = openPhone
+$('phoneModal').onclick = event => event.target === $('phoneModal') && closePhone()
 $('clear').onclick = () => {
   const s = screen()
   const d = draftOf(s)
@@ -4203,6 +4383,10 @@ document.addEventListener('keydown', event => {
   }
   if (!$('viewer').hidden) {
     if (key === 'Escape') $('viewer').hidden = true
+    return
+  }
+  if (phoneOpen()) {
+    if (key === 'Escape') closePhone()
     return
   }
   if (newProjectOpen()) {
