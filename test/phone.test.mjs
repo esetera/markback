@@ -1,3 +1,4 @@
+import './own-home.mjs'
 /**
  * Review from a phone, without Tailscale: a stand-in program takes its place (REVIEW_TAILSCALE), so nothing here runs the real
  * one or changes a real network. Each test has a store, a server and a stand-in of its own. A phone's request is sent to the
@@ -295,11 +296,20 @@ test('a phone is sent nothing of this computer: no path, no folder, no wake comm
   }
   // The same, asked at the computer, does hold them: so the test has something to find.
   const atComputer = (await r.local('/api/queue')).text
+  // What stamps the person's decisions, and what names the store: never sent to a phone.
+  const { readFileSync, readdirSync: list } = await import('node:fs')
+  const { homedir } = await import('node:os')
+  const stampSecret = readFileSync(join(homedir(), '.review-wizard', 'secret'), 'utf8').trim()
+  const storeId = JSON.parse(atComputer).store
+  const inbox = join(r.home, 'inbox', 'leak')
+  const answerStamps = list(inbox).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(inbox, f), 'utf8')).confirmed)
+  const stamps = [stampSecret, storeId, ...answerStamps].filter(Boolean)
+  assert.ok(stampSecret.length === 64 && storeId && answerStamps.length, 'the test has a secret, a store id and a stamp to look for')
   assert.ok(atComputer.includes(project) && atComputer.includes('secret-agent-command'), 'the computer\'s own page is told where and how')
   for (const [name, got] of Object.entries(replies)) {
     assert.equal(got.status, 200, name)
-    for (const secret of [project, r.home, work, 'secret-agent-command', tmpdir(), secretOf(r.tail).slice(1)]) assert.equal(got.text.includes(secret), false, `${name} holds ${secret}`)
-    assert.equal(/"(source|run|in|lastLine|annotatedImage|afterImage|beforeImage|pushedFrom)"/.test(got.text), false, `${name}: ${got.text.slice(0, 200)}`)
+    for (const secret of [project, r.home, work, 'secret-agent-command', tmpdir(), secretOf(r.tail).slice(1), ...stamps]) assert.equal(got.text.includes(secret), false, `${name} holds ${secret}`)
+    assert.equal(/"(source|run|in|lastLine|annotatedImage|afterImage|beforeImage|pushedFrom|confirmed|store|pid|answer\w*Stamp)"/.test(got.text), false, `${name}: ${got.text.slice(0, 200)}`)
   }
   // What the phone's page needs is there.
   const sent = JSON.parse(replies.queueAfter.text)
@@ -332,6 +342,40 @@ test('on a phone, what the agent read a mark to mean is shown and answered, and 
   const atComputer = JSON.parse((await r.local('/api/history?app=read&id=home')).text).records[0]
   assert.equal(atComputer.readings[0].reply.text, 'No, the subtitle')
   assert.match(r.review('read', '--app', 'Read', '--latest').out, /No, the subtitle/)
+})
+
+test('an answer and a reply sent from a phone are stamped as the person\'s, exactly as from the computer', async () => {
+  const { readFileSync, readdirSync, realpathSync } = await import('node:fs')
+  const { checkStamp } = await import('../lib/trust.mjs')
+  const r = await rig()
+  const picture = join(r.home, 'shot.png')
+  writePicture(picture, 800, 500)
+  r.review('push', '--app', 'Stamp', '--screen', 'Home', '--after', picture)
+  r.review('push', '--app', 'Stamp', '--screen', 'Other', '--after', picture)
+  r.review('phone', 'on')
+  const origin = `https://${NAME}`
+  const screens = JSON.parse((await r.local('/api/queue')).text).apps[0].screens
+  const answer = s => ({ appSlug: 'stamp', id: s.id, after: s.after, round: s.round, verdict: 'changes', notes: 'Move it', shapes: [{ type: 'box', colour: 'red', box: { x: 1, y: 1, w: 9, h: 9 } }], imageSize: { w: 800, h: 500 }, png: null })
+  assert.equal((await r.ask('/api/send', { method: 'POST', headers: { origin }, body: answer(screens.find(s => s.id === 'home')) })).status, 200)
+  assert.equal((await r.local('/api/send', { method: 'POST', body: answer(screens.find(s => s.id === 'other')) })).status, 200)
+  // Each answer on disk carries the page's stamp, made by the server whoever sent it, and it checks.
+  const store = realpathSync(r.home)
+  const inbox = join(r.home, 'inbox', 'stamp')
+  const records = readdirSync(inbox).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(inbox, f), 'utf8')))
+  const recordOf = rec => Object.fromEntries(Object.entries(rec).filter(([key]) => !['confirmed', 'file', 'byPage', 'answer', 'inferred'].includes(key)))
+  assert.deepEqual(records.map(rec => rec.screenId).sort(), ['home', 'other'])
+  for (const rec of records) assert.equal(checkStamp('answer', store, recordOf(rec), rec.confirmed), true, `${rec.screenId}: stamped as the person's`)
+  // A reply to a reading, from the phone: stamped too.
+  assert.equal(r.review('inferred', '--app', 'Stamp', '--screen', 'Home', '--mark', '1', '--text', 'Make it bigger').code, 0)
+  const said = JSON.parse((await r.ask('/api/history?app=stamp&id=home')).text).records[0]
+  const reply = await r.ask('/api/reading', { method: 'POST', headers: { origin }, body: { appSlug: 'stamp', id: 'home', answer: said.answer, n: 1, yes: true } })
+  assert.equal(reply.status, 200)
+  assert.equal(/confirmed/.test(reply.text), false, 'the stamp itself is not sent to the phone')
+  const kept = JSON.parse(readFileSync(join(r.home, 'inferred', 'stamp', 'home.json'), 'utf8')).answers[said.answer][0]
+  assert.match(kept.reply.confirmed, /^[0-9a-f]{64}$/, 'kept with its stamp, as from the computer')
+  const after = await r.ask('/api/history?app=stamp&id=home')
+  assert.equal(JSON.parse(after.text).records[0].readings[0].reply.yes, true)
+  for (const secret of [kept.reply.confirmed, ...records.map(rec => rec.confirmed)]) assert.equal(after.text.includes(secret) || (await r.ask('/api/queue')).text.includes(secret), false, 'no stamp in what a phone reads')
 })
 
 test('on a phone, the words tool may ask for a stored picture\'s words, and nothing else: no path, no unbounded work', async () => {

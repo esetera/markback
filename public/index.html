@@ -30,6 +30,8 @@
       <button class="tool" id="changesOn" data-tip="Where it changed" data-key="C" aria-label="Where it changed" hidden></button>
     </div>
     <button class="zoom-value" id="zoomValue" data-tip="Fit the screen in the window" data-key="0" hidden></button>
+    <button class="asked-chip" id="askedChip" data-tip="What you asked for last time" data-key="K" aria-controls="asked" hidden></button>
+    <span class="asked-held" id="askedHeld" data-tip="Ticked fixed before: each is flagged if the picture changes there again" hidden></span>
     <button class="overall" id="overall" data-tip="All screens of this review" data-key="O"></button>
     <span class="spacer"></span>
     <div class="heard-wrap"><button class="tool heard-sign" id="heardSign" hidden></button><div class="heard" id="heard" role="status" aria-live="polite" hidden></div></div>
@@ -54,7 +56,7 @@
         <div class="pair" id="pair">
           <figure class="shot before-shot" id="beforeShot"><figcaption>Before</figcaption><div class="frame"><img id="beforeImg" alt="Before"></div></figure>
           <figure class="shot after-shot" id="afterShot"><figcaption id="afterCaption">After</figcaption><div class="frame" id="stage"><img id="afterImg" alt="After"><canvas id="canvas"></canvas><div class="pin-glow" id="pinGlow" hidden></div><div class="reading-spot" id="readingSpot" hidden></div><div class="readings" id="readings"></div></div></figure>
-          <aside class="checks" id="checks" hidden></aside>
+          <div class="side-col" id="sideCol" hidden><aside class="checks" id="checks" hidden></aside><aside class="asked" id="asked" aria-label="What you asked for last time" hidden></aside></div>
         </div>
         <div class="state-card" id="stateCard" hidden></div>
       </div>

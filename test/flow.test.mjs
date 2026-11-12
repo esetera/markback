@@ -1,6 +1,7 @@
+import './own-home.mjs'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { afterSend, answerWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, nextWords, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from '../public/flow.js'
+import { afterSend, answerWords, askedCount, askedOf, askWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, nextWords, orderedApps, placeIn, placeOn, placeWords, standingAnswer, submitJobs } from '../public/flow.js'
 
 const screen = (id, status = 'waiting') => ({ id, status })
 const none = () => false
@@ -33,7 +34,7 @@ test('an answer in a few words', () => {
 test('what was left unsent in an older round is found, newest first, and only what says something', () => {
   const real = m => m.real
   const kept = { 1: { marks: [{ real: true }], notes: '' }, 2: { marks: [{ real: false }], notes: 'Words' }, 3: { marks: [], notes: '  ', good: true } }
-  assert.deepEqual(leftBehind(5, r => kept[r] ?? null, real), [{ round: 2, marks: 0, notes: 'Words' }, { round: 1, marks: 1, notes: '' }])
+  assert.deepEqual(leftBehind(5, r => kept[r] ?? null, real), [{ round: 2, marks: 0, notes: 'Words', ticks: 0 }, { round: 1, marks: 1, notes: '', ticks: 0 }])
   assert.deepEqual(leftBehind(1, () => { throw new Error('not asked') }, real), [])
 })
 
@@ -114,4 +115,49 @@ test('the next app is the next with something waiting, then from the top, and ne
   assert.equal(nextApp(apps, 'a', waiting).slug, 'c')
   assert.equal(nextApp(apps, 'c', waiting).slug, 'a')
   assert.equal(nextApp([{ slug: 'a', n: 1 }], 'a', waiting), null)
+})
+
+test('an earlier mark in a few words: what was written or said, the words under it, or what it was', () => {
+  assert.equal(askWords({ type: 'text', text: 'Make this bigger' }), '“Make this bigger”')
+  assert.equal(askWords({ type: 'box', words: 'Book a plot' }), 'Box round “Book a plot”')
+  assert.equal(askWords({ type: 'arrow', words: 'Saturday' }), 'Arrow at “Saturday”')
+  assert.equal(askWords({ type: 'pin', text: 'one two three four five six seven eight nine ten' }), 'Said: “one two three four five six seven eight…”')
+  assert.equal(askWords({ type: 'notes', text: 'Bigger' }), 'Notes: “Bigger”')
+  assert.equal(askWords({ type: 'box' }), 'A box here')
+  assert.equal(askWords({ type: 'freehand' }), 'A line drawn here')
+})
+
+test('an earlier mark is fitted to a picture of another size, and notes have no place', () => {
+  assert.deepEqual(placeOn({ box: { x: 10, y: 20, w: 30, h: 40 }, size: { w: 100, h: 100 } }, { w: 200, h: 200 }), { x: 20, y: 40, w: 60, h: 80 }, 'grown as a whole: scaled')
+  // A page that grew from 900 to 3600 high: what was at 700 is still at 700, the same size.
+  assert.deepEqual(placeOn({ box: { x: 100, y: 700, w: 200, h: 150 }, size: { w: 1440, h: 900 } }, { w: 1440, h: 3600 }), { x: 100, y: 700, w: 200, h: 150 })
+  assert.deepEqual(placeOn({ box: { x: 0, y: 800, w: 10, h: 200 }, size: { w: 1440, h: 1200 } }, { w: 1440, h: 900 }), { x: 0, y: 800, w: 10, h: 100 }, 'cut at the new foot')
+  assert.equal(placeOn({ box: { x: 0, y: 1000, w: 10, h: 10 }, size: { w: 1440, h: 1200 } }, { w: 1440, h: 900 }), null, 'below the new foot: no place')
+  assert.equal(placeOn({ box: { x: 10, y: 20, w: 30, h: 40 }, size: { w: 100, h: 100 } }, { w: 200, h: 50 }), null, 'another shape: the place cannot be trusted')
+  assert.deepEqual(placeOn({ box: { x: 1, y: 2, w: 3, h: 4 } }, { w: 9, h: 9 }), { x: 1, y: 2, w: 3, h: 4 }, 'with no size, as drawn')
+  assert.equal(placeOn({ type: 'notes', text: 'x' }, { w: 9, h: 9 }), null)
+})
+
+test('earlier marks: open ones to tick, and a fixed one where the picture changed again may have come back', () => {
+  const size = { w: 100, h: 100 }
+  const screen = { asked: [
+    { n: 1, state: 'open', box: { x: 0, y: 0, w: 10, h: 10 } },
+    { n: 2, state: 'fixed', box: { x: 50, y: 50, w: 10, h: 10 } },
+    { n: 3, state: 'fixed', box: { x: 80, y: 80, w: 10, h: 10 } },
+  ] }
+  const quiet = askedOf(screen, null, size)
+  assert.deepEqual([quiet.open, quiet.back, quiet.held].map(list => list.map(a => a.n)), [[1], [], [2, 3]])
+  const changed = askedOf(screen, [{ x: 55, y: 55, w: 20, h: 2 }], size)
+  assert.deepEqual([changed.rows, changed.held].map(list => list.map(a => a.n)), [[1, 2], [3]])
+  assert.deepEqual(askedOf({}, null, size).rows, [])
+  assert.deepEqual(askedCount(changed, {}), { words: '1 to check, 1 came back?', done: false })
+  assert.deepEqual(askedCount(changed, { 1: 'fixed' }), { words: '1 came back?', done: false })
+  assert.deepEqual(askedCount(changed, { 1: 'fixed', 2: 'fixed' }), { words: '2 checked', done: true })
+  assert.deepEqual(askedCount(quiet, {}), { words: '1 to check', done: false })
+  assert.deepEqual(askedCount(askedOf({}), {}), { words: '', done: true })
+})
+
+test('earlier marks ticked and never sent are counted with what was left behind', () => {
+  const kept = { 1: { marks: [], notes: '', said: { 1: 'fixed', 2: 'stands', 3: null } } }
+  assert.deepEqual(leftBehind(2, r => kept[r] ?? null, () => true), [{ round: 1, marks: 0, notes: '', ticks: 2 }])
 })

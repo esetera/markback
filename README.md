@@ -41,7 +41,7 @@ Open your project in Codex Desktop and paste this into the project chat:
 
 Codex installs Markback locally and connects New project to a scheduled check in the same chat. Keep Codex Desktop open. On the next check, usually within a minute, the chat picks up a build request or a mark. Codex applies the change and pushes a new screenshot for review.
 
-In a fresh Codex project, the agent can use `npm install --prefix .markback github:esetera/markback` to install locally and read `.markback/node_modules/markback/AGENTS.md` in the current session. The agent keeps `REVIEW_HOME` in a writable project folder and uses that same folder for each review command. `review project` can start the review even when Codex protects `.agents/skills` from edits.
+In a fresh Codex project, the agent can use `npm install --prefix .markback github:esetera/markback` to install locally and read `.markback/node_modules/markback/AGENTS.md` in the current session. The agent makes a new store folder in the project with `review project --store .markback/store`, once, so every review command uses it with no setting needed. That install makes `.markback` a folder, so Markback's file goes in `.markback/config.json` (see [Agents in a sandbox](#agents-in-a-sandbox)). `review project` can start the review even when Codex protects `.agents/skills` from edits.
 
 ### Manual installation
 
@@ -135,7 +135,28 @@ Run it again after you update Markback. To put it in one project only, add `--to
 codex exec -s workspace-write "Here is a screen I want reviewed: shot.png. Put it in front of me for review."
 ```
 
-For local projects inside Codex's macOS sandbox, Markback takes pictures with Chrome Headless Shell, about 100 MB from Google, fetched once and kept on this computer. Nothing is fetched until you say yes: the first capture stops and tells the agent to ask you, and after your yes the agent runs it again with `--fetch-browser`. The download needs network access. This capture path is for local pages and assets. An agent with a built-in browser can also capture a page there and push the screenshot to Markback.
+For local projects inside Codex's macOS sandbox, Markback takes pictures with Chrome Headless Shell, about 100 MB from Google, fetched once and kept in your own Markback folder. Where the sandbox cannot write there, it is fetched for each command and thrown away after: one kept in the project could be one the project brought. Nothing is fetched until you say yes: the first capture stops and tells the agent to ask you, and after your yes the agent runs it again with `--fetch-browser`. The download needs network access. This capture path is for local pages and assets. An agent with a built-in browser can also capture a page there and push the screenshot to Markback.
+
+### Agents in a sandbox
+
+Some agents run commands in a sandbox that drops environment variables, cannot write outside the project, and has no Chrome. The agent runs this once, in the project's folder:
+
+```bash
+review project --store .markback-store
+```
+
+It writes `.markback`, a small JSON file such as `{ "home": ".markback-store", "port": 5760 }`. Every `review` command in that folder, or below it, then uses that store with no setting needed. It picks a free port near 5760, so the project's page does not share the usual one. Add `--port 5760` to choose the port yourself.
+
+- The agent pushes its own screenshots with `review push`. `review see` and `review project` need Chrome, and say so at once.
+- Pushing only writes files, so it works with no page running, and says so. You run `review start` in the project's folder, outside the sandbox, and the page shows everything the agent pushed. `review wait` and `review read` in the sandbox read your answers from the same files.
+- The store is the first of: `--home <folder>` on the command, `REVIEW_HOME`, `.markback`, then `~/.review-wizard`.
+- Point `--home`, `REVIEW_HOME` and `.markback` only at a folder you made. Any store but `~/.review-wizard` is a project store: it may have come with a project, so what it holds is the project's words until the review page on this computer confirms it. The page stamps your answers, approvals and notes with a secret kept in `~/.review-wizard`. `review work`, `review read`, `review show` and the hooks say which store they use, and say "not confirmed" for anything without that stamp. They never give it to the agent as your decision.
+- If another store's page holds the port, a push says so. `review start` then moves this store to a free port, keeps it, and says the address.
+- Markback says which store it uses whenever `.markback` chose it. Once, when the file is written and on the first push, it suggests adding the store to `.gitignore` if no `.gitignore` leaves it out. It never changes `.gitignore` itself.
+- Markback looks for `.markback` in this folder and the ones above it: up to the top of the git repository, or up to your home folder, not including it. It skips a file in a folder anyone can write to, or one that belongs to someone else, and says so.
+- A `.markback` can only name a folder inside the folder that holds it. One that is not valid is ignored, in one line. The store it names may hold no links: if it does, Markback writes nothing and says so.
+- Nothing in a project store is ever run. Plugins load only from `~/.review-wizard`. Wake commands for a project store are kept in `~/.review-wizard`, and any found in the store are not run. A browser found in the store is never run. A project store's `server.pid` is only signalled when the page says it serves this store.
+- When Markback is installed in a `.markback` folder with npm, the file is `.markback/config.json`.
 
 **Kimi Code** reads the skills straight from the cloned folder with `--skills-dir`, in place of your others for that run: `kimi --skills-dir ~/markback/skills`, with `-S` or `-c` to go back into a session. It also reads `~/.agents/skills` and `extra_skill_dirs`, which keep your others. See [Manual installation](#manual-installation).
 
@@ -162,7 +183,7 @@ Adding one says what it adds and asks first (in a terminal; run any other way, i
 
 ## What stays on your computer
 
-The Markback server listens only on this computer; review from your phone (below) reaches it through Tailscale. Screens, marks and notes are plain files in `~/.review-wizard`, a folder that keeps Markback's first name (set `REVIEW_HOME` to move it). Your coding agent handles any review material it reads under its own data settings. If you enable online speech recognition, your browser sends the audio to its speech service.
+The Markback server listens only on this computer; review from your phone (below) reaches it through Tailscale. Screens, marks and notes are plain files in `~/.review-wizard`, a folder that keeps Markback's first name (set `REVIEW_HOME`, or see [Agents in a sandbox](#agents-in-a-sandbox), to move it). Your coding agent handles any review material it reads under its own data settings. If you enable online speech recognition, your browser sends the audio to its speech service.
 
 ## Review from your phone
 
@@ -199,6 +220,7 @@ Light and dark are separate screens. The page is the review: the picture fills t
 - **One thin bar:** the app and screen, "3 of 13", back and next, the marking tools, Before and After when there is a before, and a small menu.
 - **What to look at:** one line, in ten words or fewer as pushed. It is the first sentence of the note, or the `--check` lines, three at most; **More** (I) opens the rest over the picture, so the picture does not move. When a fitted picture leaves room at its side, the lines stand there, level with its top, and never make it smaller.
 - **Where it changed:** with a before of the same size, corner ticks mark each place that differs. They show on screen only and never in what is sent. C hides them. They do not show when most of the picture changed, and a very faint change can go unmarked.
+- **What you asked for last time:** on a screen's next round, each mark and note you sent comes back as a check. Each is numbered at its place on the new picture and listed beside it. Tick it **Fixed**, or say it **Still stands**: the bar counts what is left, and **K** hides the list. A tick never answers a screen by itself: you answer with a button, and the ticks go with it. Still stands, or Came back, asks for a change as a mark does, so it lights Send. Fixed ticks alone light nothing; when every one is ticked, Looks good is lit and the list says so, and Looks good sends them. After you have sent changes on a picture, a new tick lights Send and goes as an update to them; the ticks said before stand until you change them. Looks good after changes asks first, and says how many marks it drops. A **Came back?** is never decided for you: the list says to answer it, and Looks good asks first, or sends it as not answered. However the screen goes, by Send, by moving on, or with the rest, one flagged and not answered is told as not answered and asked again. A held mark is compared with the picture it was last seen fixed on, so one on a screen sent unseen is still found in a later round. When some are ticked and some not, the list says what you can do. Looks good for the rest names the screens whose ticks it does not send. Ticks alone are never sent by moving on or finishing a review: the screen still waits, with its ticks. Looks good for the rest sends such a screen as not looked at, and applies none of its ticks. In a narrow window the list goes under the picture, with its count on its own header. A mark drawn on a picture of another shape is listed without its place, and says its place may have moved; one that only grew longer keeps its place from the top. One ticked fixed is kept: when the picture changes there again, it comes back as **Came back?**, to say it is still fixed or that it came back. That needs the picture to compare with at the same size: the `--before`, or else the last round's picture.
 - **All the screens:** the count in the bar ("4 left", or **O**) opens every screen of the review with where each stands. A press goes to one, and **Looks good for the rest** answers what is left.
 - **The film of a screen:** **R**, or the menu, plays one screen's story over the page: each round's picture, then the same picture as you marked it, on to the newest. It opens on the first marks. **Play** (Space) plays and pauses, ← and → go one step, and a press on a round shows it as it was left. **Save the film** writes it as a video file, where this computer has ffmpeg. A long story is saved as its newest rounds, and the page says how many older ones the file leaves out. The film of a sketch plays in the page only, and says so in place of the button.
 - **Select words:** the words tool (**E**) marks the words themselves, as in a document. A drag along one line takes that line's words. It works where a picture has a word list: one pushed with it, or one Markback reads off the picture when it is first on show. While the words are being read, its tip says so, and it draws a box until they come. On a computer with nothing to read with, a picture without a list has no words tool, and **E** does nothing there.
@@ -234,6 +256,7 @@ Moving into another review is never quiet. A full overlay says what was finished
 | V | After, side by side, before |
 | C | Show or hide where it changed |
 | I | The rest of the words |
+| K | What you asked for last time: show or hide |
 | R | The film of this screen: each round and its marks, in order. In it, Space plays or pauses and ← → go one step |
 | Q | Panel view |
 | F | Full screen |
@@ -261,7 +284,7 @@ review push --app MyApp --screen Home --mode light \
 Say what to look at in ten words or fewer. Longer words wait behind More, and `push` warns. `--check` can be said more than once. `--from` says whose words the note and checks are, shown as "From Claude" beside them; it defaults to Claude.
 
 The pictures are copied, so scratch files can go away. Pushing the same app, screen and mode again starts round 2 on
-the same step.
+the same step. The marks and notes sent on round 1 come along as checks: the page asks the person whether each is fixed, and `push` says how many.
 
 ### A PDF
 
@@ -341,6 +364,8 @@ Inbox: `~/.review-wizard/inbox/<app>/<screen>-<mode>-<time>.{png,json}`. The JSO
   "sentAt": "2026-01-15T14:57:17.701Z"
 }
 ```
+
+After a round with marks, the next round's record has `asked`: each earlier mark, with `n` (its number on the page), the `round` it was asked in, its `type`, `text` and `words` as a mark has them, and `said`. `box` is its place: the mark's own box, except for an arrow or a pin, where it is a 48 pixel square round the arrow's head or the pin's spot; an arrow keeps `from` and `to`, and a pin `at`. `said` is `fixed`, `stands`, or `null` when it was not ticked. The newest record of a round says where every one stands. A Looks good pressed on the screen says `fixed` for all; one sent with the rest (`noComment`) says nothing for them, and `review read` says they were not looked at. A mark that was fixed before, flagged as came back? and not answered, has `"said": null` with `"cameBack": true`, and is asked again. The verdict is always the button the person pressed: ticks never change it. A mark ticked fixed before is left out, unless the person says it came back: then it has `"cameBack": true` and `fixedIn`, the round it was fixed in. `review read` says them: `Earlier marks: 1 of 3 ticked fixed, 2 still to do`, then one line each.
 
 `read --latest` and `wait --all` give one record per screen. When marks are sent twice on one picture, each marked copy holds only what was new, so the newest record carries the ones before it under `earlier`. A Looks good pressed over changes replaces them and stands alone.
 

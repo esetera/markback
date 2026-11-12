@@ -1,7 +1,8 @@
+import './own-home.mjs'
 import assert from 'node:assert/strict'
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -9,7 +10,9 @@ import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'review.mjs')
-const home = mkdtempSync(join(tmpdir(), 'review-cli-'))
+// The person's own store, in this test file's own home folder (see own-home.mjs): what it holds is theirs.
+const home = join(process.env.HOME, '.review-wizard')
+mkdirSync(home, { recursive: true })
 after(() => rmSync(home, { recursive: true, force: true }))
 const pidFile = join(home, 'server.pid')
 
