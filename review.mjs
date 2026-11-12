@@ -536,19 +536,28 @@ async function provenPage(pid, port) {
   if (!pid || !alive(pid)) return { ok: false, why: 'the process server.pid names is not running' }
   const queue = await queueAt(port)
   if (!queue) return { ok: false, why: `no review page answers on port ${port} from here` }
+  // Known not to be the page: no line offers to kill that process. `listener` says what holds the port, when known.
+  const notIt = (why, listener) => ({ ok: false, why, notThePage: true, listener })
   if (queue.store) {
     const mine = storeIdNow()
     if (!mine) return { ok: false, why: 'this command cannot read Markback\'s secret to tell which store the page shows' }
-    if (queue.store !== mine) return { ok: false, why: `the page on port ${port} shows another store` }
-    if (queue.pid !== pid) return { ok: false, why: `the page on port ${port} is process ${queue.pid ?? 'unknown'}, not the one server.pid names` }
+    if (queue.store !== mine) return notIt(`the page on port ${port} shows another store`, queue.pid)
+    if (queue.pid !== pid) return notIt(`the page on port ${port} is not the process server.pid names`, queue.pid)
     return { ok: true, page: queue }
   }
-  if (listenerOf(port) !== pid) return { ok: false, why: `the process listening on port ${port} is not the one server.pid names` }
-  if (!runsThisServer(pid)) return { ok: false, why: `process ${pid} is not this copy of Markback's server` }
+  if (process.platform === 'win32') return { ok: false, why: `on Windows this command cannot tell which process listens on port ${port}` }
+  const listener = listenerOf(port)
+  if (listener !== pid) return notIt(`the process listening on port ${port} is not the one server.pid names`, listener)
+  if (!runsThisServer(pid)) return notIt(`the process listening on port ${port} is not this copy of Markback's server`, listener)
   return { ok: true, page: queue }
 }
-/** What to do by hand when Markback will not: the process and why it was left alone. */
-const killLine = (pid, why) => `Not stopped: ${why}.${pid && alive(pid) ? ` If process ${pid} is the review page you started, stop it with: kill ${pid}` : ''}`
+/**
+ * What is said when Markback will not stop it. Only where it cannot tell is the pid offered to kill by hand: a process known not
+ * to be the page is never offered, since killing it could stop something else. Then the process on the port is named instead.
+ */
+const killLine = (pid, proof, port) => (proof.notThePage
+  ? `Not stopped: ${proof.why}. Markback stopped nothing.${proof.listener ? ` Process ${proof.listener} listens on port ${port}.` : ''}`
+  : `Not stopped: ${proof.why}.${pid && alive(pid) ? ` If process ${pid} is the review page you started, stop it with: kill ${pid}` : ''}`)
 
 /** Runs the server on its own, so it outlasts this command. Nothing leaves this computer. */
 async function start() {
@@ -561,7 +570,7 @@ async function start() {
   if (older) {
     const pid = readPid()
     const proof = await provenPage(pid, port)
-    if (!proof.ok) fail(`An older Markback runs on port ${port}. ${killLine(pid || info.pid, proof.why)} Then run review start again.`)
+    if (!proof.ok) fail(`An older Markback runs on port ${port}. ${killLine(pid || info.pid, proof, port)} Then run review start again.`)
     await stopServer(pid)
     console.log('An older Markback was running for this store. It is stopped, and this one starts in its place.')
     page = 'none'
@@ -625,7 +634,7 @@ async function stop() {
       return console.log('It was not running.')
     }
     // Kept: the number may still be the page's, and whoever can check it by hand needs it.
-    return console.log(killLine(pid, proof.why))
+    return console.log(killLine(pid, proof, PORT))
   }
   await stopServer(pid)
   console.log('Stopped.')

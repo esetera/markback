@@ -93,7 +93,9 @@ test('a stale server.pid naming a lookalike clone\'s server.mjs, its page on the
     writeFileSync(pidFile, String(clone.child.pid))
     const env = { ...process.env, REVIEW_HOME: home, REVIEW_PORT: String(port) }
     const out = await run(['stop'], env)
-    assert.match(out.stdout, new RegExp(`Not stopped: process ${clone.child.pid} is not this copy of Markback's server\\. If process ${clone.child.pid} is the review page you started, stop it with: kill ${clone.child.pid}`))
+    // Known not to be this copy's page: its process is named, and no line offers to kill it.
+    assert.match(out.stdout, new RegExp(`Not stopped: the process listening on port ${port} is not this copy of Markback's server\\. Markback stopped nothing\\. Process ${clone.child.pid} listens on port ${port}\\.`))
+    assert.doesNotMatch(out.stdout, /kill /)
     assert.doesNotMatch(out.stdout + out.stderr, /Not found/)
     const started = await run(['start'], env)
     assert.equal(started.code, 1)
@@ -112,7 +114,8 @@ test('a page serving another store, named by this store\'s server.pid, is never 
     await answers(port)
     writeFileSync(pidFile, String(server.pid))
     const out = await run(['stop'], { ...process.env, REVIEW_HOME: home, REVIEW_PORT: String(port) })
-    assert.match(out.stdout, /Not stopped: the page on port \d+ shows another store\./)
+    assert.match(out.stdout, new RegExp(`Not stopped: the page on port \\d+ shows another store\\. Markback stopped nothing\\. Process ${server.pid} listens on port \\d+\\.`))
+    assert.doesNotMatch(out.stdout, /kill /)
     assert.ok(process.kill(server.pid, 0), 'still running')
   } finally {
     server.kill()
@@ -130,7 +133,8 @@ test('start --port with someone else\'s service on that port kills nothing, and 
     writeFileSync(pidFile, String(elsewhere.pid))
     const out = await run(['start', '--port', String(port)], { ...process.env, REVIEW_HOME: home })
     assert.equal(out.code, 1)
-    assert.match(out.stderr, /Not stopped: the process listening on port \d+ is not the one server\.pid names/)
+    assert.match(out.stderr, new RegExp(`Not stopped: the process listening on port \\d+ is not the one server\\.pid names\\. Markback stopped nothing\\. Process ${clone.child.pid} listens on port \\d+\\.`))
+    assert.doesNotMatch(out.stderr, /kill /, 'the pid known not to be the page is never offered to kill')
     assert.doesNotMatch(out.stdout, /Open http/)
     assert.ok(process.kill(clone.child.pid, 0) && process.kill(elsewhere.pid, 0), 'both still running')
   } finally {
