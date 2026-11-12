@@ -352,6 +352,8 @@ async function loadQueue() {
     }
   }
   render()
+  // The first look after a reload: words saved where no box can open again are shown, not kept out of sight.
+  if (first) showSavedElsewhere()
   if (notice) toast(notice)
   if (fresh.length) announce(fresh, !notice)
   // On show, the lines are there to see. Anywhere else, a line says so, with a press to go and look.
@@ -1529,8 +1531,41 @@ const savedBoxWords = () => {
 function keepBoxWords(input) {
   const card = input.closest('.reading')
   const s = card?._screen
-  if (!s || card.classList.contains('kept')) return
-  prefs.set('box', input.value.trim() ? JSON.stringify({ appSlug: s.appSlug, id: s.id, after: s.after, key: card.dataset.reading, words: input.value }) : '')
+  if (!s) return
+  prefs.set('box', input.value.trim() ? JSON.stringify({ appSlug: s.appSlug, id: s.id, after: s.after, round: s.round, screen: s.screen ?? '', mode: s.mode ?? '', key: card.dataset.reading ?? card.dataset.kept, words: input.value }) : '')
+}
+/** A kept box made again, for words whose line is not on show: after an Undo, or a reload. */
+function keptFrom({ key, words, screen: was, why = '', sent = '', left = '', top = '' }) {
+  const el = document.createElement('div')
+  el.className = 'reading'
+  el.dataset.reading = key
+  el.innerHTML = '<input data-correct maxlength="300" aria-label="Your words">'
+  Object.assign(el, { _screen: was })
+  Object.assign(el.style, { left, top })
+  $('readings').append(el)
+  el.querySelector('[data-correct]').value = words
+  keepWords(el, screen() ?? was)
+  if (why) el.querySelector('.rt b').textContent = why
+  if (sent) el._sent = sent
+  // With no picture to stand beside, it stands on its own where it can be seen.
+  if ($('pair').hidden || !left) keepAlone()
+  shutOthers()
+  placeReadings()
+  return el
+}
+/**
+ * Words saved before a reload whose box cannot open again where it was: the picture was pushed again since, or the review is
+ * gone. They come back as a kept box that says so, never kept out of sight. Looked at once, on the first look.
+ */
+function showSavedElsewhere() {
+  const held = savedBoxWords()
+  if (!held?.words?.trim() || boxCards().length) return
+  const a = state.apps.find(x => x.slug === held.appSlug)
+  const now = a?.screens.find(x => x.id === held.id)
+  if (now && now.after === held.after && now.status !== 'approved') return
+  const was = { appSlug: held.appSlug, id: held.id, after: held.after, round: held.round ?? '', screen: held.screen || held.id, mode: held.mode ?? '' }
+  const el = keptFrom({ key: held.key, words: held.words, screen: was, why: !now ? 'This review is not here now.' : now.after !== held.after ? 'A new picture came.' : 'This screen was answered Looks good since.', sent: `Sent, about the earlier picture${held.round ? ` (round ${held.round})` : ''}.` })
+  el.querySelector('[data-correct]').focus()
 }
 const forgetBoxWords = () => prefs.set('box', '')
 // Leaving with words in a box that have not gone: the browser asks first.
@@ -2267,6 +2302,13 @@ function renderReadings(s) {
   const answers = size && state.shownKey === keyOf(s) + s.after ? standingAnswers(histories.get(historyKey(s)), s.round) : []
   // Two answers on one picture both have a mark 1: the older one's say so.
   const readings = answers.flatMap((a, i) => (a.readings ?? []).map(r => ({ ...r, key: `${a.answer}|${r.n}`, label: i ? `earlier ${r.n}` : String(r.n) }))).sort((x, y) => x.box.y - y.box.y)
+  // A kept box whose line is on show again, on the same picture, becomes that line's box: one box, never two with the same words.
+  const back = [...$('readings').children, ...$('keptAlone').children].find(c => c.classList.contains('kept') && c._screen?.appSlug === s.appSlug && c._screen?.id === s.id && c._screen?.after === s.after && readings.some(r => r.key === c.dataset.kept) && (!correcting || correcting === c.dataset.kept))
+  if (back) {
+    correcting = back.dataset.kept
+    restoring = { key: correcting, words: back.querySelector('[data-correct]').value }
+    back.remove()
+  }
   if (!readings.some(r => r.key === correcting)) correcting = ''
   if (restoring && restoring.key !== correcting) restoring = null
   // Come to look: the line that said they had come has done its work.
@@ -2583,23 +2625,11 @@ function undoDropped() {
   if (onShow) {
     correcting = was.key
     restoring = { key: was.key, words: was.words }
-    return renderReadings(s)
-  }
-  const el = document.createElement('div')
-  el.className = 'reading'
-  el.dataset.reading = was.key
-  el.innerHTML = '<input data-correct maxlength="300" aria-label="Your words">'
-  Object.assign(el, { _screen: was.screen })
-  Object.assign(el.style, { left: was.left, top: was.top })
-  $('readings').append(el)
-  el.querySelector('[data-correct]').value = was.words
-  keepWords(el, s ?? was.screen)
-  if (was.why) el.querySelector('.rt b').textContent = was.why
-  if (was.sent) el._sent = was.sent
-  if ($('pair').hidden) keepAlone()
-  el.querySelector('[data-correct]').focus()
-  shutOthers()
-  placeReadings()
+    renderReadings(s)
+  } else keptFrom({ key: was.key, words: was.words, screen: was.screen, why: was.why, sent: was.sent, left: was.left, top: was.top }).querySelector('[data-correct]').focus()
+  // Back in a box, so saved again: a reload does not lose them a second time.
+  const input = openCard()?.querySelector('[data-correct]')
+  if (input) keepBoxWords(input)
 }
 const onBoxClick = event => {
   const card = event.target.closest('.reading')
@@ -3655,7 +3685,7 @@ $('menu').onclick = event => {
   const what = event.target.closest('[data-menu]')?.dataset.menu
   if (what === 'list') openDrawer()
   else if (what === 'new') openNewProject()
-  else if (what === 'work') location.href = '/work.html'
+  else if (what === 'work') !wordsFirst() && (location.href = '/work.html')
   else if (what === 'rest') openSubmit()
   else if (what === 'stop') stopHere()
   else if (what === 'aside-one') void setAside([state.appSlug], true)
@@ -3869,6 +3899,8 @@ async function firstRun(form, path, body) {
 for (const holder of [$('stateCard'), $('newModal')]) {
   holder.addEventListener('submit', event => {
     event.preventDefault()
+    // A box still holds words: no new project starts, by Enter or by a press, until they are sent or cancelled.
+    if (wordsFirst()) return
     if (event.target.matches('[data-build]')) return void sendBuild(event.target)
     const input = event.target.querySelector('[data-first-address]')
     if (input) void firstRun(event.target, '/api/show', { url: input.value || input.placeholder })
