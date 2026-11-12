@@ -158,6 +158,23 @@ test('where Tailscale hands on another name, a name that says this computer stil
   }
 })
 
+test('once the door has learned that Tailscale hands on the tailnet name, another name gets 404 and another login 403', async () => {
+  const r = await rig()
+  r.review('phone', 'on')
+  // As real Tailscale does: the first request with the secret names the tailnet name, so the name guard comes on.
+  assert.equal((await r.ask('/api/queue')).status, 200)
+  assert.equal(JSON.parse((await r.local('/api/phone')).text).hostGuard, true)
+  const door = doorOf(r.tail)
+  const direct = (host, login) => send(door, `${secretOf(r.tail)}/api/queue`, { headers: { host, 'tailscale-user-login': login } })
+  // What scripts/phone-check.mjs sent: the secret, the door's own address as Host, another login. The name guard answers first.
+  assert.equal((await direct(`127.0.0.1:${door}`, 'someone-else@example.com')).status, 404)
+  assert.equal((await direct(`127.0.0.1:${door}`, ME)).status, 404)
+  // The tailnet name: then it is the login that decides.
+  assert.equal((await direct(NAME, 'someone-else@example.com')).status, 403)
+  assert.equal((await direct(NAME, '')).status, 403)
+  assert.equal((await direct(NAME, ME)).status, 200)
+})
+
 test('a page that renames itself to the door, and sends the login itself, gets nothing without the secret Tailscale adds', async () => {
   const r = await rig()
   const on = r.review('phone', 'on')

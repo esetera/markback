@@ -6,6 +6,7 @@
  * this computer, which is one of the person's own devices. --and-off then turns it off and checks that only its entry went.
  * Each line says pass or fail, and what it means.
  */
+import { request as plainRequest } from 'node:http'
 import { request } from 'node:https'
 import { PORT } from '../lib/store.mjs'
 import { tailscaleJson } from '../lib/phone.mjs'
@@ -82,14 +83,27 @@ say(forged.status === 200, `a Tailscale-User-Login sent by the caller is replace
 const work = await ask(url, '/api/work')
 say(work.status === 403, `the work queue is refused through Tailscale (${work.status || work.text})`)
 
-// 6. The door itself, asked directly from here as a page that renamed itself could: the login is not enough.
+// 6. The door itself, asked directly from here as a page that renamed itself could. node:http, as fetch cannot set Host.
 if (door) {
-  const direct = (path, headers = {}) => fetch(`http://127.0.0.1:${door[1]}${path}`, { headers: { 'tailscale-user-login': status.login, ...headers } }).then(r => r.status, () => 0)
-  say((await direct('/api/queue')) === 404, 'the door, asked directly with the login but without the secret path: 404')
+  const direct = (path, { host = name.replace(/:443$/, ''), login = status.login } = {}) => new Promise(resolve => {
+    const req = plainRequest({ host: '127.0.0.1', port: Number(door[1]), path, agent: false, headers: { host, ...(login ? { 'tailscale-user-login': login } : {}) } }, res => {
+      res.resume()
+      resolve(res.statusCode)
+    })
+    req.on('error', () => resolve(0))
+    req.end()
+  })
+  const bare = await direct('/api/queue')
+  say(bare === 404, `the door, asked directly with the tailnet name and the login but without the secret path: 404 (${bare})`)
   if (door[2]) {
-    say((await direct(`${door[2]}/api/queue`, { 'tailscale-user-login': 'someone-else@example.com' })) === 403, 'with the secret path and another login: refused')
-    const fromHere = await direct(`${door[2]}/api/work`, { host: 'localhost' })
-    say(fromHere === 403 || fromHere === 404, `with the secret path, the login and Host: localhost: still only a phone's rights (${fromHere})`)
+    const other = await direct(`${door[2]}/api/queue`, { login: 'someone-else@example.com' })
+    say(other === 403, `with the secret path, the tailnet name and another login: refused, 403 (${other})`)
+    const none = await direct(`${door[2]}/api/queue`, { login: '' })
+    say(none === 403, `with the secret path, the tailnet name and no login: refused, 403 (${none})`)
+    const work = await direct(`${door[2]}/api/work`)
+    say(work === 403, `with the secret path, the tailnet name and the login: still only a phone's rights, the work queue refused, 403 (${work})`)
+    const local = await direct(`${door[2]}/api/work`, { host: 'localhost' })
+    say(local === 403 || local === 404, `with the secret path, the login and Host: localhost: the work queue refused (${local}${local === 404 ? ', by the name guard' : ''})`)
   }
 }
 
