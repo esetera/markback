@@ -63,8 +63,14 @@ async function rig({ reader = null } = {}) {
       await new Promise(r => setTimeout(r, 100))
     }
   }
+  // A server that has gone already, or will not go, must not hold the run: a failure ends the test instead of hanging it.
   const stop = () => new Promise(resolve => {
-    server.once('exit', resolve)
+    if (server.exitCode !== null || server.signalCode !== null) return resolve()
+    const hard = setTimeout(() => server.kill('SIGKILL'), 5000)
+    server.once('exit', () => {
+      clearTimeout(hard)
+      resolve()
+    })
     server.kill()
   })
   cleanups.push(() => {
@@ -3308,5 +3314,434 @@ test('letting half a phrase go never costs the next whole phrase, and the foot m
   await page.keyboard.press('Shift+D')
   assert.equal(await page.locator('#micBtn').getAttribute('aria-pressed'), 'false')
   assert.equal(await page.locator('#notes').inputValue(), 'half a note')
+  assert.deepEqual(errors, [])
+})
+
+/* ---------- marks become checks ---------- */
+
+test('marks become checks: last round\'s marks wait at their places on the new picture, to tick fixed or say they still stand', { skip }, async () => {
+  const { push, read, open, port, queue } = await rig()
+  push('Again', ['One'], null)
+  const first = (await queue('again')).screens[0]
+  // Round 1's answer, as the page sends it.
+  await fetch(`http://127.0.0.1:${port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+    appSlug: 'again', id: 'one', after: first.after, round: 1, verdict: 'changes', notes: 'Show sizes too.', imageSize: { w: 1600, h: 900 },
+    shapes: [{ type: 'box', colour: 'red', box: { x: 100, y: 100, w: 300, h: 200 } }, { type: 'text', colour: 'red', box: { x: 900, y: 500, w: 300, h: 40 }, text: 'Make this the main button' }],
+  }) })
+  push('Again', ['One'], null)
+  const { page, errors } = await open('again', { undo: 40 })
+  const asked = page.locator('#asked')
+  await asked.waitFor()
+  assert.deepEqual(await asked.locator('.ask-words').allInnerTexts(), ['A box here', '“Make this the main button”', 'Notes: “Show sizes too.”'])
+  assert.equal(await page.locator('#askedChip').innerText(), '3 to check')
+  // At its place: drawn on screen beside the picture, and the picture keeps the rest of the window.
+  // The dashed outline of mark 1, down its left side: some of that strip is drawn on.
+  await page.waitForFunction(() => {
+    const { data } = document.getElementById('canvas').getContext('2d').getImageData(94, 100, 12, 200)
+    for (let i = 3; i < data.length; i += 4) if (data[i]) return true
+    return false
+  }, null, { timeout: 3000 })
+  const stage = await page.locator('#stage').boundingBox()
+  const side = await asked.boundingBox()
+  assert.ok(side.x >= stage.x + stage.width, 'beside the picture, not over it')
+  assert.ok(side.x + side.width <= 1500, 'on the page')
+  assert.equal(await page.locator('[data-act=send]').isDisabled(), true, 'nothing said yet')
+  await asked.locator('[data-ask="1"] [data-ask-say="fixed"]').click()
+  await asked.locator('[data-ask="2"] [data-ask-say="stands"]').click()
+  assert.equal(await page.locator('#askedChip').innerText(), '1 to check')
+  assert.equal(await page.locator('[data-act=send]').isDisabled(), false, 'still stands is something to send')
+  // Kept in the draft, so a reload loses nothing.
+  assert.deepEqual((await saved(page, 'again', 'one', 2)).said, { 1: 'fixed', 2: 'stands' })
+  // K hides the list and the picture takes the room; again brings it back.
+  await page.keyboard.press('k')
+  assert.equal(await asked.isVisible(), false)
+  assert.ok((await page.locator('#stage').boundingBox()).width > stage.width, 'the picture grows into the room')
+  await page.keyboard.press('k')
+  assert.equal(await asked.isVisible(), true)
+  await page.keyboard.press('Meta+Enter')
+  const sent = await waitFor(() => read('Again').find(r => r.round === 2))
+  assert.equal(sent.verdict, 'changes')
+  assert.deepEqual(sent.asked.map(a => [a.n, a.said]), [[1, 'fixed'], [2, 'stands'], [3, null]])
+  // Round 3: the fixed one is held quietly, the others are asked again, and a Looks good ticks them all.
+  push('Again', ['One'], null)
+  const next = await open('again', { undo: 40 })
+  await next.page.locator('#asked').waitFor()
+  assert.deepEqual(await next.page.locator('#asked [data-ask]').evaluateAll(rows => rows.map(r => r.dataset.ask)), ['2', '3'])
+  assert.equal(await next.page.locator('#askedHeld').innerText(), '1 held')
+  await next.page.keyboard.press('g')
+  const good = await waitFor(() => read('Again').find(r => r.round === 3))
+  assert.equal(good.verdict, 'approved')
+  assert.deepEqual(good.asked.map(a => [a.n, a.said]), [[2, 'fixed'], [3, 'fixed']])
+  assert.deepEqual([...errors, ...next.errors], [])
+})
+
+test('marks become checks: a mark fixed before is flagged when the picture changes there again, and can be said to have come back', { skip }, async () => {
+  const { push, read, open, port, queue, home } = await rig()
+  const plain = join(home, 'plain.png')
+  const moved = join(home, 'moved.png')
+  writePicture(plain, 1600, 900)
+  writePicture(moved, 1600, 900, { x: 120, y: 120, w: 200, h: 120 })
+  const answer = async (round, body) => {
+    const s = (await queue('back')).screens[0]
+    await fetch(`http://127.0.0.1:${port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: 'back', id: 'one', after: s.after, round, imageSize: { w: 1600, h: 900 }, notes: '', shapes: [], ...body }) })
+  }
+  push('Back', ['One'], null, [], plain)
+  await answer(1, { verdict: 'changes', shapes: [{ type: 'box', colour: 'red', box: { x: 100, y: 100, w: 300, h: 200 } }] })
+  push('Back', ['One'], null, [], plain)
+  await answer(2, { verdict: 'changes', notes: 'Fine now', said: { 1: 'fixed' } })
+  // Nothing changed where it was: held quietly, not asked.
+  push('Back', ['One'], null, ['--before', plain], plain)
+  const quiet = await open('back', { undo: 60000 })
+  await quiet.page.waitForTimeout(400)
+  assert.equal(await quiet.page.locator('#askedHeld').innerText(), '1 held')
+  assert.deepEqual(await quiet.page.locator('#asked [data-ask="1"]').count(), 0)
+  // Changed there again: it may have come back.
+  await answer(3, { verdict: 'approved' })
+  push('Back', ['One'], null, ['--before', plain], moved)
+  const { page, errors } = await open('back', { undo: 40 })
+  const row = page.locator('#asked [data-ask="1"]')
+  await row.waitFor()
+  assert.match(await row.innerText(), /Came back\?\s*A box here\s*You said fixed in round 2/)
+  assert.equal(await page.locator('#askedChip').innerText(), '1 came back?')
+  await row.locator('[data-ask-say="stands"]').click()
+  await page.keyboard.press('Meta+Enter')
+  const sent = await waitFor(() => read('Back').find(r => r.round === 4))
+  assert.deepEqual(sent.asked.map(a => [a.n, a.said, a.cameBack]), [[1, 'stands', true]])
+  assert.deepEqual([...errors, ...quiet.errors], [])
+})
+
+/* ---------- marks become checks: what an independent read found ---------- */
+
+/** One screen with round 1 answered by marks, as the page sends them, and round 2 pushed. */
+async function twoRounds(r, app, shapes, round2 = [], picture = undefined) {
+  r.push(app, ['One'], null, [], picture)
+  const slug = app.toLowerCase()
+  const first = (await r.queue(slug)).screens[0]
+  await fetch(`http://127.0.0.1:${r.port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: slug, id: 'one', after: first.after, round: 1, verdict: 'changes', notes: '', imageSize: { w: 1600, h: 900 }, shapes }) })
+  r.push(app, ['One'], null, ...round2)
+}
+const three = [100, 500, 900].map(x => ({ type: 'box', colour: 'red', box: { x, y: 100, w: 200, h: 150 } }))
+
+test('a second send on one picture keeps the ticks said before it, on the page, after a reload, and in the newest record', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Twice', three)
+  const { page, errors } = await r.open('twice', { undo: 40 })
+  await page.locator('#asked').waitFor()
+  await page.locator('#asked [data-ask="1"] [data-ask-say="fixed"]').click()
+  // A tick never answers by itself: it rides along with a mark.
+  await draw(page, 0.5, 0.05, 0.6, 0.15)
+  await page.keyboard.press('Meta+Enter')
+  await waitFor(() => r.read('Twice').find(x => x.round === 2))
+  const again = await r.open('twice/one', { undo: 40 })
+  const row = n => again.page.locator(`#asked [data-ask="${n}"]`)
+  await row(1).waitFor()
+  await again.page.waitForFunction(() => document.querySelector('#asked [data-ask="1"]').classList.contains('said-fixed'))
+  await row(2).locator('[data-ask-say="stands"]').click()
+  await again.page.keyboard.press('Meta+Enter')
+  await waitFor(() => r.read('Twice').filter(x => x.round === 2).length === 2)
+  const newest = r.read('Twice').filter(x => x.round === 2).at(-1)
+  assert.deepEqual(newest.asked.map(a => [a.n, a.said]), [[1, 'fixed'], [2, 'stands'], [3, null]])
+  const third = await r.open('twice/one', { undo: 60000 })
+  await third.page.waitForFunction(() => document.querySelector('#asked [data-ask="2"]')?.classList.contains('said-stands') && document.querySelector('#asked [data-ask="1"]').classList.contains('said-fixed'))
+  assert.equal(await third.page.locator('#askedChip').innerText(), '1 to check')
+  assert.deepEqual([...errors, ...again.errors, ...third.errors], [])
+})
+
+for (const width of [900, 600, 400]) {
+  test(`at ${width} wide the earlier marks never squeeze the picture or run past the edge`, { skip }, async () => {
+    const r = await rig()
+    await twoRounds(r, 'Narrow', three)
+    const { page, errors } = await r.open('narrow', { width, height: 800 })
+    await page.locator('#asked').waitFor()
+    const room = await page.locator('#scroller').evaluate(el => el.clientWidth - 14)
+    const stage = await page.locator('#stage').boundingBox()
+    const list = await page.locator('#asked').boundingBox()
+    assert.ok(stage.width >= Math.min(560, room) * 0.95, `the picture keeps its width: ${stage.width} of ${room}`)
+    assert.ok(list.x >= 0 && list.x + list.width <= width, 'the list is on the page')
+    assert.equal(await page.locator('#scroller').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, 'nothing runs past the edge')
+    if (width < 900) assert.ok(list.y >= stage.y + stage.height, 'under the picture')
+    assert.deepEqual(errors, [])
+  })
+}
+
+test('K from Before shows the earlier marks in After, and a key press on Fixed keeps the keyboard on that button', { skip }, async () => {
+  const r = await rig()
+  const before = join(r.home, 'p.png')
+  await twoRounds(r, 'Keys', three, [['--before', before]])
+  const { page, errors } = await r.open('keys', { undo: 60000 })
+  await page.locator('#asked').waitFor()
+  await page.keyboard.press('v')
+  await page.keyboard.press('v')
+  assert.equal(await page.locator('#asked').isVisible(), false, 'in Before')
+  await page.keyboard.press('k')
+  assert.equal(await page.locator('#asked').isVisible(), true)
+  assert.equal(await page.locator('[data-view="after"]').getAttribute('class').then(c => c.includes('on')), true)
+  await page.locator('#asked [data-ask="2"] [data-ask-say="fixed"]').focus()
+  await page.keyboard.press('Space')
+  assert.equal(await page.evaluate(() => document.activeElement.matches('#asked [data-ask="2"] [data-ask-say="fixed"]')), true)
+  assert.equal(await page.locator('#asked [data-ask="2"]').getAttribute('class').then(c => c.includes('said-fixed')), true)
+  assert.deepEqual(errors, [])
+})
+
+test('with no before, a held mark is compared with the last round\'s picture; on a picture of another shape a place is not trusted', { skip }, async () => {
+  const r = await rig()
+  const plain = join(r.home, 'plain.png')
+  const moved = join(r.home, 'moved.png')
+  writePicture(plain, 1600, 900)
+  writePicture(moved, 1600, 900, { x: 120, y: 120, w: 200, h: 120 })
+  await twoRounds(r, 'Last', three.slice(0, 1), [[], plain], plain)
+  const s = (await r.queue('last')).screens[0]
+  await fetch(`http://127.0.0.1:${r.port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: 'last', id: 'one', after: s.after, round: 2, verdict: 'changes', notes: 'x', shapes: [], imageSize: { w: 1600, h: 900 }, said: { 1: 'fixed' } }) })
+  r.push('Last', ['One'], null, [], moved)
+  const { page, errors } = await r.open('last', { undo: 60000 })
+  const row = page.locator('#asked [data-ask="1"]')
+  await row.waitFor()
+  assert.match(await row.innerText(), /Came back\?/)
+  // Another shape: listed, not drawn, and it says so.
+  await twoRounds(r, 'Shape', three.slice(0, 1), [[], r.tall])
+  const other = await r.open('shape', { undo: 60000 })
+  const listed = other.page.locator('#asked [data-ask="1"]')
+  await listed.waitFor()
+  await other.page.waitForFunction(() => /place may have moved/.test(document.querySelector('#asked [data-ask="1"]').textContent), null, { timeout: 5000 })
+  assert.deepEqual([...errors, ...other.errors], [])
+})
+
+test('a tick never answers: all ticked lights Looks good, ticks alone are not swept up, and Looks good sends them', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Ticks', three)
+  r.push('Ticks', ['Two', 'Three'], null)
+  const { page, errors } = await r.open('ticks', { undo: 40 })
+  await page.locator('#asked').waitFor()
+  for (const n of [1, 2, 3]) await page.locator(`#asked [data-ask="${n}"] [data-ask-say="fixed"]`).click()
+  assert.equal(await page.locator('[data-act=send]').isDisabled(), true, 'ticks alone light no Send')
+  assert.match(await page.locator('[data-act=good]').getAttribute('class'), /good-lit/)
+  assert.match(await page.locator('#asked .ask-hint').innerText(), /All checked\. Press Looks good\./)
+  // Moving on and finishing the review leaves it waiting, with its ticks kept.
+  await page.keyboard.press('ArrowRight')
+  await settled(page)
+  await page.keyboard.press('g')
+  await settled(page)
+  await page.keyboard.press('g')
+  await page.waitForTimeout(500)
+  assert.equal(r.read('Ticks').some(x => x.screen === 'One' && x.round === 2), false, 'not swept up')
+  assert.equal((await r.queue('ticks')).screens.find(x => x.id === 'one').status, 'waiting')
+  await page.goto(`http://127.0.0.1:${r.port}/?undo=40#ticks/one`)
+  await page.locator('#asked').waitFor()
+  assert.equal(await page.locator('#asked .said-fixed').count(), 3, 'kept')
+  await page.locator('[data-act=good]').click()
+  const sent = await waitFor(() => r.read('Ticks').find(x => x.screen === 'One' && x.round === 2))
+  assert.equal(sent.verdict, 'approved')
+  assert.deepEqual(sent.asked.map(a => a.said), ['fixed', 'fixed', 'fixed'])
+  assert.deepEqual(errors, [])
+})
+
+test('after changes sent on a picture, a new tick lights Send and goes as changes, never through the replace question', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Update', three.slice(0, 2))
+  r.push('Update', ['Two'], null)
+  const { page, errors } = await r.open('update', { undo: 40 })
+  await page.locator('#asked').waitFor()
+  await page.locator('#asked [data-ask="1"] [data-ask-say="fixed"]').click()
+  await draw(page, 0.5, 0.05, 0.6, 0.15)
+  await page.keyboard.press('Meta+Enter')
+  await waitFor(() => r.read('Update').find(x => x.round === 2))
+  await page.goto(`http://127.0.0.1:${r.port}/?undo=40#update/one`)
+  await page.reload()
+  await page.locator('#asked').waitFor()
+  await page.waitForFunction(() => document.querySelector('#asked [data-ask="1"]').classList.contains('said-fixed'))
+  await page.locator('#asked [data-ask="2"] [data-ask-say="fixed"]').click()
+  assert.equal(await page.locator('[data-act=send]').isDisabled(), false, 'an update to the changes sent')
+  await page.keyboard.press('Meta+Enter')
+  await page.waitForTimeout(200)
+  assert.equal(await page.locator('#confirmModal').isVisible(), false, 'no question')
+  await waitFor(() => r.read('Update').filter(x => x.round === 2).length === 2)
+  const newest = r.read('Update').filter(x => x.round === 2).at(-1)
+  assert.equal(newest.verdict, 'changes')
+  assert.deepEqual(newest.asked.map(a => a.said), ['fixed', 'fixed'])
+  // Taking the changes back is Looks good, and its question says what is dropped.
+  await page.goto(`http://127.0.0.1:${r.port}/?undo=40#update/one`)
+  await page.reload()
+  await page.locator('#asked').waitFor()
+  await page.waitForTimeout(300)
+  await page.locator('[data-act=good]').click()
+  await page.locator('#confirmModal').waitFor()
+  assert.match(await page.locator('#confirmText').innerText(), /This drops the 1 mark you sent on this picture:/)
+  assert.deepEqual(errors, [])
+})
+
+test('a came back? is never decided for the person: it holds back all checked, and Looks good asks first', { skip }, async () => {
+  const r = await rig()
+  const plain = join(r.home, 'plain.png')
+  const moved = join(r.home, 'moved.png')
+  writePicture(plain, 1600, 900)
+  writePicture(moved, 1600, 900, { x: 120, y: 120, w: 200, h: 120 })
+  await twoRounds(r, 'Asked', three.slice(0, 1), [[], plain], plain)
+  const s = (await r.queue('asked')).screens[0]
+  await fetch(`http://127.0.0.1:${r.port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: 'asked', id: 'one', after: s.after, round: 2, verdict: 'changes', notes: '', imageSize: { w: 1600, h: 900 }, said: { 1: 'fixed' }, shapes: [{ type: 'box', colour: 'red', box: { x: 1000, y: 600, w: 100, h: 100 } }] }) })
+  r.push('Asked', ['One'], null, [], moved)
+  const { page, errors } = await r.open('asked', { undo: 40 })
+  await page.locator('#asked [data-ask="1"]').waitFor()
+  await page.locator('#asked [data-ask="2"] [data-ask-say="fixed"]').click()
+  assert.match(await page.locator('#asked .ask-hint').innerText(), /1 came back\? Say Still fixed or Came back\./)
+  assert.doesNotMatch(await page.locator('[data-act=good]').getAttribute('class'), /good-lit/)
+  await page.locator('[data-act=good]').click()
+  await page.locator('#confirmModal').waitFor()
+  assert.match(await page.locator('#confirmTitle').innerText(), /came back\? not answered/)
+  await page.locator('#confirmYes').click()
+  const sent = await waitFor(() => r.read('Asked').find(x => x.round === 3))
+  assert.deepEqual(sent.asked.map(a => [a.n, a.said, a.cameBack ?? false]), [[1, null, true], [2, 'fixed', false]])
+  assert.deepEqual(errors, [])
+})
+
+test('Looks good for the rest sends a screen with ticks alone as not looked at, and does not list it with marks or notes', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Rest', three.slice(0, 2))
+  r.push('Rest', ['Two'], null)
+  const { page, errors } = await r.open('rest', { undo: 40 })
+  await page.locator('#asked').waitFor()
+  await page.locator('#asked [data-ask="1"] [data-ask-say="fixed"]').click()
+  await page.keyboard.press('o')
+  await page.locator('#sheetRest').click()
+  await page.locator('#submitModal').waitFor()
+  assert.doesNotMatch(await page.locator('#submitBody').innerText(), /With marks or notes/)
+  await page.locator('#submitYes').click()
+  const sent = await waitFor(() => r.read('Rest').find(x => x.screen === 'One' && x.round === 2))
+  assert.equal(sent.noComment, true)
+  assert.deepEqual(sent.asked.map(a => a.said), [null, null], 'the tick is not applied')
+  assert.deepEqual(errors, [])
+})
+
+test('in a narrow window the count is on the list under the picture, not lost in the bar', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Thin', three)
+  for (const width of [600, 400]) {
+    const { page, errors } = await r.open('thin', { width, height: 800 })
+    await page.locator('#asked').waitFor()
+    assert.equal(await page.locator('#askedChip').isVisible(), false)
+    const count = page.locator('#asked .asked-count')
+    assert.equal(await count.innerText(), '3 to check')
+    const box = await count.boundingBox()
+    assert.ok(box.x + box.width <= width, 'on screen')
+    assert.deepEqual(errors, [])
+  }
+})
+
+test('the list always shows what Send will say: a mark drawn after Looks good takes back its fixed', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Shows', three)
+  r.push('Shows', ['Two'], null)
+  const { page, errors } = await r.open('shows', { undo: 60000 })
+  await page.locator('#asked').waitFor()
+  await page.keyboard.press('g')
+  await settled(page)
+  await page.keyboard.press('ArrowLeft')
+  await page.locator('#asked').waitFor()
+  await page.waitForFunction(() => document.querySelectorAll('#asked .said-fixed').length === 3, null, { timeout: 5000 })
+  await draw(page, 0.6, 0.6, 0.8, 0.8)
+  await page.waitForFunction(() => document.querySelectorAll('#asked .said-fixed').length === 0, null, { timeout: 5000 })
+  assert.equal(await page.locator('#askedChip').innerText(), '3 to check')
+  assert.deepEqual(errors, [])
+})
+
+test('the listening notice and the list of earlier marks keep apart', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Apart', three)
+  r.push('Apart', ['Two'], null)
+  const { page, errors } = await r.open('apart/two', { undo: 40, width: 1500 })
+  await page.keyboard.press('g')
+  await page.locator('#asked').waitFor()
+  await draw(page, 0.5, 0.05, 0.6, 0.15)
+  await page.keyboard.press('Meta+Enter')
+  // Nothing left waiting and no agent listens: the notice says the marks wait unheard, and stays.
+  await page.locator('#heard').waitFor({ timeout: 5000 })
+  const look = page.locator('[data-look]')
+  if (await look.isVisible()) await look.click()
+  for (let i = 0; i < 2 && !(await page.locator('#asked').isVisible()); i++) await page.keyboard.press('ArrowLeft')
+  await page.locator('#asked').waitFor()
+  await settled(page)
+  const card = await page.locator('#heard').boundingBox()
+  const first = await page.locator('#asked [data-ask="1"]').boundingBox()
+  assert.ok(card && first.y >= card.y + card.height, `the first row ${first.y} is under the notice ${card.y + card.height}`)
+  assert.deepEqual(errors, [])
+})
+
+/** Round 3 of screen One of `app`: mark 1 was ticked fixed on round 2, and the picture changed there again since. */
+async function cameBackRound(r, app, others = []) {
+  const plain = join(r.home, 'plain.png')
+  const moved = join(r.home, 'moved.png')
+  writePicture(plain, 1600, 900)
+  writePicture(moved, 1600, 900, { x: 120, y: 120, w: 200, h: 120 })
+  const slug = app.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  await twoRounds(r, app, three.slice(0, 1), [[], plain], plain)
+  const s = (await r.queue(slug)).screens.find(x => x.id === 'one')
+  await fetch(`http://127.0.0.1:${r.port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: slug, id: 'one', after: s.after, round: 2, verdict: 'approved', notes: '', imageSize: { w: 1600, h: 900 }, said: { 1: 'fixed' }, shapes: [] }) })
+  r.push(app, ['One'], null, [], moved)
+  if (others.length) r.push(app, others, null)
+  return slug
+}
+
+test('a came back? on a screen swept up with a mark drawn goes as not answered, and is asked again', { skip }, async () => {
+  const r = await rig()
+  const slug = await cameBackRound(r, 'Swept', ['Two'])
+  const { page, errors } = await r.open(slug, { undo: 40 })
+  await page.locator('#asked [data-ask="1"]').waitFor()
+  await page.waitForFunction(() => /Came back\?/.test(document.querySelector('#asked [data-ask="1"]').textContent))
+  await draw(page, 0.6, 0.6, 0.8, 0.8)
+  await page.keyboard.press('ArrowRight')
+  await settled(page)
+  await page.keyboard.press('g')
+  const sent = await waitFor(() => r.read('Swept').find(x => x.screen === 'One' && x.round === 3))
+  assert.deepEqual(sent.asked.map(a => [a.n, a.said, a.cameBack]), [[1, null, true]])
+  r.push('Swept', ['One'], null)
+  assert.equal((await r.queue(slug)).screens.find(x => x.id === 'one').asked.find(a => a.n === 1).state, 'open')
+  assert.deepEqual(errors, [])
+})
+
+test('a came back? on a screen sent by Looks good for the rest, opened or never opened, is asked again next round', { skip }, async () => {
+  for (const [app, opened] of [['Restseen', true], ['Restunseen', false]]) {
+    const r = await rig()
+    const slug = await cameBackRound(r, app, ['Zero'])
+    const { page, errors } = await r.open(`${slug}/${opened ? 'one' : 'zero'}`, { undo: 40 })
+    await page.waitForTimeout(600)
+    await page.keyboard.press('o')
+    await page.locator('#sheetRest').click()
+    await page.locator('#submitYes').click()
+    await waitFor(() => r.read(app).find(x => x.screen === 'One' && x.round === 3))
+    // The change is still there in round 4: it is asked, never held quietly as fixed.
+    r.push(app, ['One'], null, [], join(r.home, 'moved.png'))
+    const next = await r.open(`${slug}/one`, { undo: 60000 })
+    await next.page.locator('#asked [data-ask="1"]').waitFor({ timeout: 5000 })
+    assert.deepEqual([...errors, ...next.errors], [], app)
+  }
+})
+
+test('a held mark answered with no page at all is compared next with the picture it was seen fixed on, and found came back', { skip }, async () => {
+  const r = await rig()
+  const slug = await cameBackRound(r, 'Nopage')
+  const s = (await r.queue(slug)).screens[0]
+  // Round 3 sent with the rest by something that never compared: nothing flagged.
+  await fetch(`http://127.0.0.1:${r.port}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: slug, id: 'one', after: s.after, round: 3, verdict: 'approved', noComment: true, notes: 'No comment.', imageSize: null, shapes: [] }) })
+  r.push('Nopage', ['One'], null, [], join(r.home, 'moved.png'))
+  const { page, errors } = await r.open(slug, { undo: 60000 })
+  const row = page.locator('#asked [data-ask="1"]')
+  await row.waitFor({ timeout: 5000 })
+  assert.match(await row.innerText(), /Came back\?/)
+  assert.deepEqual(errors, [])
+})
+
+test('partial ticks say what the choices are, and Looks good for the rest says whose ticks it does not send', { skip }, async () => {
+  const r = await rig()
+  await twoRounds(r, 'Hints', three)
+  r.push('Hints', ['Two'], null)
+  const { page, errors } = await r.open('hints', { undo: 40 })
+  await page.locator('#asked').waitFor()
+  await page.locator('#asked [data-ask="1"] [data-ask-say="fixed"]').click()
+  assert.equal(await page.locator('#asked .ask-hint').innerText(), '2 still to check. Tick them, say which still stand, or press Looks good to say all are fixed.')
+  await page.locator('#asked [data-ask="2"] [data-ask-say="fixed"]').click()
+  assert.equal(await page.locator('#asked .ask-hint').innerText(), '1 still to check. Tick it, say it still stands, or press Looks good to say all are fixed.')
+  await page.keyboard.press('o')
+  await page.locator('#sheetRest').click()
+  await page.locator('#submitModal').waitFor()
+  assert.match(await page.locator('#submitBody').innerText(), /Your ticks on these are not sent: One/)
   assert.deepEqual(errors, [])
 })

@@ -145,7 +145,69 @@ export function leftBehind(round, read, isReal) {
     const draft = read(r)
     const marks = (draft?.marks ?? []).filter(isReal).length
     const notes = draft?.notes ?? ''
-    if (marks || notes.trim()) out.push({ round: r, marks, notes })
+    // Earlier marks ticked and never sent are lost to the new round too: they are counted, so none goes unsaid.
+    const ticks = Object.values(draft?.said ?? {}).filter(word => word === 'fixed' || word === 'stands').length
+    if (marks || notes.trim() || ticks) out.push({ round: r, marks, notes, ticks })
   }
   return out
+}
+
+/* ---------- marks become checks: what was asked for last time, at its place on the new picture ---------- */
+
+const ASK_WORDS = 8
+const cutWords = text => {
+  const words = String(text).trim().split(/\s+/)
+  return words.length > ASK_WORDS ? `${words.slice(0, ASK_WORDS).join(' ')}…` : words.join(' ')
+}
+const ASK_NAMES = { box: ['Box round', 'A box here'], arrow: ['Arrow at', 'An arrow here'], freehand: ['Drawn over', 'A line drawn here'], words: ['', 'Words chosen here'], text: ['', 'Words written here'], pin: ['Said:', 'Said here'], notes: ['Notes:', 'Notes'] }
+
+/** An earlier mark in a few words: what was written or said there, or the words under it, or else only what it was. */
+export function askWords(ask) {
+  const [lead, bare] = ASK_NAMES[ask.type] ?? ['Mark at', 'A mark here']
+  const said = ask.text || ask.words
+  if (!said) return bare
+  // Written or chosen words say it all. A box or an arrow is round the words under it, and a pin or notes say who said it.
+  return lead ? `${lead} “${cutWords(said)}”` : `“${cutWords(said)}”`
+}
+
+/**
+ * An earlier mark's place on the picture now, or null. Notes have none. On a picture of the same width that only grew or shrank
+ * in height, a page that got longer say, the place stays in pixels from the top. One shrunk or grown as a whole is scaled.
+ * Any other change of shape means the place cannot be trusted: null, and the page says its place may have moved.
+ */
+export function placeOn(ask, size) {
+  const box = ask?.box
+  if (!box || !size) return null
+  const from = ask.size?.w && ask.size?.h ? ask.size : size
+  if (from.w === size.w) return box.y < size.h ? { ...box, h: Math.min(box.h, size.h - box.y) } : null
+  const sx = size.w / from.w
+  const sy = size.h / from.h
+  if (Math.abs(sx - sy) > 0.02 * Math.max(sx, sy)) return null
+  return { x: box.x * sx, y: box.y * sx, w: box.w * sx, h: box.h * sx }
+}
+
+const overlaps = (a, b) => !!a && !!b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+/**
+ * A screen's earlier marks, as the page shows them. `open`: asked for and not yet ticked fixed in an answer. `back`: ticked
+ * fixed before, and the picture changed there again, so it may have come back. `held`: the other fixed ones, kept quietly.
+ * `changed` is where the picture differs from what it is compared with, in the picture's pixels, or a function giving that
+ * for each mark.
+ */
+export function askedOf(screen, changed = null, size = null) {
+  const all = Array.isArray(screen?.asked) ? screen.asked : []
+  const open = all.filter(a => a.state !== 'fixed')
+  const fixed = all.filter(a => a.state === 'fixed')
+  // Each held mark can be compared with a picture of its own: `changed` is then a function of the mark.
+  const boxesFor = typeof changed === 'function' ? changed : () => changed
+  const back = fixed.filter(a => (boxesFor(a) ?? []).some(box => overlaps(placeOn(a, size), box)))
+  return { open, back, held: fixed.filter(a => !back.includes(a)), rows: [...open, ...back] }
+}
+
+/** The bar's few words for them: what is left to tick, or that all are. Empty with nothing to show. */
+export function askedCount({ open, back }, said) {
+  const left = list => list.filter(a => !said[a.n]).length
+  const parts = [left(open) ? `${left(open)} to check` : '', left(back) ? `${left(back)} came back?` : ''].filter(Boolean)
+  if (parts.length) return { words: parts.join(', '), done: false }
+  return open.length + back.length ? { words: `${open.length + back.length} checked`, done: true } : { words: '', done: true }
 }

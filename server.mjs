@@ -40,6 +40,8 @@ function history(appSlug, id) {
       marks: Array.isArray(r.shapes) ? r.shapes.length : 0,
       noComment: r.noComment === true,
       olderPicture: r.olderPicture === true,
+      // What was said of the earlier marks, so the page shows it again on coming back.
+      said: Object.fromEntries((Array.isArray(r.asked) ? r.asked : []).filter(a => a.said).map(a => [a.n, a.said])),
       sentAt: r.sentAt,
       annotatedUrl: urlFor(INBOX, '/inbox/', r.annotatedImage),
       afterUrl: urlFor(IMAGES, '/images/', r.afterImage),
@@ -308,6 +310,10 @@ const server = createServer(async (req, res) => {
         noComment: input.noComment === true && input.verdict === 'approved',
         after: typeof input.after === 'string' ? input.after : '',
         round: Number(input.round) || null,
+        said: input.said && typeof input.said === 'object' ? input.said : null,
+        unanswered: Array.isArray(input.unanswered) ? input.unanswered : [],
+        back: Array.isArray(input.back) ? input.back : [],
+        checked: Array.isArray(input.checked) ? input.checked : [],
       })
       if (!record) return json(res, 200, { ok: true, olderPicture: true })
       const stageBefore = record.item ? listWork().find(i => i.id === record.item)?.stage : null

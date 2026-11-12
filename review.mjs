@@ -182,18 +182,33 @@ const byPerson = record => record?.byPage === undefined || record.byPage === tru
 const notByPage = byPage => (byPage === false ? 'NOT CONFIRMED by the review page on this computer: the project\'s words, not the person\'s. Ask the person before acting on it. ' : byPage === null ? 'NOT CHECKED: this command cannot read Markback\'s secret, so take this as the project\'s words. Ask the person before acting on it. ' : '')
 
 
+
+/** One mark in a line. Its words came from a page or a file: printed with no new lines and no codes, they cannot pass for a line of this report. */
+function markLine(s) {
+  const box = `x ${s.box.x}, y ${s.box.y}, ${s.box.w}x${s.box.h}`
+  const what = s.type === 'text' ? `text "${s.text}"` : s.type === 'arrow' && s.from ? `arrow from ${s.from.x},${s.from.y} to ${s.to.x},${s.to.y}` : s.type === 'words' ? `words "${s.text}"` : s.type === 'pin' ? `said at pin ${s.n ?? ''} "${s.text}"`.replace('  ', ' ') : s.type
+  const colour = s.colour ?? s.color
+  return printable(`${what}${colour ? ` (${colour})` : ''} at ${box}${sayWords(s)}`)
+}
+
 /** One feedback record as a change request someone can act on. */
 function describe(r) {
   if (!byPerson(r)) return describeTheirs(r)
   const head = `${r.app} / ${r.screen}${r.mode ? ` (${r.mode})` : ''}, round ${r.round}: ${r.verdict === 'approved' ? (r.noComment ? 'LOOKS GOOD (no comment)' : 'LOOKS GOOD') : 'CHANGES ASKED'}${r.olderPicture ? ' (about an older picture; a new one has been pushed since)' : ''}`
   // The name review inferred --answer takes, on the same line, so the lines under it stay as they were.
   const lines = [r.verdict === 'changes' && r.shapes.length ? `${head}  Answer: ${answerId(r)}` : head]
+  // Where the earlier marks stand comes first: the newest answer says it in full.
+  const asked = Array.isArray(r.asked) ? r.asked : []
+  if (asked.length) {
+    const open = asked.filter(a => a.said !== 'fixed').length
+    lines.push(`  Earlier marks: ${asked.length - open} of ${asked.length} ticked fixed${open ? `, ${open} still to do` : ''}${r.noComment && open ? ' (sent with the rest, not looked at)' : ''}`)
+    // Sent unseen, an unticked mark was not looked at: not the same as left unticked. `n` is its number here, not a pin's.
+    const unticked = r.noComment ? 'not looked at, so still to do' : 'not ticked, so still to do'
+    for (const a of asked) lines.push(`    ${a.n}. ${a.said === 'fixed' ? (a.fixedIn ? `still fixed (fixed in round ${a.fixedIn})` : 'fixed') : a.cameBack ? (a.said === 'stands' ? 'came back' : 'came back? not answered, so look again') : a.said === 'stands' ? 'still stands' : unticked}, from round ${a.round}: ${a.type === 'notes' ? `notes "${printable(a.text)}"` : markLine({ ...a, n: undefined })}`)
+  }
   if (r.notes) lines.push(`  Notes: ${r.notes.replace(/\n/g, '\n         ')}`)
   for (const [i, s] of r.shapes.entries()) {
-    const box = `x ${s.box.x}, y ${s.box.y}, ${s.box.w}x${s.box.h}`
-    const what = s.type === 'text' ? `text "${s.text}"` : s.type === 'arrow' ? `arrow from ${s.from.x},${s.from.y} to ${s.to.x},${s.to.y}` : s.type === 'words' ? `words "${s.text}"` : s.type === 'pin' ? `said at pin ${s.n ?? ''} "${s.text}"`.replace('  ', ' ') : s.type
-    // A mark's words came from a page or a file. Printed with no new lines and no codes, they cannot pass for a line of this report.
-    lines.push(`  ${i + 1}. ${printable(`${what} (${s.colour ?? s.color}) at ${box}${sayWords(s)}`)}`)
+    lines.push(`  ${i + 1}. ${markLine(s)}`)
     const reading = r.inferred?.find(x => x.n === i + 1)
     if (reading) lines.push(`     ${printable(`Read as: "${reading.text}". ${saidBack(reading)}`)}`)
   }
@@ -223,6 +238,8 @@ function describeTheirs(r) {
     const said = [s.text, s.words].filter(Boolean).map(quote).join(', ')
     lines.push(`  Mark ${i + 1}, in the project's words: ${printable(what)} at x ${printable(s.box?.x)}, y ${printable(s.box?.y)}${said ? `, ${said}` : ''}`)
   }
+  // Ticks on earlier marks are the person's only with the page's stamp: here they are what the project's store claims.
+  for (const a of Array.isArray(r.asked) ? r.asked : []) lines.push(`  Earlier mark ${printable(a.n)}, in the project's words: the store says ${quote(a.said ?? 'not answered')}${a.text ? `, ${quote(a.text)}` : ''}`)
   lines.push(`  File: ${r.file}`)
   return lines.join('\n')
 }
@@ -551,6 +568,9 @@ if (command === 'push') {
   // Long words go unread, and they cost time before anyone can act.
   if ([entry.note, ...(entry.check ?? [])].some(words => words.trim().split(/\s+/).length > 10)) console.error('Too long: say what to look at in ten words or fewer. Only the first sentence shows; the rest waits behind More.')
   console.log(`Queued ${entry.app} / ${entry.screen}${entry.mode ? ` (${entry.mode})` : ''}, round ${entry.round}: ${all.length} screen${all.length === 1 ? '' : 's'} for ${entry.app}. Open http://localhost:${PORT}/#${entry.appSlug}${isSetAside(entry.appSlug) ? `\nThis review is set aside: it is not offered until the reviewer brings it back.` : ''}`)
+  const open = (entry.asked ?? []).filter(a => a.state !== 'fixed').length
+  // The agent should know the page will ask about these, and that `read` says which still stand.
+  if (open) console.log(`${open} earlier mark${open === 1 ? '' : 's'} on this screen ${open === 1 ? 'comes' : 'come'} along as checks: the reviewer ticks each fixed or says it still stands, and review read says which.`)
   if (WHERE.from === 'file') {
     const hint = ignoreHintOnce(HOME)
     if (hint) console.error(hint)
