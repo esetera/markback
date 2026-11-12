@@ -150,7 +150,7 @@ It writes `.markback`, a small JSON file such as `{ "home": ".markback-store", "
 - The agent pushes its own screenshots with `review push`. `review see` and `review project` need Chrome, and say so at once.
 - Pushing only writes files, so it works with no page running, and says so. You run `review start` in the project's folder, outside the sandbox, and the page shows everything the agent pushed. `review wait` and `review read` in the sandbox read your answers from the same files.
 - The store is the first of: `--home <folder>` on the command, `REVIEW_HOME`, `.markback`, then `~/.review-wizard`.
-- Point `--home`, `REVIEW_HOME` and `.markback` only at a folder you made. Any store but `~/.review-wizard` is a project store: it may have come with a project, so what it holds is the project's words until the review page on this computer confirms it. The page stamps your answers, approvals and notes with a secret kept in `~/.review-wizard`. `review work`, `review read`, `review show` and the hooks say which store they use, and say "not confirmed" for anything without that stamp. They never give it to the agent as your decision.
+- Point `--home`, `REVIEW_HOME` and `.markback` only at a folder you made. Any store but `~/.review-wizard` is a project store: it may have come with a project, so what it holds is the project's words until the review page on this computer confirms it. The page stamps your answers, approvals, choices and notes with a secret kept in `~/.review-wizard`. `review work`, `review read`, `review show` and the hooks say which store they use, and say "not confirmed" for anything without that stamp. They never give it to the agent as your decision.
 - If another store's page holds the port, a push says so. `review start` then moves this store to a free port, keeps it, and says the address.
 - Markback says which store it uses whenever `.markback` chose it. Once, when the file is written and on the first push, it suggests adding the store to `.gitignore` if no `.gitignore` leaves it out. It never changes `.gitignore` itself.
 - Markback looks for `.markback` in this folder and the ones above it: up to the top of the git repository, or up to your home folder, not including it. It skips a file in a folder anyone can write to, or one that belongs to someone else, and says so.
@@ -267,6 +267,7 @@ Moving into another review is never quiet. A full overlay says what was finished
 | 1–4 | Red, amber, blue, black |
 | ⌘Z / ⇧⌘Z | Undo / redo a mark |
 | + − 0 | Zoom in, zoom out, fit. On a tall picture, 0 again shows the whole of it |
+| A–F | On a choice: choose that option. There, they come before the tools that share them |
 | N | Write notes on this screen |
 | G | Looks good, and on to the next |
 | ⌘Enter | Send, and on to the next |
@@ -285,6 +286,15 @@ Say what to look at in ten words or fewer. Longer words wait behind More, and `p
 
 The pictures are copied, so scratch files can go away. Pushing the same app, screen and mode again starts round 2 on
 the same step. The marks and notes sent on round 1 come along as checks: the page asks the person whether each is fixed, and `push` says how many.
+
+### Ask the person to choose
+
+```
+review choose --app Brochure --question "Which layout for page 2?" \
+  --option A=a.png --option B=b.png --option "Equal panels=c.png"
+```
+
+Two to six options, side by side as one screen: a lineup. The question is the heading, and a big Choose button stands over each option. The person chooses by the button, by clicking an option, by pressing its letter, or by pointing with the speak tool and saying "this one". Change choice takes it back before it goes. They can mark up an option and write notes as on any screen, then press Send or Looks good. `review read` says which option was chosen, and which option each mark is on. Give the options in order, as PNG, JPEG, WebP or GIF pictures (SVG is refused); a short label before the last `=` is shown under the button. A choice is never made for the person: a lineup with nothing chosen is left waiting by Looks good for the rest and by moving on. Sent with marks or notes and nothing chosen, it goes as changes asked, "none of these", and `review read` says "Chose none".
 
 ### A PDF
 

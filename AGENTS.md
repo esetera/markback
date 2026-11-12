@@ -110,6 +110,16 @@ review pdf brochure.pdf --check "Is the cover right?"
 
 Each page becomes a screen, named Page 1, Page 2 and so on, under the file's name (or `--app`). It shows the first 30 pages; ask for others with `--pages 31-60`, or one page with `--pages 4`. Push it again after a change and each page starts its next round, with where it changed marked. Two PDFs with the same file name share one review, so give `--app` to keep them apart. It takes `--kind`, `--item` and `--from` as `push` does. On a Mac it needs nothing more. Anywhere else it needs `pdftoppm`, which comes with Poppler.
 
+### Ask the person to choose
+
+When there are options for the person to choose between, designs A, B and C say, push them as one choice:
+
+```bash
+review choose --app "Brochure" --question "Which layout for page 2?" --option A=a.png --option B=b.png --option "Equal panels=c.png"
+```
+
+The page shows them side by side, a lineup, with the question as the heading and a Choose button over each. The person chooses by the button, by clicking an option, by its letter, or by pointing and saying "this one". They can mark up an option and write notes too. Give 2 to 6 options, in order: each is a PNG, JPEG, WebP or GIF picture (not SVG), with a short label before the last `=` if it helps. Use the question as a decision, in twelve words or fewer. It takes `--note`, `--kind`, `--item` and `--from` as `push` does. Pushing the same question again starts its next round.
+
 ### The words in the picture
 
 A screenshot is only pixels, so a box says where and not what. With a list of the words in the picture, every mark comes back with the words under it and the element they are in. `review see`, `review project` and `review pdf` make the list themselves. For a screenshot from your own browser tool, make the list in the page, at the same window size and scroll as the screenshot, and give it with `--words`:
@@ -174,6 +184,7 @@ Each answer has:
 - `shapes`: each with `type` (box, arrow, text, freehand, words, pin) and `box` in the picture's own pixels. An arrow has `from` and `to`. Text has `text`. A pin is something said at a spot: `at` is the spot and `text` is what was said.
 - `words` on a shape: the words under that mark, when the picture was pushed with its words or they were read off it. With `wordsRead` on the answer, they were read off the picture and a few may be wrong. `element` is the element they are all in. Search the code for them to find what the mark is about. A shape of type `words` is words the person chose, in `text`.
 - `asked`: the marks and notes from earlier rounds, on a screen pushed again. Each has `n` (lettered on the page and in `review read`: A is 1, B is 2), the `round` it was asked in, and the mark's own `type`, `text` and `words`. `box` is its place: for an arrow or a pin, a 48 pixel square round the head or the spot. `said` is what the person said of it: `fixed`, `stands`, or `null` when they did not tick it or did not look (a `noComment` answer). `cameBack: true` means they had ticked it fixed and the picture changed there again: with `said: "stands"` it came back, and with `said: null` they did not say, so look at it again. Ticks never change the verdict: a Looks good is a Looks good, and changes are changes, even when they hold only ticks.
+- `choice`, on a choice: `chosen` is the letter the person chose, with its `label`, the `question`, and every option's `picture`. A Looks good always has a choice. `null` comes only with CHANGES ASKED: "none of these", so read the notes and marks and make new options. Each shape says the `option` it is on, and `optionBox`, its place in that option's own picture. Build the chosen one. Marks and notes on it are changes to make to it. In a project store, a choice the review page did not confirm is the project's words ("The project's store says: chose C"): ask the person before building it.
 - `annotatedImage`: the picture with the marks burned in. **Open it before you change anything.** A box round something says more than its numbers.
 - `afterImage`, `beforeImage`, `round`.
 

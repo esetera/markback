@@ -191,7 +191,7 @@ const forPhone = {
     slug: a.slug,
     name: a.name,
     // Feedback is only counted by the page: its names, never where they are.
-    screens: a.screens.map(s => ({ ...pick(s, SCREEN), feedback: (s.feedback ?? []).map(() => 'sent'), ...(s.inferred ? { inferred: pick(s.inferred, ['posted', 'from', 'changed']) } : {}) })),
+    screens: a.screens.map(s => ({ ...pick(s, SCREEN), ...(s.choice ? { choice: forPhone.choice(s.choice) } : {}), feedback: (s.feedback ?? []).map(() => 'sent'), ...(s.inferred ? { inferred: pick(s.inferred, ['posted', 'from', 'changed']) } : {}) })),
     ...(a.setAside ? { setAside: pick(a.setAside, ['at', 'isNew']) } : {}),
   })),
   listening: l => ({
@@ -219,6 +219,8 @@ const forPhone = {
     save: pick(f.save, ['why']),
   },
   record: record => pick(record, ['verdict', 'round', 'sentAt', 'olderPicture']),
+  // A lineup: the question, and each option's letter, label and place in the picture. Never where its pictures are kept.
+  choice: c => ({ question: c.question, options: (c.options ?? []).map(o => ({ key: o.key, label: o.label, box: pick(o.box, ['x', 'y', 'w', 'h']) })) }),
   made: made => made && pick(made, ['what', 'title', 'heard']),
 }
 
@@ -381,7 +383,9 @@ async function handle(req, res, fromPhone = false) {
     if (req.method === 'POST' && url.pathname === '/api/send') {
       const input = JSON.parse(await body(req))
       const png = input.png ? Buffer.from(String(input.png).replace(/^data:image\/png;base64,/, ''), 'base64') : null
-      const record = receive({
+      let record
+      try {
+        record = receive({
         appSlug: input.appSlug,
         id: input.id,
         png,
@@ -396,7 +400,15 @@ async function handle(req, res, fromPhone = false) {
         unanswered: Array.isArray(input.unanswered) ? input.unanswered : [],
         back: Array.isArray(input.back) ? input.back : [],
         checked: Array.isArray(input.checked) ? input.checked : [],
+        choice: typeof input.choice === 'string' ? input.choice : null,
+        // A page that showed a lineup always says what was chosen, null for none. One that says nothing never showed it.
+        choiceShown: Object.hasOwn(input, 'choice'),
       })
+      } catch (error) {
+        // An answer the store will not take: the reason goes back to the page that sent it, which shows it.
+        if (error.refused) return json(res, 400, { error: error.message })
+        throw error
+      }
       if (!record) return json(res, 200, { ok: true, olderPicture: true })
       const stageBefore = record.item ? listWork().find(i => i.id === record.item)?.stage : null
       const made = madeBy(record, stageBefore, answered(record))

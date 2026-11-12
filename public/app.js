@@ -93,8 +93,9 @@ const KEYS = [
     [['+', '−'], 'Zoom in, zoom out'], [['0'], 'Fit the screen. On a tall one: the whole of it'], [['⌘', 'scroll'], 'Zoom'],
   ]],
   ['Answering', [
+    [['A', '–', 'F'], 'On a choice: choose that option'],
     [['N'], 'Write notes on this screen'],
-    [['D'], 'Speak at a spot: click on the picture, then say it'],
+    [['D'], 'Speak at a spot: click on the picture, then say it. On a choice of four or more, D chooses D: use the speak button'],
     [['⇧', 'D'], 'Speak your notes into the notes box'],
     [['G'], 'Looks good, then on to the next'],
     [['⌘', '↩'], 'Send, then on to the next'],
@@ -222,7 +223,8 @@ function draftOf(s) {
   const notes = saved?.notes ?? ''
   // What was said of the earlier marks counts only on the picture it was said on: their numbers belong to it.
   const said = (sure && saved?.said) || {}
-  const d = { after: s.after, marks, notes, said, back: (sure && saved?.back) || [], checked: (sure && saved?.checked) || [], good: sure && !!saved?.good, pending: sure && !!saved?.pending, pendingAt: (sure && saved?.pendingAt) || 0, unsure: !sure && (marks.some(isReal) || !!notes.trim()), undo: [], redo: [] }
+  // Which option of a choice was chosen: a letter, kept with the picture it was chosen on.
+  const d = { after: s.after, choice: (sure && saved?.choice) || null, marks, notes, said, back: (sure && saved?.back) || [], checked: (sure && saved?.checked) || [], good: sure && !!saved?.good, pending: sure && !!saved?.pending, pendingAt: (sure && saved?.pendingAt) || 0, unsure: !sure && (marks.some(isReal) || !!notes.trim()), undo: [], redo: [] }
   drafts.set(key, d)
   return d
 }
@@ -230,7 +232,7 @@ function draftOf(s) {
 const leftBehindOn = s => leftBehind(s.round, r => store.get(`${s.appSlug}/${s.id}/${r}`), isReal)
 const saveDraft = s => {
   const d = draftOf(s)
-  store.set(keyOf(s), d.marks.length || d.notes.trim() || d.good || Object.keys(d.said).length || d.back?.length ? { marks: d.marks, notes: d.notes, said: d.said, back: d.back, checked: d.checked, good: d.good, pending: d.pending, pendingAt: d.pendingAt, after: d.unsure ? undefined : s.after } : null)
+  store.set(keyOf(s), d.marks.length || d.notes.trim() || d.good || d.choice || Object.keys(d.said).length || d.back?.length ? { marks: d.marks, notes: d.notes, said: d.said, back: d.back, checked: d.checked, good: d.good, choice: d.choice, pending: d.pending, pendingAt: d.pendingAt, after: d.unsure ? undefined : s.after } : null)
 }
 /** What this screen's draft would send: 'changes', 'approved', or null when nothing is on it yet. */
 function verdictOf(s) {
@@ -239,13 +241,17 @@ function verdictOf(s) {
   if (marksOrNotes(d) || stands(d)) return 'changes'
   // A tick never answers a screen. On a picture already answered with changes this round, it is an update to them.
   if (fixedTicks(d) && s.status === 'sent') return 'changes'
+  // A choice made, and nothing asked of it: the chosen option as it is.
+  if (s.choice && d.choice) return 'approved'
   return d.good ? 'approved' : null
 }
 const marksOrNotes = d => d.marks.some(isReal) || !!d.notes.trim()
 /** Only Fixed ticks on it: no marks, no notes, nothing said to stand. They ride along with an answer, and never go by themselves. */
 const fixedTicks = d => !marksOrNotes(d) && !stands(d) && Object.keys(d.said).length > 0
 /** What goes without a press of Send: the same, but Fixed ticks alone stay in the draft and the screen waits. */
-const goesOf = s => (fixedTicks(draftOf(s)) && !draftOf(s).good ? null : verdictOf(s))
+/** A lineup with nothing chosen. A choice is never made for the person: it goes only when they send it themselves. */
+const needsChoice = s => !!s.choice && !draftOf(s).choice
+const goesOf = s => (needsChoice(s) || (fixedTicks(draftOf(s)) && !draftOf(s).good) ? null : verdictOf(s))
 /** Every earlier mark still asked for is ticked fixed, and no "came back?" waits for an answer. */
 function allChecked(s) {
   const said = saidOf(s)
@@ -273,7 +279,9 @@ const placeOf = a => placeIn(a, state.apps)
 const sentHere = new Set()
 /** Waiting, and not answered here on its way to the server. */
 const openOf = a => waitingOf(a).filter(s => !queued.has(keyOf(s)))
-const setOf = a => (a ? a.screens.filter(s => s.status === 'waiting' || goesOf(s)) : [])
+const setOf = a => (a ? a.screens.filter(s => !needsChoice(s) && (s.status === 'waiting' || goesOf(s))) : [])
+/** Lineups still waiting for a choice: Looks good for the rest leaves them, and says so. */
+const unchosenOf = a => (a ? a.screens.filter(s => s.status === 'waiting' && needsChoice(s) && !queued.has(keyOf(s))) : [])
 function tallyOf(a) {
   const set = setOf(a)
   const changes = set.filter(s => goesOf(s) === 'changes')
@@ -1040,6 +1048,12 @@ function endPin({ keepMic = false } = {}) {
   // A phrase still being heard stays with this pin as far as it got. The rest of it must not land in the next box.
   mic.listener?.skip()
   if (p.startedMic && !keepMic && mic.listener?.on) mic.listener.stop()
+  // On a choice, "this one" said at a spot chooses the option there, and is no mark.
+  const s = screen()
+  if (s?.choice && THIS_ONE.test(p.text)) {
+    paint()
+    return choose(optionNear(s, p.at[0])?.key ?? null)
+  }
   // A mark with a place and its words. The far corner only says it is a real mark to the shared drawing code.
   // The size it was seen at goes with it, so the marked picture shows it as the screen did.
   if (p.text) commit({ tool: 'pin', a: p.at, b: [p.at[0] + 24, p.at[1] + 24], color: p.color, text: p.text, n: p.n, size: state.size ? textFor(markWidth()) : undefined })
@@ -1328,7 +1342,9 @@ function renderFoot(a, s) {
   // Not where changes were sent on this picture: there Looks good would drop them.
   const lit = s && !v && s.status !== 'sent' && allChecked(s)
   const off = !s ? ' disabled' : ''
-  setHtml($('footActions'), `<button class="btn${good ? ' good-on' : lit ? ' good-lit' : ''}" data-act="good"${off} ${tip(good ? 'Looking good; press to take it back' : 'Looks good, and on to the next', 'G')}>${good ? ICONS.check : ''}Looks good</button><button class="btn primary" data-act="send"${v !== 'changes' ? ' disabled' : ''} ${tip('Send your marks and notes, and on to the next', '⌘↩')}>Send</button>`)
+  // A choice made goes by Send too: choosing is the answer.
+  const sends = v === 'changes' || (!!s?.choice && v === 'approved')
+  setHtml($('footActions'), `<button class="btn${good ? ' good-on' : lit ? ' good-lit' : ''}" data-act="good"${off} ${tip(good ? 'Looking good; press to take it back' : 'Looks good, and on to the next', 'G')}>${good ? ICONS.check : ''}Looks good</button><button class="btn primary" data-act="send"${sends ? '' : ' disabled'} ${tip(s?.choice ? 'Send your choice, marks and notes, and on to the next' : 'Send your marks and notes, and on to the next', '⌘↩')}>Send</button>`)
 }
 
 /* ---------- a change of review: unmissable, and it waits for a press ---------- */
@@ -1650,6 +1666,7 @@ function render() {
   $('stopHere').hidden = !s
   document.body.classList.toggle('no-apps', state.loaded && !state.apps.length)
   $('notes').disabled = !s
+  if (!s) renderLineup(null)
   if (!a) {
     renderAsked(null)
     renderKind(null)
@@ -1689,6 +1706,7 @@ function render() {
   $('pair').className = `pair view-${state.view}`
   $('scroller').className = `scroller tool-${toolNow()}`
   $('afterCaption').textContent = state.view === 'side' ? 'After (draw here)' : 'After'
+  renderLineup(s)
 
   if (state.shownKey !== keyOf(s) + s.after) showPicture(s)
   const notes = draftOf(s).notes
@@ -1702,6 +1720,101 @@ function render() {
   updateButtons()
   paint()
   preloadAround(a)
+}
+
+/* ---------- a choice: the options side by side, a button over each, the question as the heading ---------- */
+
+/** Said at a spot on a lineup, these choose the option there. */
+const THIS_ONE = /^(?:i (?:choose|pick|want) )?(?:this|that)(?: one)?[.!]*$/i
+const keysWords = s => {
+  const keys = s.choice.options.map(o => o.key)
+  return `${keys.slice(0, -1).join(', ')} or ${keys.at(-1)}`
+}
+/** The option at a place across the lineup. In a gap, the nearest. */
+function optionNear(s, x) {
+  const options = s?.choice?.options ?? []
+  if (!options.length || !Number.isFinite(x)) return null
+  return options.find(o => x >= o.box.x && x <= o.box.x + o.box.w) ?? options.reduce((near, o) => (Math.abs(o.box.x + o.box.w / 2 - x) < Math.abs(near.box.x + near.box.w / 2 - x) ? o : near))
+}
+/** One choice at a time. Choosing the same again keeps it; null takes it back. Marks and notes stay with the screen. */
+function choose(key) {
+  const s = screen()
+  if (!s?.choice || onDonePage()) return
+  const d = draftOf(s)
+  const next = s.choice.options.some(o => o.key === key) ? key : null
+  if (d.choice === next) return
+  touched(s)
+  d.choice = next
+  // A Looks good given before is about no choice, or another one.
+  d.good = false
+  saveDraft(s)
+  render()
+  refreshLists()
+}
+const lineupRoom = () => {
+  const s = screen()
+  return s?.choice && state.view === 'after' ? $('lineupHead').offsetHeight + $('lineupRow').offsetHeight + 12 : 0
+}
+function renderLineup(s) {
+  const on = !!s?.choice
+  document.body.classList.toggle('lineup', on)
+  $('lineupHead').hidden = $('lineupRow').hidden = !on
+  if (!on) return
+  const chosen = draftOf(s).choice
+  const named = s.choice.options.find(o => o.key === chosen)
+  // The heading names the decision. The line under it says how to choose, or what was chosen and what can follow.
+  setHtml($('lineupHead'), `<div class="lineup-words"><h1 id="lineupQuestion">${esc(s.choice.question)}</h1><p class="lineup-status" role="status">${named ? `You chose ${esc(named.key)}${named.label ? `, ${esc(named.label)}` : ''}. Send it, or mark it up first.` : (onPhone() ? 'Tap a choice.' : `Click a choice or press ${esc(keysWords(s))}.`)}</p></div>${named ? `<button class="btn" data-unchoose ${tip('Take the choice back')}>Change choice</button>` : ''}`)
+  setHtml($('lineupRow'), s.choice.options.map(o => {
+    const is = o.key === chosen
+    const name = `${is ? 'Chosen' : 'Choose'} ${o.key}${o.label ? `: ${o.label}` : ''}`
+    return `<button class="choose${is ? ' on' : ''}" data-choose="${esc(o.key)}" aria-pressed="${is}" aria-label="${esc(name)}" title="${esc(name)}">${is ? ICONS.check : ''}<span class="choose-key"><span class="choose-word">${is ? 'Chosen' : 'Choose'} </span>${esc(o.key)}</span><kbd aria-hidden="true">${esc(o.key)}</kbd>${o.label ? `<span class="choose-label">${esc(o.label)}</span>` : ''}</button>`
+  }).join(''))
+  placeLineup()
+}
+/** Each button centred over its option, at whatever zoom: placed as a share of the picture's width. */
+function placeLineup() {
+  const s = screen()
+  if (!s?.choice || !state.size) return
+  const wide = Math.round(state.size.w * state.zoom)
+  $('lineupRow').style.width = $('lineupHead').style.width = `${wide}px`
+  for (const b of $('lineupRow').querySelectorAll('[data-choose]')) {
+    const o = s.choice.options.find(x => x.key === b.dataset.choose)
+    if (!o) continue
+    b.style.left = `${((o.box.x + o.box.w / 2) / state.size.w) * 100}%`
+    // As wide as its words, never past its option: with no room for them, only the letter, the rest in its tooltip.
+    const room = Math.max(28, Math.round(o.box.w * state.zoom) - 6)
+    b.style.minWidth = `${Math.min(168, room)}px`
+    b.classList.remove('tight', 'tighter')
+    if (b.offsetWidth > room) b.classList.add('tight')
+    if (b.offsetWidth > room) b.classList.add('tighter')
+    const words = b.querySelector('.choose-label')
+    if (words) {
+      words.style.maxWidth = `${room}px`
+      // Measured shown: a hidden one has no width.
+      words.hidden = false
+      words.hidden = words.scrollWidth > room
+    }
+  }
+}
+/** The chosen option, outlined on screen only: the marked picture sent back shows the marks, and the answer says which. */
+function paintChosen(ctx, s) {
+  const o = s.choice?.options.find(x => x.key === draftOf(s).choice)
+  if (!o) return
+  const w = Math.max(4, Math.round(3 / state.zoom))
+  ctx.save()
+  ctx.strokeStyle = COLOURS.find(c => c.id === 'blue').value
+  ctx.lineWidth = w
+  ctx.strokeRect(o.box.x + w / 2, o.box.y + w / 2, o.box.w - w, o.box.h - w)
+  ctx.restore()
+}
+$('lineupRow').onclick = event => {
+  const b = event.target.closest('[data-choose]')
+  if (b) choose(b.dataset.choose)
+}
+$('lineupHead').onclick = event => {
+  if (!event.target.closest('[data-unchoose]')) return
+  choose(null)
+  $('lineupRow').querySelector('[data-choose]')?.focus()
 }
 
 /* ---------- the picture: ready before it is asked for, swapped in one step ---------- */
@@ -2823,6 +2936,7 @@ function paint() {
   if (sentMarks.img) ctx.drawImage(sentMarks.img, 0, 0, state.size.w, state.size.h)
   if (state.changesOn && changes.boxes?.length) paintChanged(ctx, changes.boxes, state.size.w, state.size.h)
   paintAsked(ctx, s)
+  paintChosen(ctx, s)
   const all = [...draftOf(s).marks, ...(draft ? [draft] : [])]
   paintWords(ctx, all.filter(isWords))
   paintMarks(ctx, all.filter(m => !isWords(m) && !isPin(m)))
@@ -2849,6 +2963,7 @@ function applyZoom() {
   }
   $('zoomValue').hidden = state.fitted
   $('zoomValue').textContent = `${Math.round(state.zoom * 100)}%`
+  placeLineup()
   placeReadings()
 }
 /**
@@ -2888,7 +3003,7 @@ const SHRUNK = 0.75
 /** The room a picture has, and how many share it. */
 const roomNow = () => {
   const box = $('scroller')
-  return { room: { width: box.clientWidth - 14 - askedRoom(), height: box.clientHeight - 14 - (state.view === 'after' ? 0 : 24) }, across: state.view === 'side' ? 2 : 1 }
+  return { room: { width: box.clientWidth - 14 - askedRoom(), height: box.clientHeight - 14 - (state.view === 'after' ? 0 : 24) - lineupRoom() }, across: state.view === 'side' ? 2 : 1 }
 }
 /**
  * The zoom a picture is fitted at. Most are shown whole. A tall one that has to be shrunk to a narrow strip, a page of a PDF
@@ -2898,6 +3013,8 @@ const roomNow = () => {
 function fittedZoom(room, across = 1) {
   const { w, h } = state.size
   const all = fitZoom(room, { width: w, height: h }, across)
+  // A lineup is always whole, however small that makes it: every option in view is the point of it.
+  if (screen()?.choice) return Math.min(all, room.width / w, room.height / h)
   // Shrunk only a little, it stays whole: a picture that nearly fits should not scroll by a few lines.
   if (state.whole || all >= SHRUNK || all * w >= TOO_NARROW) return all
   const each = (room.width - (across - 1) * 16) / across
@@ -2927,6 +3044,14 @@ function fit() {
   state.zoom = fittedZoom(room, across)
   state.fitted = true
   applyZoom()
+  // A lineup's heading is as wide as the picture, so the new width can wrap it onto another line: measured again until it holds.
+  // Only ever smaller, so it settles: a narrower heading is never shorter.
+  for (let again = 0; again < 4 && screen()?.choice; again++) {
+    const next = fittedZoom(roomNow().room, across)
+    if (next > state.zoom - 0.0005) break
+    state.zoom = next
+    applyZoom()
+  }
 }
 /** The fit key. On a tall picture already fitted, it turns between filling the width and showing the whole of it. */
 function fitAgain() {
@@ -2965,6 +3090,8 @@ const at = event => {
   return [((event.clientX - r.left) * state.size.w) / r.width, ((event.clientY - r.top) * state.size.h) / r.height]
 }
 let pan = null
+/** Where the press began, to tell a click from a drag. */
+let pressed = null
 /** The finger or mouse that is drawing now. A second finger put down meanwhile is not a second mark. */
 let drawingWith = null
 /** On a phone a finger on the picture moves it, until Mark brings the tools out. */
@@ -2989,6 +3116,7 @@ $('canvas').addEventListener('pointerdown', event => {
     drawingWith = null
     return void startPin(p)
   }
+  pressed = { x: event.clientX, y: event.clientY, at: p }
   const w = strokeFor(markWidth())
   const words = toolNow() === 'words' ? wordsNow() : null
   if (words) {
@@ -3015,7 +3143,17 @@ $('canvas').addEventListener('pointermove', event => {
   else draft = draft.tool === 'pen' ? { ...draft, points: [...draft.points, p] } : { ...draft, b: p }
   paint()
 })
-const finish = () => {
+const finish = event => {
+  // On a choice, a click that drew nothing chooses the option under it. A drag is a mark, never a choice.
+  const click = pressed && event?.type === 'pointerup' && Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) < 6 ? pressed.at : null
+  pressed = null
+  if (click && screen()?.choice) {
+    pan = null
+    draft = null
+    drawingWith = null
+    paint()
+    return choose(optionNear(screen(), click[0])?.key ?? null)
+  }
   pan = null
   drawingWith = null
   if (!draft) return
@@ -3027,9 +3165,12 @@ const finish = () => {
   else paint()
 }
 $('canvas').addEventListener('click', event => {
-  if (state.size && state.tool === 'text' && !textEntry && mayDraw({ pointerType: touchLast ? 'touch' : 'mouse' })) openTextEntry(event)
+  const finger = { pointerType: touchLast ? 'touch' : 'mouse' }
+  // On a phone, before Mark, a finger only moves the picture: a tap on a lineup's option still chooses it.
+  if (state.size && screen()?.choice && !mayDraw(finger)) return choose(optionNear(screen(), at(event)[0])?.key ?? null)
+  if (state.size && state.tool === 'text' && !textEntry && mayDraw(finger)) openTextEntry(event)
 })
-$('canvas').addEventListener('pointerup', event => event.pointerId === drawingWith && finish())
+$('canvas').addEventListener('pointerup', event => event.pointerId === drawingWith && finish(event))
 // The system took the touch away, for a gesture of its own: half a mark is not a mark.
 $('canvas').addEventListener('pointercancel', event => {
   if (event.pointerId !== drawingWith) return
@@ -3092,6 +3233,7 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
   const list = d.marks
   const words = d.notes
   const said = d.said
+  const chosen = d.choice ?? null
   const marks = verdict === 'approved' ? [] : list.filter(isReal)
   const out = verdict === 'approved' || !img ? null : burnCanvas(img, marks.filter(m => !isWords(m) && !isPin(m)))
   const ctx = (out ?? document.createElement('canvas')).getContext('2d')
@@ -3110,6 +3252,7 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
     shapes: marks.map(m => (isWords(m) ? wordsShape(m) : isPin(m) ? pinShape(m, wide) : shapeOf(m, ctx))),
     imageSize: size,
     png,
+    ...(s.choice ? { choice: chosen } : {}),
     // The ticks ride along with the answer, and the held marks flagged on it go too. Sent with the rest, unseen, it ticks nothing.
     ...askedPart(s, { ...d, said }, { noComment }),
   }
@@ -3121,7 +3264,7 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
   if (!res.ok) throw new Error(result.error || 'The server did not take it.')
   // Drawn or written while this was on its way: that has not gone, and stays.
   const now = drafts.get(key) ?? d
-  if (now.marks !== list || now.notes !== words || now.said !== said) {
+  if (now.marks !== list || now.notes !== words || now.said !== said || (now.choice ?? null) !== chosen) {
     now.marks = now.marks.filter(m => !list.includes(m))
     if (now.notes === words) now.notes = ''
     if (now.said === said) now.said = {}
@@ -3265,7 +3408,7 @@ addEventListener('pagehide', () => {
     if (job.going || job.verdict !== 'approved') continue
     clearTimeout(job.timer)
     queued.delete(key)
-    const body = { appSlug: job.s.appSlug, id: job.s.id, after: job.s.after, round: job.s.round, verdict: 'approved', notes: job.noComment ? 'No comment.' : '', shapes: [], imageSize: null, png: null, ...askedPart(job.s, draftOf(job.s), { noComment: job.noComment }), ...(job.noComment ? { noComment: true } : {}) }
+    const body = { appSlug: job.s.appSlug, id: job.s.id, after: job.s.after, round: job.s.round, verdict: 'approved', notes: job.noComment ? 'No comment.' : '', shapes: [], imageSize: null, png: null, ...(job.s.choice ? { choice: draftOf(job.s).choice ?? null } : {}), ...askedPart(job.s, draftOf(job.s), { noComment: job.noComment }), ...(job.noComment ? { noComment: true } : {}) }
     // The draft stays: nothing here can know this arrived. The next look clears it if it did, and sends it if it did not.
     void fetch('/api/send', { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => undefined)
   }
@@ -3350,7 +3493,8 @@ function sendCurrent() {
   if (v !== 'changes') return
   const wasWaiting = s.status === 'waiting'
   queueAnswer(s, 'changes')
-  toast('Sent', label(s), { undo: true })
+  // Sent with no choice is a plain "none of these", and says so.
+  toast(s.choice ? (draftOf(s).choice ? `Chose ${draftOf(s).choice}, with changes` : 'Sent without a choice: none of these') : 'Sent', label(s), { undo: true })
   moveOn(wasWaiting)
 }
 
@@ -3360,6 +3504,11 @@ async function looksGood(byKey = false) {
   if (!s || onDonePage()) return
   closeTextEntry(true)
   const d = draftOf(s)
+  // A Looks good on a lineup says nothing until one is chosen: which one would it be? One answered already is passed by.
+  if (s.choice && !d.choice && s.status !== 'approved') {
+    toast('Choose one first', `Press ${keysWords(s)}, or click an option.`)
+    return
+  }
   // Only what has been seen can be passed. The last picture stays up until this one comes, and must not answer for it.
   if (!state.size && !(d.good && verdictOf(s) === 'approved')) {
     toast(state.broken === s.after ? 'This picture did not load, so it cannot be passed.' : 'The picture has not come yet.')
@@ -3400,7 +3549,7 @@ async function looksGood(byKey = false) {
   const wasWaiting = s.status === 'waiting'
   d.good = true
   queueAnswer(s, 'approved')
-  toast('Looks good', label(s), { undo: true })
+  toast(s.choice ? `Chose ${d.choice}` : 'Looks good', label(s), { undo: true })
   moveOn(wasWaiting)
 }
 
@@ -3413,7 +3562,8 @@ function openSubmit() {
   closeTextEntry(true)
   closeMenu()
   const t = tallyOf(a)
-  if (!t.set.length) return
+  const unchosen = unchosenOf(a)
+  if (!t.set.length && !unchosen.length) return
   const left = t.untouched.filter(s => leftBehindOn(s).length)
   // Ticks alone are not an answer: these go as not looked at, and the person is told before they go.
   const ticked = t.untouched.filter(s => fixedTicks(draftOf(s)))
@@ -3421,6 +3571,7 @@ function openSubmit() {
   setHtml($('submitBody'), `<div class="summary">
     ${[['draft-changes', 'With marks or notes', t.changes], ['draft-good', 'Looks good', t.good], ['draft-good', 'No comment, counts as Looks good', t.untouched]].map(([mk, title, list]) => (list.length ? `<div class="srow"><span class="line"><i class="mk ${mk}"></i></span><span class="line">${title}</span><span class="line count">${list.length}</span></div><div class="names">${names(list)}</div>` : '')).join('')}
     ${left.length ? `<div class="names warn">${names(left)}: marks or notes on an older picture were not sent. See Earlier answers.</div>` : ''}
+    ${unchosen.length ? `<div class="names warn">Choose one first: ${names(unchosen)}. ${unchosen.length === 1 ? 'It waits' : 'They wait'} for your choice.</div>` : ''}
     ${ticked.length ? `<div class="names warn">Your ticks on these are not sent: ${names(ticked)}. Go back and press Looks good or Send on each to send them.</div>` : ''}
   </div>`)
   $('submitStatus').textContent = ''
@@ -4330,6 +4481,9 @@ document.addEventListener('keydown', event => {
   if (mod || event.altKey) return
   if (drawerOpen() && key !== 'l' && key !== 'L' && key !== '\\') return
   if (key === 'Enter' && state.stopped && event.target.tagName !== 'BUTTON') return goOn()
+  // On a lineup, its letters choose: they come before the tools and the other keys that share them.
+  const lineup = !onDonePage() && $('menu').hidden ? screen()?.choice : null
+  if (lineup && !event.repeat && lineup.options.some(o => o.key === key.toUpperCase())) return choose(key.toUpperCase())
   if ((key === 's' || key === 'S') && screen() && !onDonePage()) return stopHere()
   if (key === 'ArrowLeft') go(state.index - 1)
   else if (key === 'ArrowRight') go(state.index + 1)
