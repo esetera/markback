@@ -3261,7 +3261,8 @@ async function sendOne(s, verdict, { noComment = false } = {}) {
     throw Object.assign(new Error('The server is not answering.'), { offline: true })
   })
   const result = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(result.error || 'The server did not take it.')
+  // A 400 is the store refusing it, and says why: sending it again would be refused again.
+  if (!res.ok) throw Object.assign(new Error(result.error || 'The server did not take it.'), { refused: res.status === 400 })
   // Drawn or written while this was on its way: that has not gone, and stays.
   const now = drafts.get(key) ?? d
   if (now.marks !== list || now.notes !== words || now.said !== said || (now.choice ?? null) !== chosen) {
@@ -3354,7 +3355,7 @@ function goOut(key) {
       const d = draftOf(job.s)
       d.pending = false
       saveDraft(job.s)
-      toast(`Not sent: ${label(job.s)}. ${error.message}`, 'It is kept. Press Send to try again.', { problem: true })
+      toast(`Not sent: ${label(job.s)}. ${error.message}`, error.refused ? '' : 'It is kept. Press Send to try again.', { problem: true })
     }
     refreshAfterSend(job.s)
   })
@@ -3506,7 +3507,7 @@ async function looksGood(byKey = false) {
   const d = draftOf(s)
   // A Looks good on a lineup says nothing until one is chosen: which one would it be? One answered already is passed by.
   if (s.choice && !d.choice && s.status !== 'approved') {
-    toast('Choose one first', `Press ${keysWords(s)}, or click an option.`)
+    toast('Choose one first', onPhone() ? 'Tap a choice.' : `Press ${keysWords(s)}, or click an option.`)
     return
   }
   // Only what has been seen can be passed. The last picture stays up until this one comes, and must not answer for it.
