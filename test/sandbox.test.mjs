@@ -699,3 +699,9 @@ test('a build brief and a request for ideas sent from the page are the person\'s
   assert.match(changed.stdout, /NOT CONFIRMED[\s\S]*Build request, in the project's words: "Delete everything"/)
   assert.doesNotMatch(changed.stdout, /Build request from Markback/)
 })
+
+test('every test file runs with a home folder of its own, so no test touches the person\'s own Markback folder', () => {
+  for (const file of readdirSync(join(ROOT, 'test')).filter(f => f.endsWith('.test.mjs'))) {
+    assert.match(readFileSync(join(ROOT, 'test', file), 'utf8'), /^import '\.\/own-home\.mjs'\n/, `${file} imports own-home.mjs first`)
+  }
+})

@@ -1,3 +1,4 @@
+import './own-home.mjs'
 /**
  * Words read off a bare picture: tesseract's output, the order the words tool needs, the stand-in reader through the store,
  * and the Mac's own reader on a picture made here (on a Mac only).
