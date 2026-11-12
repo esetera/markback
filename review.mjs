@@ -8,7 +8,7 @@
  *   review words-script                         the script that makes such a list, to run in the page with a browser tool
  *   review list  [--app MyApp]
  *   review wait  --app MyApp [--all] [--timeout 3600] [--json]
- *   review read  --app MyApp [--since 2026-01-15T10:00:00Z] [--latest] [--json]
+ *   review read  --app MyApp [--since 2026-01-15T10:00:00Z] [--latest] [--json] [--peek]
  *   review clear --app MyApp
  *   review inferred --app MyApp --screen "Home" [--mode light] --mark 1 --text "..." [--answer <time>]
  *                                               what you read one mark to mean, shown beside it, so the reviewer can say
@@ -37,16 +37,16 @@
  *   review work wait [--by "who"] [--timeout 3600] [--all]   blocks until something does, then says what and the next command
  *   review work --hook                          for Claude Code's hooks: reads the hook's input, and keeps the agent listening
  *   review wake set --run "<command with {prompt}>" [--in <folder>] [--by "who"] [--app <review>]
+ *   review wake kimi --session <id> [--app <review>]  use a Kimi Code session from this project
  *                                               how the server starts this project's agent: one command for each project
  *   review wake [show] [--all] | wake on | wake off | wake clear   this project's command (--all: every project's)
- *   review wake desktop --app <app>              register this Codex Desktop chat after scheduling its heartbeat
- *   review wake poll --app <app>                 check this chat's review for current, unread marks
+ *   review wake desktop --app <app> [--new | --builds]      register this Codex Desktop chat after scheduling its heartbeat
+ *   review wake poll --app <app>                 check this chat for unread marks and build requests
  *
  *   --by "who" on wait, ideas wait and work wait names the agent that listens (the page shows it)
  *
- *   review project [--yes] [--no-open]           in a project's folder: finds its app, takes its main screens, opens
- *                                               them in your browser (the markback command is this)
- *   review open [--app MyApp]                   opens the review page in your browser
+ *   review project [--yes] [--no-open] [--item <id>]   finds the project’s app and pushes its main screens
+ *   review open [--app MyApp | --new] [--no-open] opens the review page or the New project example
  *   review phone [on|off] [--code]              review from a phone, over your own Tailscale network: off until turned on,
  *                                               and off again by itself after 30 minutes. Alone, it says whether it is on.
  *                                               --code prints the code to scan even where this is not a terminal
@@ -66,7 +66,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HOME, INBOX, PORT, answerId, clearApp, isSetAside, listApps, listScreens, postReading, push, readInbox, rememberPort, slug } from './lib/store.mjs'
+import { HOME, INBOX, PORT, answerId, clearApp, isSetAside, listApps, listScreens, liveAddress, postReading, push, readInbox, rememberPort, slug } from './lib/store.mjs'
 import { pushSample, showApp } from './lib/first.mjs'
 import { showPdf } from './lib/pdf.mjs'
 import { filmOf, filmScreen, leftOutLine, saveFilm } from './lib/film.mjs'
@@ -80,7 +80,7 @@ import { addNote, closeRequest, listWork, openRequests, postIdea, pushedFor, set
 import { WORDS as PHONE_WORDS, cleanStale, leftWords, warmUp } from './lib/phone.mjs'
 import { qr } from './public/qr.js'
 import { listen, markDelivered, noteProject, projectOf, queuedSince, unread, waitingWork } from './lib/listen.mjs'
-import { clearDesktopWake, clearWake, lastRun, listWakes, projectFolder, readDesktopWake, readWake, setDesktopWake, setWake, switchWake } from './lib/wake.mjs'
+import { clearDesktopWake, clearWake, lastRun, listWakes, projectFolder, readDesktopWake, readWake, setDesktopWake, setKimiWake, setWake, switchWake } from './lib/wake.mjs'
 import { installHooks, removeHooks, sayHook } from './lib/hook.mjs'
 
 const [command, ...rest] = process.argv.slice(2)
@@ -175,6 +175,7 @@ const itemLine = i => `${i.id}  ${i.title}  [${i.phase === 'build' ? 'Build' : '
 /** One item as a session should read it: what, why, and every note so far. */
 function showItem(item) {
   if (flags.json) return console.log(JSON.stringify(item, null, 2))
+  if (item.brief) console.log(`Build request from Markback: ${item.brief}`)
   console.log(`${item.title}\n  Id: ${item.id}\n  For: ${item.target}\n  Stage: ${STAGE_WORDS[item.stage]}\n  Do: ${item.phase === 'build' ? 'build it, then push the screens with --kind qa' : 'develop the UX, then push the screens with --kind proposal'}, with --item ${item.id}\n  Round: ${item.round}${item.marksBack ? ' (marks came back: read them with review read)' : ''}${item.app ? `\n  Screens under: ${item.app}` : ''}\n  Size: ${item.size}\n  Why: ${item.why || '(not said)'}`)
   for (const note of item.notes ?? []) console.log(`  Note from ${note.by}, ${note.at}: ${note.text}`)
 }
@@ -265,15 +266,22 @@ function wake(what) {
     console.log(`${head}Wake is ${w.on ? 'on' : 'off'} for ${w.by}.\n  Runs: ${w.run}\n  In: ${w.in}\n  For: ${apps.length ? `work on ${apps.join(', ')}` : 'nothing yet: push a review from this folder, or set it again with --app <review>'}\n  When: work waits and no agent has listened for a minute. The review page must be running (review start).${last ? `\n  Last run: ${last.startedAt}${last.running ? ', still running' : `, ended with ${last.code}${last.failed ? ', and the work still waited: it failed' : ''}`}` : ''}`)
   }
   try {
+    if (what === 'kimi') {
+      const configured = setKimiWake({ session: flags.session, app: typeof flags.app === 'string' ? flags.app : '' })
+      unread()
+      return show(configured, 'Set. ')
+    }
     if (what === 'desktop') {
       const app = need('app')
-      if (typeof app !== 'string' || !listScreens(slug(app)).length) return fail('Push the first review before setting up Codex Desktop wake.')
+      if (typeof app !== 'string' || !app.trim()) return fail('Name the review with --app.')
       if (flags.off) {
         if (!clearDesktopWake(app)) return fail('Turn this off from the Codex Desktop chat that set it up.')
         return console.log(`Codex Desktop wake is off for ${slug(app)}.`)
       }
+      if (!flags.new && !listScreens(slug(app)).length) return fail('Push the first review, or use --new to receive build requests before there are screens.')
       unread()
-      setDesktopWake(app)
+      setDesktopWake(app, process.env.CODEX_THREAD_ID, { builds: flags.new || flags.builds, ideas: flags.ideas })
+      if (flags.new || flags.builds || flags.ideas) noteProject(process.cwd(), app)
       return console.log(`Codex Desktop wake is on for ${slug(app)}.`)
     }
     if (what === 'poll') {
@@ -293,7 +301,11 @@ function wake(what) {
         : new Map()
       const records = rounds.size ? readInbox(appSlug).filter(r => r.verdict === 'changes' && r.round === rounds.get(r.screenId)) : []
       // A poll does not acknowledge anything. A failed edit can be retried until it is pushed for review.
-      return console.log(JSON.stringify({ owned, enabled, complete, marks: latestPerScreen(records) }, null, 2))
+      const work = enabled && (held.builds || held.ideas) ? waitingWork({ only: [appSlug] }) : null
+      const builds = held?.builds ? work?.queue.filter(item => item.brief && slug(item.target) === appSlug) ?? [] : []
+      const ideas = held?.ideas ? work?.ideas.filter(request => request.route === appSlug) ?? [] : []
+      const queue = held?.ideas ? work?.queue.filter(item => item.route === appSlug) ?? [] : []
+      return console.log(JSON.stringify({ owned, enabled, complete, marks: latestPerScreen(records), ...(builds.length ? { builds } : {}), ...(ideas.length ? { ideas } : {}), ...(queue.length ? { queue } : {}) }, null, 2))
     }
     if (what === 'set') {
       const set = setWake({ run: need('run'), folder: typeof flags.in === 'string' ? flags.in : process.cwd(), by: typeof flags.by === 'string' ? flags.by : 'your agent', app: typeof flags.app === 'string' ? flags.app : '' })
@@ -309,7 +321,7 @@ function wake(what) {
       if (!all.length) return console.log('No project has a wake command.')
       return all.forEach((w, n) => show(w, `${n ? '\n' : ''}${w.in}: `))
     }
-    if (what !== 'show') fail('review wake | wake set --run "<command>" | wake desktop --app <app> | wake poll --app <app> | wake on | wake off | wake clear')
+    if (what !== 'show') fail('review wake | wake set --run "<command>" | wake kimi --session <id> | wake desktop --app <app> | wake poll --app <app> | wake on | wake off | wake clear')
     return show(readWake())
   } catch (error) {
     return fail(error.message)
@@ -448,7 +460,9 @@ if (command === 'push') {
   } catch (error) {
     fail(error.message)
   }
-  const entry = push({ app: need('app'), screen: need('screen'), mode: flags.mode || '', after: need('after'), before: flags.before || '', note: flags.note || '', check: flags.check ?? [], kind: flags.kind || 'qa', item: typeof flags.item === 'string' ? flags.item : '', from: typeof flags.from === 'string' ? flags.from : 'Claude', words })
+  const url = flags.url ? liveAddress(flags.url) : ''
+  if (flags.url && !url) fail('Give the live app’s http or https address with --url.')
+  const entry = push({ app: need('app'), screen: need('screen'), mode: flags.mode || '', after: need('after'), before: flags.before || '', note: flags.note || '', check: flags.check ?? [], kind: flags.kind || 'qa', item: typeof flags.item === 'string' ? flags.item : '', from: typeof flags.from === 'string' ? flags.from : 'Claude', words, url })
   if (entry.item) pushedFor(entry.item, entry.app, entry.from, entry.kind)
   noteProject(process.cwd(), entry.app)
   const all = listScreens(entry.appSlug)
@@ -467,7 +481,7 @@ if (command === 'push') {
   if (flags.since) records = records.filter(r => r.sentAt > flags.since)
   if (flags.latest) records = latestPerScreen(records)
   print(records)
-  delivered(records)
+  if (!flags.peek) delivered(records)
 } else if (command === 'wait') {
   // Waits for feedback sent after it started. With --all, waits until every queued screen of the app has been
   // answered in its current round, then prints the answers.
@@ -528,7 +542,9 @@ if (command === 'push') {
     console.warn('Project skill files are read-only in this session. Continuing to the review.')
   }
   const found = await findApp(process.cwd())
-  let url = found.running
+  const requested = typeof flags.url === 'string' ? liveAddress(flags.url) : ''
+  if (flags.url && !requested) fail('Give the live app’s http or https address with --url.')
+  let url = requested || found.running
   if (!url && found.run) {
     let yes = !!flags.yes
     if (!yes && process.stdin.isTTY) yes = await askYes(`Your app runs with ${found.run.command}. ${found.run.port ? 'It is not running.' : 'I can\'t tell whether it is running.'} Start it? [y/N] `)
@@ -549,22 +565,36 @@ if (command === 'push') {
     console.log('There is no app in this folder yet. Say what you want to your agent, for example: /markback a recipe box for my family')
     process.exit(3)
   }
+  const item = typeof flags.item === 'string' ? flags.item : ''
+  const entry = item ? listWork().find(candidate => candidate.id === item) : null
+  if (item && !entry) fail(`No item ${item}`)
+  let reviewName = found.name
+  if (entry?.app && listScreens(slug(entry.app)).some(screen => screen.item === item && screen.kind === 'qa')) {
+    reviewName = entry.app
+  } else if (entry && listScreens(slug(found.name)).some(screen => screen.item && screen.item !== item && screen.status !== 'approved')) {
+    // Keep another item's unanswered screens available from its Queue link.
+    reviewName = `${found.name}: ${entry.title}`
+    if (listScreens(slug(reviewName)).some(screen => screen.item !== item)) {
+      reviewName += ` (${item})`
+    }
+  }
   let taken
   try {
-    taken = await shootScreens(url, found.name)
+    taken = await shootScreens(url, reviewName, { item })
   } catch (error) {
     fail(error.message)
   }
-  console.log(`Took ${taken.length} screen${taken.length === 1 ? '' : 's'} of ${found.name}: ${taken.map(s => s.screen.replace(/^\d+ /, '')).join(', ')}`)
+  console.log(`Took ${taken.length} screen${taken.length === 1 ? '' : 's'} of ${reviewName}: ${taken.map(s => s.screen.replace(/^\d+ /, '')).join(', ')}`)
   noteProject(process.cwd(), taken[0].appSlug)
+  if (item) pushedFor(item, taken[0].app, 'Markback', 'qa')
   const page = `http://localhost:${Number(flags.port || PORT)}/#${taken[0].appSlug}`
   const opened = !flags['no-open'] && (await openPage(page))
   console.log(opened ? "I've opened them in your browser. Draw on what you want changed, then press Send." : `Open ${page} to draw on them.`)
   if (opened) console.log(`(The page is ${page} if you need it.)`)
 } else if (command === 'open') {
-  const page = `http://localhost:${PORT}/${typeof flags.app === 'string' ? `#${slug(flags.app)}` : ''}`
+  const page = flags.new ? `http://127.0.0.1:${PORT}/?example=todo` : `http://localhost:${PORT}/${typeof flags.app === 'string' ? `#${slug(flags.app)}` : ''}`
   if (!(await up(PORT))) fail('The review page is not running. Start it with: review start')
-  console.log((await openPage(page)) ? `I've opened it in your browser. (${page})` : `Open ${page}`)
+  console.log((!flags['no-open'] && await openPage(page)) ? `I've opened it in your browser. (${page})` : `Open ${page}`)
 } else if (command === 'phone') {
   await phone(rest[0] && !rest[0].startsWith('--') ? rest[0] : '')
 } else if (command === 'install-skills' && flags['remove-hooks']) {

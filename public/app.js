@@ -1,7 +1,7 @@
 import { burnCanvas, changesBetween, COLOURS, fitZoom, isReal, paintChanged, paintMarks, redone, shapeOf, strokeFor, textFor, undone, withMark, withMarks, ZOOM_STEP, ZOOM_WHEEL_STEP, zoomedBy } from './annotate.js'
 import { createListener, findRoute, installPack } from './mic.js'
 import { qrSvg } from './qr.js'
-import { agentsWords, heardWords, SETUP_LINE, signOf, signShows, unheardCount, unheardWords } from './listen.js'
+import { agentsWords, heardWords, ideaProgress, SETUP_LINE, signOf, signShows, unheardCount, unheardWords } from './listen.js'
 import { afterSend, answerWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeWords, standingAnswer, submitJobs } from './flow.js'
 
 /**
@@ -155,6 +155,9 @@ const state = {
   remote: false,
   // Who listens and what waits unheard, as the server last said. Unset with a server from before it said so.
   listening: null,
+  starting: !location.hash.slice(1) && !new URLSearchParams(location.search).has('review'),
+  buildTargets: [],
+  ideaRequests: [],
 }
 /**
  * A phone, or a window as narrow as one: a name and a count above, the picture, and three large buttons under it. The marking
@@ -198,7 +201,7 @@ const store = {
 }
 
 const app = () => state.apps.find(a => a.slug === state.appSlug) ?? null
-const screen = () => app()?.screens[state.index] ?? null
+const screen = () => state.starting ? null : app()?.screens[state.index] ?? null
 const keyOf = s => `${s.appSlug}/${s.id}/${s.round}`
 /**
  * A draft belongs to one picture. A round number does not say which: clearing an app and pushing it again starts at round 1
@@ -262,8 +265,11 @@ const liveScreen = s => state.apps.find(a => a.slug === s.appSlug)?.screens.find
 
 async function loadQueue() {
   const res = await fetch('/api/queue', { cache: 'no-store' })
-  const { apps, reader, listening, phone: phoneNow, remote } = await res.json()
+  const { apps, reader, listening, buildTargets, ideaRequests, phone: phoneNow, remote } = await res.json()
   state.remote = remote === true
+  state.buildTargets = buildTargets ?? []
+  state.ideaRequests = ideaRequests ?? []
+  syncBuildForms()
   // Whether this computer can read words off a picture. It does not change while the server runs.
   state.reader = reader === true
   setListening(listening)
@@ -272,7 +278,10 @@ async function loadQueue() {
   document.body.classList.remove('loading')
   resendKept()
   setPhone(phoneNow)
-  if (text === lastQueue) return sayLooks()
+  if (text === lastQueue) {
+    renderDrawer()
+    return sayLooks()
+  }
   const wasLoaded = lastQueue !== ''
   lastQueue = text
   const before = screen()
@@ -306,7 +315,7 @@ async function loadQueue() {
     const wanted = apps.find(a => a.slug === hashApp)
     // Opened plain, it starts at the next thing to review, and says so. A link opens what it names.
     // Set aside stays set aside: a reload on it is not a reason to be back on it.
-    state.arriving = (!hashApp || !!wanted?.setAside) && apps.some(offered)
+    state.arriving = !state.starting && (!hashApp || !!wanted?.setAside) && apps.some(offered)
     state.appSlug = (wanted && (offered(wanted) || (hashScreen && !wanted.setAside)) ? wanted : orderedApps(apps).find(offered) ?? wanted ?? apps[0])?.slug ?? null
     const at = wanted?.setAside ? -1 : app()?.screens.findIndex(s => s.id === hashScreen) ?? -1
     state.index = at >= 0 ? at : firstWaiting()
@@ -507,7 +516,10 @@ function chime() {
 function announce(fresh, mayToast) {
   const words = freshWords(fresh)
   // Looking at the page: a line on it is enough.
-  if (document.hasFocus()) return mayToast && !state.arriving && toast(words)
+  if (document.hasFocus()) {
+    const ready = state.starting && fresh.length === 1 && state.apps.find(app => app.name === fresh[0].app)
+    return mayToast && !state.arriving && toast(words, '', ready ? { go: ready.slug } : {})
+  }
   if (!noticesOn()) return undefined
   chime()
   if (!canNotify() || Notification.permission !== 'granted') return undefined
@@ -626,7 +638,8 @@ function renderDrawer() {
   const open = entries(x => !x.setAside && hasOpen(x), false)
   const answered = entries(x => !x.setAside && !hasOpen(x), false)
   const aside = entries(x => !!x.setAside, true)
-  setHtml($('drawerList'), `${open ? `<div class="drawer-group"><span>To review</span><span>Waiting · Done</span></div>${open}` : ''}${aside ? `<div class="drawer-group"><span>Set aside</span></div>${aside}` : ''}${answered ? `<div class="drawer-group"><span>All answered</span></div>${answered}` : ''}`)
+  const ideas = state.ideaRequests.length ? `<div class="drawer-group"><span>Idea requests</span><a href="/work.html#queue">Queue</a></div>${state.ideaRequests.slice(-3).reverse().map(request => `<a class="drawer-idea" href="/work.html?request=${encodeURIComponent(request.id)}#ideas"><strong>${esc(request.target)}</strong><span>${esc(ideaProgress(request, state.listening))}</span></a>`).join('')}` : ''
+  setHtml($('drawerList'), `${ideas}${open ? `<div class="drawer-group"><span>To review</span><span>Waiting · Done</span></div>${open}` : ''}${aside ? `<div class="drawer-group"><span>Set aside</span></div>${aside}` : ''}${answered ? `<div class="drawer-group"><span>All answered</span></div>${answered}` : ''}`)
 }
 /* Every level folds, and starts closed, even the one in use: the outline on its heading shows where you are. A click opens. */
 const folds = {}
@@ -1234,7 +1247,14 @@ function toggleMore() {
 function renderAbout(a, s) {
   const words = x => lookOf(x).lines.join(' · ')
   const longest = a ? a.screens.reduce((most, x) => (words(x).length > most.length ? words(x) : most), '') : ''
-  $('about').hidden = !longest || !s || state.sideChecks
+  const live = $('aboutLive')
+  const href = s?.liveUrl
+  live.hidden = !/^https?:\/\//i.test(href ?? '')
+  if (live.hidden) live.removeAttribute('href')
+  else live.href = href
+  const showNote = !!s && !!longest && !state.sideChecks
+  $('aboutNote').hidden = !showNote
+  $('about').hidden = !showNote && live.hidden
   // Said by whoever pushed it, never the app or the reviewer, and it says so.
   setHtml($('aboutSize'), longest ? `<span class="from">${esc(fromWords(s))}</span>${esc(longest)}` : '')
   const rest = s ? lookOf(s).rest : ''
@@ -1430,7 +1450,7 @@ function renderMenu() {
     <button data-menu="film" role="menuitem"${screen() && !onDonePage() ? '' : ' disabled'}><span>The film of this screen</span><span class="kbd">R</span></button>
     <button data-menu="list" role="menuitem"><span>Apps and screens</span><span class="kbd">L</span></button>
     ${state.remote ? '' : `<button data-menu="new" role="menuitem"><span>New project</span></button>
-    <button data-menu="work" role="menuitem"><span>Ideas and queue</span><span class="kbd">W</span></button>`}
+    <button data-menu="work" role="menuitem" aria-description="Beta features"><span>Ideas and queue <span class="beta-badge" aria-hidden="true">Beta</span></span><span class="kbd">W</span></button>`}
     <button data-menu="rest" role="menuitem"${left ? '' : ' disabled'}><span>Looks good for the rest${left ? ` (${left})` : ''}</span><span class="kbd">⇧⌘↩</span></button>
     <button data-menu="aside-one" role="menuitem"${a ? '' : ' disabled'}><span>Set ${group ? `this ${placeOf(a).noun.trim() || 'one'}` : 'this'} aside</span></button>
     ${group ? '<button data-menu="aside-group" role="menuitem"><span>Set this group aside</span></button>' : ''}
@@ -1460,7 +1480,7 @@ function renderState(a, s) {
   const card = $('stateCard')
   let html = ''
   if (!state.loaded) html = '<div class="spinner"></div><h2>Loading screens</h2>'
-  else if (!state.apps.length) html = firstRunHtml()
+  else if (state.starting || !state.apps.length) html = firstRunHtml()
   else if (s && state.broken === s.after) html = `<h2>This picture did not load</h2><p>${esc(label(s))} cannot be passed without being seen. Write a note and press Send to say so, or move on.</p>`
   else if (state.stopped) html = stoppedHtml()
   else if (onDonePage()) {
@@ -1473,6 +1493,7 @@ function renderState(a, s) {
   }
   card.hidden = !html
   setHtml(card, html)
+  syncBuildForms()
   $('pair').hidden = !!html || !s
   if ($('pair').hidden) keepAlone()
 }
@@ -1517,7 +1538,7 @@ addEventListener('beforeunload', event => {
 })
 
 function render() {
-  const a = app()
+  const a = state.starting ? null : app()
   if (state.end && (state.end !== a?.slug || openOf(a).length)) state.end = null
   if (state.end && !nextOffered(state.end)) {
     state.end = null
@@ -1534,8 +1555,9 @@ function render() {
     }
     state.showDone = true
   }
-  const s = onDonePage() ? null : screen()
-  renderSegment(a)
+  const s = state.starting || onDonePage() ? null : screen()
+  if (state.starting) $('segment').hidden = true
+  else renderSegment(a)
   // Nothing under the overlay can be pressed, and a button still holding the keyboard must not take the Enter that starts.
   const covered = segmentUp()
   $('scroller').inert = covered
@@ -3170,7 +3192,7 @@ $('toast').onclick = event => {
     if (windowUp()) return
     hideToast()
     const [slug, id] = (look ?? there).split('/')
-    if (slug !== state.appSlug && state.apps.some(a => a.slug === slug)) pickApp(slug)
+    if ((state.starting || slug !== state.appSlug) && state.apps.some(a => a.slug === slug)) pickApp(slug)
     const at = id ? app()?.screens.findIndex(s => s.id === id) ?? -1 : -1
     if (at >= 0) go(at)
   } else if ($('toast').classList.contains('problem')) hideToast()
@@ -3277,6 +3299,7 @@ function go(index) {
 function pickApp(slug) {
   closeTextEntry(true)
   closeDrawer()
+  state.starting = false
   state.appSlug = slug
   state.index = firstWaiting()
   state.showDone = false
@@ -3425,21 +3448,95 @@ $('drawerList').addEventListener('keydown', event => {
 $('center').addEventListener('click', event => {
   if (event.target.closest('[data-more]')) toggleMore()
 })
-/* The first minute: your own app, or one sentence to your agent, or a sample. New project in the menu shows the same form,
-   without the sample, so there is one wording for both. */
+/* The start page and the menu share the same choices. */
 function firstRunHtml({ sample = true } = {}) {
-  // The ids are for the first screen only; the menu's copy is found through its form, so the two never share an id.
-  const id = name => (sample ? ` id="first${name}"` : '')
-  return `<form class="first" data-first>
-    ${sample ? '<h2>Two ways to start.</h2>' : ''}
-    <div class="first-or">1. Your app's address, on this computer or online</div>
-    <div class="first-row"><input${id('Address')} data-first-address placeholder="http://localhost:3000" aria-label="Your app's address" autocomplete="off"><button class="btn primary"${id('Show')} data-first-show>Show it</button></div>
-    <p class="first-said"${id('Said')} data-first-said hidden></p>
-    <div class="first-or">2. In your agent, in your project: it finds the app and opens it here</div>
-    <div class="first-row"><code${id('Ask')} data-first-ask>/markback</code><button type="button" class="btn" data-first-copy>Copy</button></div>
-    <p class="first-said">No app yet? Say what you want after it: <b>/markback a recipe box for my family</b>. In a terminal, <b>markback</b> in the project's folder does the same, once installed: <b>npm install -g github:esetera/markback</b></p>
-    ${sample ? '<div class="first-or">Just looking</div>\n    <div class="first-row"><button type="button" class="btn" data-first-sample>Try the sample</button></div>' : ''}
-  </form>`
+  const id = name => sample ? ` id="first${name}"` : ''
+  const example = sample && new URLSearchParams(location.search).get('example') === 'todo' ? 'Make a todo app' : ''
+  return `<div class="first">
+    ${sample ? '<p class="first-kicker">MARKBACK / NEW PROJECT</p><h2>What would you like to build?</h2>' : ''}
+    <form class="first-build" data-build>
+      <label class="first-label" for="${sample ? 'firstBrief' : 'newBrief'}">${sample ? 'Describe your idea' : 'What would you like to build?'}</label>
+      <textarea id="${sample ? 'firstBrief' : 'newBrief'}" data-build-brief rows="3" maxlength="4000" required placeholder="A todo manager that helps me focus on today’s tasks.">${example}</textarea>
+      <div class="first-build-actions">
+        <label class="first-destination" data-build-destination hidden>Send through <select data-build-target></select></label>
+        <button class="btn primary" data-build-send disabled>Send to agent</button>
+      </div>
+      <p class="first-said" data-build-connection>Connect your agent to Markback to send your idea here.</p>
+      <p class="first-said" data-build-said role="status" hidden></p>
+      <a class="first-queue" href="/work.html" data-build-queue hidden>View the queue</a>
+    </form>
+    <form class="first-existing" data-first>
+      <div class="first-or">Already have an app?</div>
+      <div class="first-row"><input${id('Address')} data-first-address placeholder="http://localhost:3000" aria-label="Your app's address" autocomplete="off"><button class="btn"${id('Show')} data-first-show>Show it</button></div>
+      <p class="first-said"${id('Said')} data-first-said hidden></p>
+      <details class="first-connect" data-first-connect>
+        <summary>Connect from your coding agent</summary>
+        <p class="first-said">Run <b>/markback a recipe box for my family</b> in your agent to start a project, then ask it to turn on wake.</p>
+        <div class="first-row"><code${id('Ask')} data-first-ask>/markback</code><button type="button" class="btn" data-first-copy>Copy</button></div>
+      </details>
+      ${sample ? '<div class="first-start-links"><button type="button" class="link" data-first-sample>Try the sample</button><button type="button" class="link" data-list>Open existing reviews</button></div>' : ''}
+    </form>
+  </div>`
+}
+
+function syncBuildForms() {
+  for (const form of document.querySelectorAll('[data-build]')) {
+    const target = form.querySelector('[data-build-target]')
+    const previous = target.value
+    const options = state.buildTargets
+    setHtml(target, options.map(option => `<option value="${esc(option.slug)}">${esc(option.name)}</option>`).join(''))
+    const chosen = options.find(option => option.slug === previous) ?? options.find(option => option.slug === state.appSlug) ?? options[0]
+    if (chosen) target.value = chosen.slug
+    form.querySelector('[data-build-destination]').hidden = options.length < 2
+    form.querySelector('[data-build-connection]').textContent = chosen
+      ? `Connected through ${chosen.name}. Your agent will send back the first screen here.`
+      : 'Turn on Markback wake in your coding agent to send a request from here.'
+    form.querySelector('[data-build-send]').disabled = !chosen || form.dataset.sending === 'yes'
+    form.parentElement.querySelector('[data-first-connect]').hidden = !!chosen
+    const reviews = form.parentElement.querySelector('[data-list]')
+    if (reviews) reviews.hidden = !state.apps.length
+  }
+}
+
+async function sendBuild(form) {
+  if (form.dataset.sending === 'yes') return
+  const brief = form.querySelector('[data-build-brief]')
+  const target = form.querySelector('[data-build-target]').value
+  const said = form.querySelector('[data-build-said]')
+  const queue = form.querySelector('[data-build-queue]')
+  const words = brief.value.trim()
+  if (!target || !words) return
+  const key = JSON.stringify([target, words])
+  if (form.dataset.requestKey !== key) {
+    form.dataset.requestKey = key
+    form.dataset.requestId = crypto.randomUUID()
+  }
+  form.dataset.sending = 'yes'
+  brief.readOnly = true
+  said.hidden = false
+  said.textContent = 'Sending your request…'
+  queue.hidden = true
+  syncBuildForms()
+  try {
+    const res = await fetch('/api/work/build', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target, brief: words, requestId: form.dataset.requestId }),
+    })
+    const got = await res.json()
+    if (!res.ok) throw new Error(got.error)
+    brief.value = ''
+    delete form.dataset.requestKey
+    said.textContent = 'Sent to your agent. The first screen will appear in Markback when it’s ready.'
+    queue.hidden = false
+    if (!form.isConnected || form.closest('#newModal')?.hidden) toast('Build request sent to your agent')
+  } catch (error) {
+    said.textContent = error.message || 'Couldn’t send your request. Try again.'
+  } finally {
+    delete form.dataset.sending
+    brief.readOnly = false
+    syncBuildForms()
+  }
 }
 async function firstRun(form, path, body) {
   const said = form.querySelector('[data-first-said]')
@@ -3468,12 +3565,10 @@ async function firstRun(form, path, body) {
       setHtml($('newBody'), '')
       closeNewProject()
     }
-    location.hash = got.appSlug
     await loadQueue()
-    // With projects already here, the address alone does not move the page: go to the new one, beside the others.
-    if (state.apps.length > 1 && state.apps.some(a => a.slug === got.appSlug)) {
-      if (state.appSlug !== got.appSlug || again) pickApp(got.appSlug)
-      toast(again || `Now: ${placeWords(placeOf(app()))}`)
+    if (state.apps.some(a => a.slug === got.appSlug)) {
+      pickApp(got.appSlug)
+      if (state.apps.length > 1) toast(again || `Now: ${placeWords(placeOf(app()))}`)
     }
   } catch (error) {
     if (late()) return void toast('No new project was made', error.message, { problem: true })
@@ -3493,8 +3588,9 @@ async function firstRun(form, path, body) {
 for (const holder of [$('stateCard'), $('newModal')]) {
   holder.addEventListener('submit', event => {
     event.preventDefault()
+    if (event.target.matches('[data-build]')) return void sendBuild(event.target)
     const input = event.target.querySelector('[data-first-address]')
-    void firstRun(event.target, '/api/show', { url: input.value || input.placeholder })
+    if (input) void firstRun(event.target, '/api/show', { url: input.value || input.placeholder })
   })
   holder.addEventListener('click', event => {
     const form = event.target.closest('[data-first]')
@@ -3527,7 +3623,7 @@ function openNewProject() {
   if (wordsFirst()) return
   closeMenu()
   // With no project yet, the first screen is already this form.
-  if (!state.apps.length) return $('firstAddress')?.focus()
+  if (state.starting || !state.apps.length) return $('firstBrief')?.focus()
   closeTextEntry(true)
   closeDrawer()
   newWindow = { open: true }
@@ -3539,7 +3635,8 @@ function openNewProject() {
   $('newBody').querySelector('[data-first-show]').disabled = !!newCapture
   $('newModal').hidden = false
   for (const el of document.querySelectorAll('.bar, #workspace')) el.inert = true
-  return $('newBody').querySelector('[data-first-address]').focus()
+  syncBuildForms()
+  return $('newBody').querySelector(state.buildTargets.length ? '[data-build-brief]' : '[data-first-address]').focus()
 }
 function closeNewProject() {
   if (!newProjectOpen()) return

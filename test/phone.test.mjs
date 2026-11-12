@@ -166,7 +166,7 @@ test('a page that renames itself to the door, and sends the login itself, gets n
   assert.match(secret, /^\/[\w-]{32}$/, 'a long random path, made new each time')
   // Same origin as the door, owner's login, every name: 404, with no hint.
   for (const host of [`evil.example.com:${door}`, `127.0.0.1:${door}`, NAME]) {
-    for (const path of ['/', '/api/queue', '/app.js', '/api/phone/echo', `${secret.slice(0, -1)}x/api/queue`, `/x${secret}/api/queue`]) {
+    for (const path of ['/', '/api/queue', '/app.js', '/api/phone/echo', `${secret.slice(0, -1)}${secret.endsWith('x') ? 'y' : 'x'}/api/queue`, `/x${secret}/api/queue`]) {
       const got = await r.ask(path, { host, bare: true, headers: { origin: `http://${host}` } })
       assert.equal(got.status, 404, `${host} ${path}`)
       assert.equal(got.text, 'Not found')
@@ -237,7 +237,7 @@ test('a phone reviews and marks, nothing more: what runs things on this computer
   assert.equal(phoneMay('GET', '/api/film/file'), false)
   // An answer reaches the page (a screen that is not there is its own matter); the browser tests send real ones this way.
   assert.notEqual((await r.ask('/api/send', { method: 'POST', headers: { origin }, body: { appSlug: 'none', id: 'none' } })).status, 403, 'answers are let through')
-  const refusedHere = [['POST', '/api/show', { url: 'http://localhost:1/' }], ['POST', '/api/sample', {}], ['GET', '/api/work'], ['POST', '/api/work/ask', { target: 'x' }], ['POST', '/api/work/decide', { id: 'x', decision: 'yes' }], ['GET', '/api/anything-new'], ['GET', '/work.html'], ['GET', '/work.js'], ['GET', '/a-file-added-later.js'], ['GET', '/images/'], ['GET', '/x/../api/work'], ['HEAD', '/'], ['PUT', '/api/send', {}], ['DELETE', '/api/queue']]
+  const refusedHere = [['POST', '/api/show', { url: 'http://localhost:1/' }], ['POST', '/api/sample', {}], ['GET', '/api/work'], ['POST', '/api/work/ask', { target: 'x' }], ['POST', '/api/work/decide', { id: 'x', decision: 'yes' }], ['POST', '/api/work/build', { target: 'x', brief: 'Build it' }], ['GET', '/api/anything-new'], ['GET', '/work.html'], ['GET', '/work.js'], ['GET', '/a-file-added-later.js'], ['GET', '/images/'], ['GET', '/x/../api/work'], ['HEAD', '/'], ['PUT', '/api/send', {}], ['DELETE', '/api/queue']]
   for (const [method, path, body] of refusedHere) {
     const got = await r.ask(path, { method, headers: { origin }, body: body ?? null })
     assert.equal(got.status, 403, `${method} ${path}`)
@@ -287,6 +287,7 @@ test('a phone is sent nothing of this computer: no path, no folder, no wake comm
   // What the phone's page needs is there.
   const sent = JSON.parse(replies.queueAfter.text)
   assert.equal(sent.remote, true)
+  assert.equal('buildTargets' in sent || 'ideaRequests' in sent, false, 'which agents can build, and idea requests, are for the computer\'s own page')
   assert.deepEqual(sent.apps[0].screens.map(x => x.status).sort(), ['sent', 'waiting'])
   assert.ok(sent.listening.unheard.marks >= 1)
   assert.equal(JSON.parse(replies.history.text).records[0].verdict, 'changes')

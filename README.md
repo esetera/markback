@@ -29,17 +29,17 @@ You need [Node](https://nodejs.org) 22.6 or later. Markback uses Chrome or Edge 
 
 Open your project in a local Claude Code or Codex session and ask in the chat.
 
-> Set up Markback from https://github.com/esetera/markback for this project. Open the first review and keep sending screenshots to Markback as you work.
+> Install and start Markback from https://github.com/esetera/markback in this workspace. Connect this agent for automatic pickup and open New project with “Make a todo app” filled in. I’ll edit it or press Send to agent myself.
 
-Your agent runs the setup and opens the review. As it reaches a visible change, it pushes the updated screenshots and waits for your feedback. You can draw and press **Send**, or press **Looks good**.
+Your agent runs the setup and opens New project. Edit the example or press **Send to agent** to try it. When the first screenshot arrives, draw and press **Send**, or press **Looks good**. Screenshots taken from a running website have an **Open live app** link so you can try that page yourself.
 
 ### Codex Desktop without a terminal
 
 Open your project in Codex Desktop and paste this into the project chat:
 
-> Set up Markback from https://github.com/esetera/markback in this project. Open the first review and turn on automatic pickup of my marks in this chat.
+> Install and start Markback from https://github.com/esetera/markback in this workspace. Connect this chat for automatic pickup and open New project with “Make a todo app” filled in. I’ll edit it or press Send to agent myself.
 
-Codex installs Markback locally, starts the review, and sets up a scheduled check in the same chat. Draw on a screenshot and press **Send**. Keep Codex Desktop open. On the next check, usually within a minute, the chat picks up the mark even if its first turn has finished. Codex applies the change and pushes a new screenshot for review.
+Codex installs Markback locally and connects New project to a scheduled check in the same chat. Keep Codex Desktop open. On the next check, usually within a minute, the chat picks up a build request or a mark. Codex applies the change and pushes a new screenshot for review.
 
 In a fresh Codex project, the agent can use `npm install --prefix .markback github:esetera/markback` to install locally and read `.markback/node_modules/markback/AGENTS.md` in the current session. The agent keeps `REVIEW_HOME` in a writable project folder and uses that same folder for each review command. `review project` can start the review even when Codex protects `.agents/skills` from edits.
 
@@ -369,6 +369,10 @@ with ffmpeg when it is asked for and not kept, one at a time.
 
 ## Ideas and the queue
 
+Markback opens on **New project**. Describe an app and press **Send to agent** after you’ve enabled wake in your coding agent. The request appears in the Queue immediately. Taking it moves it to **In progress**, and pushing the first screens moves it to **Ready for you**. Review the result from the Queue, and press **Looks good** when it’s done.
+
+In Codex Desktop, an agent can connect an empty workspace with `review wake desktop --app <workspace-name> --new --ideas` after setting up the chat heartbeat. For an existing review, update the heartbeat and register with `review wake desktop --app <slug> --builds --ideas`. Use the [queue skill](skills/ideas-and-queue/SKILL.md) for the heartbeat prompt and how to link the resulting screenshots to the build request. Idea requests appear in Queue and the Markback drawer. Choose **View ideas** when results arrive.
+
 Press **W** for a second page. **Ideas:** say what for and how many, and press Get ideas. That writes a request; an agent studies the thing and answers. Each idea is one line for what, one for why, and a size. Press Yes, No or Later (Y, N, L).
 
 **Queue:** Queued, In progress, Ready for you, Done. Each item says who has it. Drag to set the order, or use ⇧↑ and ⇧↓; agents take the top one first. Press N to add a note, typed or spoken; agents read notes while they work.
@@ -392,6 +396,8 @@ For an agent: `review work` prints all that waits (queued items, requests for id
 ### Markback wakes your agent
 
 In **Codex Desktop**, ask Codex to set up automatic Markback pickup in the chat. Codex starts Markback as part of opening the review and sets up a scheduled check in that chat. After you press **Send**, the next check reads the marks and Codex pushes the revised screen. Keep the desktop app open while reviewing. The review menu can turn pickup off for this review.
+
+In **Kimi Work**, ask Kimi to connect Markback to a dedicated local session in your signed-in Kimi Code CLI. After you press **Send**, Markback starts that Kimi Code session in the background even if the Kimi Work task has finished. Keep reviewing in the Kimi Work browser pane. See the [queue skill](skills/ideas-and-queue/SKILL.md) for setup.
 
 #### Claude Code and other command-based agents
 

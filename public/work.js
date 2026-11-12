@@ -1,5 +1,5 @@
 import { createListener, findRoute, installPack } from './mic.js'
-import { SETUP_LINE, signOf, signShows, unheardWords, waited } from './listen.js'
+import { SETUP_LINE, ideaProgress, signOf, signShows, unheardWords, waited } from './listen.js'
 
 /**
  * Ideas and the queue. It reads the same files the sessions read, every few seconds, so it says what is true. Nothing here
@@ -21,6 +21,8 @@ const state = {
   page: location.hash === '#ideas' ? 'ideas' : 'queue',
   items: [],
   requests: [],
+  ideaTargets: [],
+  route: '',
   // Who listens and what waits unheard. Unset with a server from before it said so.
   listening: null,
   open: new Set(),
@@ -55,13 +57,15 @@ const attempt = async run => {
 }
 
 let last = ''
+let needsRender = false
 async function load(force = false) {
   const got = await (await fetch('/api/work', { cache: 'no-store' })).json()
   const text = JSON.stringify(got)
-  if (text === last && !force) return
+  if (text === last && !force && !needsRender) return
   last = text
   state.items = got.items
   state.requests = got.requests
+  state.ideaTargets = got.ideaTargets ?? []
   state.listening = got.listening ?? null
   // Never redraw under someone's hands.
   if (!dragging) render()
@@ -99,9 +103,11 @@ function row(item, at, stage) {
   const queued = stage === 'queued'
   const lane = inStage(stage)
   const notes = item.notes?.length ?? 0
+  const desktop = state.listening?.desktop?.[item.route || item.target]
+  const codexWillCheck = desktop?.on && (item.route ? desktop.ideas : item.brief && desktop.builds)
   return `<div class="row" tabindex="0" data-id="${esc(item.id)}"${queued ? ' draggable="true"' : ''} aria-label="${esc(item.title)}" style="grid-template-columns: ${columns()}">
     <span class="pos">${queued ? at + 1 : ''}</span>
-    <span class="cell"><span class="name">${esc(item.title)}</span>${queued ? `<span class="wait${state.listening?.unheard?.queue ? ' unheard' : ''}">Waiting ${waited(queuedSince(item))}. No agent has taken it.</span>` : ''}</span>
+    <span class="cell"><span class="name">${esc(item.title)}</span>${queued ? `<span class="wait${state.listening?.unheard?.queue ? ' unheard' : ''}">Waiting ${waited(queuedSince(item))}. ${codexWillCheck ? 'Codex will check for it.' : 'No agent has taken it.'}</span>` : ''}</span>
     ${phaseWords(item)}
     ${showTarget() ? `<span class="target" title="${esc(item.target)}">${esc(item.target)}</span>` : ''}
     ${showWho() ? `<span class="who">${esc(stage === 'progress' ? item.owner : '')}</span>` : ''}
@@ -129,7 +135,9 @@ const nothingLine = stages => {
 function queuePage() {
   const empty = STAGES.filter(([stage]) => !inStage(stage).length).map(([stage]) => stage)
   const one = owners().size === 1 ? [...owners()][0] : ''
-  return `${listenStrip('queue')}${STAGES.filter(([stage]) => !empty.includes(stage)).map(([stage, words]) => {
+  const requests = state.requests.filter(r => r.status === 'open' || r.posted)
+  const ideas = requests.length ? `<section><h2 class="section-head">Idea requests <span>${requests.length}</span></h2><div class="rows">${requests.slice().reverse().map(r => `<div class="idea-request"><div><strong>${esc(r.target)}</strong><div class="wait">${esc(ideaProgress(r, state.listening))} · ${r.count} requested</div></div><a class="btn" href="?request=${encodeURIComponent(r.id)}#ideas">${r.posted ? 'View ideas' : 'View request'}</a></div>`).join('')}</div></section>` : ''
+  return `${listenStrip('queue')}${listenStrip('ideas')}${ideas}${STAGES.filter(([stage]) => !empty.includes(stage)).map(([stage, words]) => {
     const list = inStage(stage)
     const shown = stage === 'done' ? list.slice().reverse() : list
     const folded = state.folded.has(stage)
@@ -139,7 +147,7 @@ function queuePage() {
     const by = stage === 'progress' && one ? ` · ${esc(one)}` : ''
     return `<section><h2 class="section-head">${head} <span>${list.length}${by}</span></h2>
       ${folded ? '' : `<div class="rows" data-lane="${stage}">${shown.map((item, at) => row(item, at, stage)).join('')}</div>`}</section>`
-  }).join('')}${empty.length ? `<p class="empty-line">${nothingLine(empty)}</p>` : ''}`
+  }).join('')}${empty.length && (!ideas || empty.length < STAGES.length) ? `<p class="empty-line">${nothingLine(empty)}</p>` : ''}${empty.length === STAGES.length && !ideas ? '<p><a class="btn primary" href="/">Start a project</a></p>' : ''}`
 }
 
 const decideButtons = item => `<span class="acts"><button class="btn" data-decide="yes" title="Y">Yes</button>${item.stage === 'no' ? '' : '<button class="btn" data-decide="no" title="N">No</button>'}${item.stage === 'later' ? '' : '<button class="btn" data-decide="later" title="L">Later</button>'}</span>`
@@ -148,31 +156,41 @@ const manyTargets = () => new Set(state.items.filter(i => ['idea', 'later', 'no'
 const ideaRow = item => `<div class="idea" tabindex="0" data-id="${esc(item.id)}"><div><div class="what">${esc(item.title)}</div><div class="why">${esc(item.why)}</div>${manyTargets() ? `<div class="for">${esc(item.target)}</div>` : ''}</div><span class="size" title="Size">${esc(item.size)}</span>${decideButtons(item)}</div>`
 
 function ideasPage() {
-  const asked = state.requests.filter(r => r.status === 'open')
+  const requestId = new URLSearchParams(location.search).get('request')
+  const selected = state.requests.find(r => r.id === requestId)
+  const relevant = records => selected ? records.filter(item => item.request === selected.id) : records
+  const asked = state.requests.filter(r => r.status === 'open' && (!selected || r.id === selected.id))
   const known = [...new Set([...state.requests.map(r => r.target)])]
-  const fresh = inStage('idea')
+  const fresh = relevant(inStage('idea'))
+  const accepted = selected ? relevant(workItems()) : []
   const section = (stage, words) => {
-    const list = inStage(stage)
+    const list = relevant(inStage(stage))
     if (!list.length) return ''
     const folded = state.folded.has(stage)
     return `<section><h2 class="section-head"><button data-fold="${stage}" aria-expanded="${!folded}">${folded ? '▸' : '▾'} ${words}</button> <span>${list.length}</span></h2>${folded ? '' : `<div class="rows">${list.map(ideaRow).join('')}</div>`}</section>`
   }
-  return `${listenStrip('ideas')}<form class="ask" id="askForm">
+  const destination = state.ideaTargets.length > 1
+    ? `<label for="ideaRoute">Workspace</label><select id="ideaRoute" required><option value="">Choose a workspace</option>${state.ideaTargets.map(t => `<option value="${esc(t.slug)}"${state.route === t.slug ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select>`
+    : ''
+  return `${listenStrip('ideas')}${selected ? `<p class="waiting-line"><a href="/work.html#ideas">All ideas</a> · ${esc(selected.target)} · ${esc(ideaProgress(selected, state.listening))}</p>` : ''}<form class="ask" id="askForm">
       <label for="target">Ideas for</label>
       <input id="target" list="targets" placeholder="An app, a server, anything" value="${esc(state.target)}" autocomplete="off">
       <datalist id="targets">${known.map(t => `<option value="${esc(t)}">`).join('')}</datalist>
+      ${destination}
       <label for="count">How many</label>
       <input id="count" type="number" min="1" max="50" value="${state.count}">
       <button class="btn primary">Get ideas</button>
     </form>
-    ${asked.map(r => `<p class="waiting-line">Asked for ${r.count} on ${esc(r.target)}. ${r.posted ? `${r.posted} so far.` : 'Waiting for a session.'}</p>`).join('')}
+    ${asked.map(r => `<p class="waiting-line" role="status">Asked for ${r.count} on ${esc(r.target)}. ${esc(ideaProgress(r, state.listening))}.</p>`).join('')}
     <h2 class="section-head">To decide <span>${fresh.length}</span></h2>
     ${fresh.length ? `<div class="rows">${fresh.map(ideaRow).join('')}</div>` : '<div class="empty-line">Nothing</div>'}
+    ${accepted.length ? `<section><h2 class="section-head">Accepted <span>${accepted.length}</span></h2><div class="rows">${accepted.map(item => `<div class="idea-request"><div><strong>${esc(item.title)}</strong><div class="wait">${esc(STAGES.find(([stage]) => stage === item.stage)[1])}</div></div><a class="btn" href="/work.html#queue">View queue</a></div>`).join('')}</div></section>` : ''}
     ${section('later', 'Later')}${section('no', 'No')}`
 }
 
 function render() {
   const typing = document.activeElement?.closest?.('#askForm, [data-note-box]')
+  needsRender = !!typing
   if (typing) return
   for (const b of document.querySelectorAll('[data-page]')) b.classList.toggle('on', b.dataset.page === state.page)
   document.title = `Markback · ${state.page === 'ideas' ? 'Ideas' : 'Queue'}`
@@ -311,26 +329,34 @@ page.addEventListener('click', event => {
 page.addEventListener('input', event => {
   const box = event.target.closest?.('[data-note-box]')
   if (box) state.drafts.set(box.closest('[data-open-for]').dataset.openFor, box.value)
+  if (event.target.id === 'target') state.target = event.target.value
+  if (event.target.id === 'count') state.count = Number(event.target.value) || 10
+  if (event.target.id === 'ideaRoute') state.route = event.target.value
 })
 page.addEventListener('submit', event => {
   event.preventDefault()
   const target = $('target').value.trim()
   state.count = Number($('count').value) || 10
   state.target = target
+  state.route = $('ideaRoute')?.value ?? state.ideaTargets[0]?.slug ?? ''
   if (!target) return toast('Say what the ideas are for.')
   document.activeElement?.blur()
-  return void attempt(() => post('ask', { target, count: state.count }))
+  return void attempt(async () => {
+    await post('ask', { target, count: state.count, route: state.route })
+    history.replaceState(null, '', '/work.html#ideas')
+    toast('Idea request queued')
+  })
 })
 for (const b of document.querySelectorAll('[data-page]')) b.onclick = () => showPage(b.dataset.page)
 function showPage(name) {
   state.page = name
   state.focus = null
-  location.replace(`#${name}`)
+  history.replaceState(null, '', `/work.html#${name}`)
   render()
 }
 
 document.addEventListener('keydown', event => {
-  const typing = event.target.closest?.('input, textarea')
+  const typing = event.target.closest?.('input, textarea, select')
   const box = event.target.closest?.('[data-note-box]')
   const mod = event.metaKey || event.ctrlKey
   if (box && event.key === 'Enter' && (mod || !event.shiftKey)) {
@@ -340,7 +366,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && typing) return event.target.blur()
   if (typing || mod || event.altKey) return undefined
   const key = event.key.toLowerCase()
-  if (key === 'r') location.href = '/'
+  if (key === 'r') location.href = '/?review=1'
   else if (key === 'q') showPage('queue')
   else if (key === 'i') showPage('ideas')
   else if (key === 'd') pressMic()
