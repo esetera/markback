@@ -1763,7 +1763,7 @@ function renderLineup(s) {
   const chosen = draftOf(s).choice
   const named = s.choice.options.find(o => o.key === chosen)
   // The heading names the decision. The line under it says how to choose, or what was chosen and what can follow.
-  setHtml($('lineupHead'), `<div class="lineup-words"><h1 id="lineupQuestion">${esc(s.choice.question)}</h1><p class="lineup-status" role="status">${named ? `You chose ${esc(named.key)}${named.label ? `, ${esc(named.label)}` : ''}. Send it, or mark it up first.` : `Click a choice or press ${esc(keysWords(s))}.`}</p></div>${named ? `<button class="btn" data-unchoose ${tip('Take the choice back')}>Change choice</button>` : ''}`)
+  setHtml($('lineupHead'), `<div class="lineup-words"><h1 id="lineupQuestion">${esc(s.choice.question)}</h1><p class="lineup-status" role="status">${named ? `You chose ${esc(named.key)}${named.label ? `, ${esc(named.label)}` : ''}. Send it, or mark it up first.` : (onPhone() ? 'Tap a choice.' : `Click a choice or press ${esc(keysWords(s))}.`)}</p></div>${named ? `<button class="btn" data-unchoose ${tip('Take the choice back')}>Change choice</button>` : ''}`)
   setHtml($('lineupRow'), s.choice.options.map(o => {
     const is = o.key === chosen
     const name = `${is ? 'Chosen' : 'Choose'} ${o.key}${o.label ? `: ${o.label}` : ''}`
@@ -3044,6 +3044,14 @@ function fit() {
   state.zoom = fittedZoom(room, across)
   state.fitted = true
   applyZoom()
+  // A lineup's heading is as wide as the picture, so the new width can wrap it onto another line: measured again until it holds.
+  // Only ever smaller, so it settles: a narrower heading is never shorter.
+  for (let again = 0; again < 4 && screen()?.choice; again++) {
+    const next = fittedZoom(roomNow().room, across)
+    if (next > state.zoom - 0.0005) break
+    state.zoom = next
+    applyZoom()
+  }
 }
 /** The fit key. On a tall picture already fitted, it turns between filling the width and showing the whole of it. */
 function fitAgain() {

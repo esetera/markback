@@ -228,3 +228,18 @@ test('a plain screen pushed in place of a lineup carries no marks from the optio
   assert.equal(next.choice, undefined)
   assert.equal(next.asked, undefined, 'the marks were on the lineup, not on this picture')
 })
+
+test('an option with more than one = is read the one way that names a picture, and two such ways are refused', () => {
+  const { mkdirSync, copyFileSync } = require('node:fs')
+  mkdirSync(join(home, 'x'), { recursive: true })
+  copyFileSync(c, join(home, 'x', 'c.png'))
+  const only = readOptions([a, `Calm=dir=${join(home, 'x', 'c.png')}`], file => require('node:fs').existsSync(file))
+  assert.deepEqual([only[1].label, only[1].file], ['Calm=dir', join(home, 'x', 'c.png')], 'the one reading whose path is a file')
+  // A folder named dir=x beside it: now both readings name a picture.
+  mkdirSync(join(home, 'dir=x'), { recursive: true })
+  copyFileSync(c, join(home, 'dir=x', 'c.png'))
+  const both = spawnSync('node', [CLI, 'choose', '--app', 'Eq', '--question', 'Which?', '--option', a, '--option', `Calm=dir=x/c.png`], { env, encoding: 'utf8', cwd: home })
+  assert.equal(both.status, 1)
+  assert.match(both.stderr, /Option B can be read more than one way: label "Calm" with dir=x\/c\.png, or label "Calm=dir" with x\/c\.png\. Give the picture a name without =\./)
+  assert.equal(listScreens('eq').length, 0)
+})

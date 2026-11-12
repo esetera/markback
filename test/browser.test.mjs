@@ -4155,7 +4155,7 @@ test('a choice shows as a lineup: the question as the heading, a button centred 
       await settled(page)
       const where = `${width} ${colorScheme}`
       assert.equal(await page.locator('#lineupQuestion').textContent(), 'Which layout for page 2?', where)
-      assert.match(await page.locator('.lineup-status').textContent(), /press A, B or C/)
+      assert.match(await page.locator('.lineup-status').textContent(), width < 640 ? /^Tap a choice\.$/ : /press A, B or C/)
       const c = await page.locator('#canvas').boundingBox()
       assert.ok(c.x >= 0 && c.x + c.width <= width + 1 && c.y + c.height <= height, `every option in view at ${where}`)
       const buttons = page.locator('[data-choose]')
@@ -4473,5 +4473,79 @@ test('on a phone, before Mark, a tap on an option chooses it, and the lineup is 
   assert.equal((await saved(page, 'tap', s.id)).marks.length, 0)
   await page.locator('[data-choose="C"]').tap()
   assert.equal((await saved(page, 'tap', s.id)).choice, 'C')
+  assert.deepEqual(errors, [])
+})
+
+test('through the phone\'s door a lineup is a lineup: the question and buttons show, a tap chooses, and the choice goes in with its stamp', { skip }, async () => {
+  const tail = standInTailscale(mkdtempSync(join(tmpdir(), 'review-tailscale-')))
+  const r = await rig({ REVIEW_TAILSCALE: tail.program })
+  const s = await lineup(r, 'Door')
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'phone', 'on'], { env: r.env, stdio: 'ignore' })
+  const proxy = await standInProxy(tail, 'my-mac.example.ts.net:443')
+  cleanups.push(proxy.close)
+  const at = `http://my-mac.example.ts.net:${proxy.port}`
+  const far = await chromium.launch({ ...CHROME, args: [...CHROME_ARGS, '--host-resolver-rules=MAP my-mac.example.ts.net 127.0.0.1', `--unsafely-treat-insecure-origin-as-secure=${at}`] })
+  try {
+    const context = await far.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    const page = await context.newPage()
+    const errors = []
+    page.on('pageerror', e => errors.push(e.message))
+    await page.goto(`${at}/?undo=1#door`)
+    await page.waitForFunction(() => document.getElementById('canvas').width > 300)
+    assert.equal(await page.locator('#lineupQuestion').textContent(), 'Which layout for page 2?')
+    assert.equal(await page.locator('[data-choose]').count(), 3)
+    assert.equal(await page.locator('.lineup-status').textContent(), 'Tap a choice.', 'no keys to press on a phone')
+    // What the phone is sent of the lineup: letters, labels and places, never where its pictures are kept.
+    const sentToPhone = await page.evaluate(async () => (await (await fetch('/api/queue')).json()).apps[0].screens[0].choice)
+    assert.deepEqual(sentToPhone.options.map(o => [o.key, o.label]), [['A', ''], ['B', ''], ['C', 'Equal panels']])
+    assert.doesNotMatch(JSON.stringify(sentToPhone), /picture|\//)
+    // A page that never showed the lineup cannot answer it: refused in words, and nothing written.
+    const old = await page.evaluate(async ({ id, after, round }) => {
+      const res = await fetch('/api/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appSlug: 'door', id, after, round, verdict: 'changes', notes: 'Hm', shapes: [] }) })
+      return [res.status, (await res.json()).error]
+    }, s)
+    assert.deepEqual(old, [400, `${s.screen} is a choice, and this page does not show it. Reload the page, then choose.`])
+    assert.equal(r.read('Door').length, 0)
+    // Looks good with nothing chosen says so on the phone too.
+    await page.locator('#footActions [data-act=good]').tap()
+    await page.locator('#toast').getByText('Choose one first').waitFor()
+    // A tap on option B, before Mark, chooses it; Looks good sends it.
+    const b = await overOption(page, s, 'B')
+    await page.touchscreen.tap(b.x, b.y)
+    await page.locator('[data-choose="B"][aria-pressed="true"]').waitFor()
+    assert.match(await page.locator('.lineup-status').textContent(), /You chose B/)
+    // Chosen, the phone's one button is Send: it sends the choice.
+    await page.locator('#footActions [data-act=send]').tap()
+    const sent = await waitFor(() => r.read('Door')[0])
+    assert.equal(sent.choice.chosen, 'B')
+    assert.ok(sent.confirmed, 'stamped by the page')
+    assert.deepEqual(errors, [])
+  } finally {
+    await far.close()
+  }
+})
+
+test('a lineup whose question wraps onto two lines is still whole, and stays whole when the window changes', { skip }, async () => {
+  const r = await rig()
+  const sizes = [[390, 844], [390, 844]]
+  const options = sizes.map(([w, h], n) => {
+    const path = join(r.home, `wrap-${n}.png`)
+    writePicture(path, w, h)
+    return path
+  })
+  execFileSync('node', [join(ROOT, 'review.mjs'), 'choose', '--app', 'Wrap', '--question', 'Which of these two phone layouts reads best for the sign up step?', ...options.flatMap(p => ['--option', p])], { env: r.env, stdio: 'ignore' })
+  const { page, errors } = await r.open('wrap', { width: 1100, height: 800 })
+  const whole = async where => {
+    await settled(page)
+    const c = await page.locator('#canvas').boundingBox()
+    const foot = await page.locator('#foot').boundingBox()
+    const head = await page.locator('#lineupQuestion').boundingBox()
+    return { fits: c.y + c.height <= foot.y + 1, lines: Math.round(head.height / 31), where }
+  }
+  const first = await whole('at first')
+  assert.ok(first.lines >= 2, 'the question wraps')
+  assert.ok(first.fits, 'the picture ends above the foot')
+  await page.setViewportSize({ width: 900, height: 700 })
+  assert.ok((await whole('smaller')).fits)
   assert.deepEqual(errors, [])
 })
