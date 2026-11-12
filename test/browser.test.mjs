@@ -1396,6 +1396,25 @@ test('saved words that can never be shown again are cleared once discarded, neve
   assert.deepEqual(errors, [])
 })
 
+test('with a box open, the start page\'s forms and Ideas and queue wait for the words too', { skip }, async () => {
+  const { page, clear } = await twoReadings()
+  await page.locator('.reading[data-reading$="|1"] [data-no]').click()
+  await page.keyboard.type('Bigger')
+  await page.locator('#menuOpen').click()
+  await page.getByRole('menuitem', { name: /Ideas and queue/ }).click()
+  assert.match(new URL(page.url()).pathname, /^\/$/, 'still on the review page')
+  assert.match(await page.locator('#toast').innerText(), /Send or cancel your words first/)
+  // Cleared, with nothing left: the start page, and the kept box on it. Its forms start nothing while the box holds words.
+  clear('Lines')
+  await page.locator('#keptAlone .reading.kept').waitFor({ timeout: 8000 })
+  const address = page.locator('#stateCard [data-first-address]')
+  await address.fill('http://127.0.0.1:9/nothing')
+  await address.press('Enter')
+  assert.match(await page.locator('#toast').innerText(), /Send or cancel your words first/)
+  assert.equal(await page.locator('#stateCard [data-first-said]').isVisible(), false, 'no picture is being taken')
+  assert.equal(await page.locator('#keptAlone [data-correct]').inputValue(), 'Bigger')
+})
+
 test('two answers on one picture each with a mark 1: the older one\'s line says earlier 1', { skip }, async () => {
   const { page, errors, read, env } = await twoReadings({ marks: [[0.1, 0.1, 0.3, 0.3]] })
   await draw(page, 0.5, 0.6, 0.6, 0.7)

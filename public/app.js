@@ -3344,7 +3344,7 @@ $('menu').onclick = event => {
   const what = event.target.closest('[data-menu]')?.dataset.menu
   if (what === 'list') openDrawer()
   else if (what === 'new') openNewProject()
-  else if (what === 'work') location.href = '/work.html'
+  else if (what === 'work') !wordsFirst() && (location.href = '/work.html')
   else if (what === 'rest') openSubmit()
   else if (what === 'stop') stopHere()
   else if (what === 'aside-one') void setAside([state.appSlug], true)
@@ -3558,6 +3558,8 @@ async function firstRun(form, path, body) {
 for (const holder of [$('stateCard'), $('newModal')]) {
   holder.addEventListener('submit', event => {
     event.preventDefault()
+    // A box still holds words: no new project starts, by Enter or by a press, until they are sent or cancelled.
+    if (wordsFirst()) return
     if (event.target.matches('[data-build]')) return void sendBuild(event.target)
     const input = event.target.querySelector('[data-first-address]')
     if (input) void firstRun(event.target, '/api/show', { url: input.value || input.placeholder })
