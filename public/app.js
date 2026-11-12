@@ -1,7 +1,7 @@
 import { burnCanvas, changesBetween, COLOURS, fitZoom, isReal, paintChanged, paintMarks, redone, shapeOf, strokeFor, textFor, undone, withMark, withMarks, ZOOM_STEP, ZOOM_WHEEL_STEP, zoomedBy } from './annotate.js'
 import { createListener, findRoute, installPack } from './mic.js'
 import { agentsWords, heardWords, ideaProgress, SETUP_LINE, signOf, signShows, unheardCount, unheardWords } from './listen.js'
-import { afterSend, answerWords, askedCount, askedOf, askWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeOn, placeWords, standingAnswer, submitJobs } from './flow.js'
+import { afterSend, answerWords, askedCount, askedOf, askLetter, askWords, barName, countWords, finishedWords, groupsIn, leftBehind, lookOf, nameParts, nextApp, orderedApps, placeIn, placeOn, placeWords, standingAnswer, submitJobs } from './flow.js'
 
 /**
  * The wizard is the review: the picture fills the window, with one thin bar above it, what it is about under that, and a slim
@@ -1296,7 +1296,8 @@ function renderFoot(a, s) {
   const v = s ? verdictOf(s) : null
   const good = s && draftOf(s).good && v === 'approved'
   // Every earlier mark ticked fixed, and nothing else on it: Looks good is the answer, so it is lit.
-  const lit = s && !v && allChecked(s)
+  // Not where changes were sent on this picture: there Looks good would drop them.
+  const lit = s && !v && s.status !== 'sent' && allChecked(s)
   const off = !s ? ' disabled' : ''
   setHtml($('footActions'), `<button class="btn${good ? ' good-on' : lit ? ' good-lit' : ''}" data-act="good"${off} ${tip(good ? 'Looking good; press to take it back' : 'Looks good, and on to the next', 'G')}>${good ? ICONS.check : ''}Looks good</button><button class="btn primary" data-act="send"${v !== 'changes' ? ' disabled' : ''} ${tip('Send your marks and notes, and on to the next', '⌘↩')}>Send</button>`)
 }
@@ -2132,7 +2133,7 @@ function renderAsked(s) {
     const moved = !!a.box && !!state.size && !placeOn(a, state.size)
     const when = `${back ? `You said fixed in round ${a.fixedIn}` : a.cameBack ? `Came back, from round ${a.round}` : `Round ${a.round}`}${moved ? ' · place may have moved' : ''}`
     return `<li class="ask${word ? ` said-${word}` : ''}${back ? ' back' : ''}" data-ask="${a.n}">`
-      + `<button class="ask-n" data-ask-go="${a.n}" ${tip(moved ? 'The picture changed shape: its place may have moved' : a.box ? 'Show where it is' : 'Notes have no place on the picture')}>${a.n}</button>`
+      + `<button class="ask-n" data-ask-go="${a.n}" ${tip(moved ? 'The picture changed shape: its place may have moved' : a.box ? 'Show where it is' : 'Notes have no place on the picture')}>${askLetter(a.n)}</button>`
       + `<div class="ask-body"><span class="ask-words">${back ? '<b>Came back?</b> ' : ''}${esc(askWords(a))}</span><span class="ask-when">${esc(when)}</span>`
       + `<span class="ask-acts"><button class="btn ask-say${word === 'fixed' ? ' on' : ''}" data-ask-say="fixed" aria-pressed="${word === 'fixed'}">${ICONS.check}${back ? 'Still fixed' : 'Fixed'}</button>`
       + `<button class="btn ask-say${word === 'stands' ? ' on' : ''}" data-ask-say="stands" aria-pressed="${word === 'stands'}">${back ? 'Came back' : 'Still stands'}</button></span></div></li>`
@@ -2141,7 +2142,9 @@ function renderAsked(s) {
   const open = unansweredBack(s).length
   const left = asked.open.filter(a => !said[a.n]).length
   const some = asked.rows.some(a => said[a.n])
-  const hint = open ? `${open} came back? Say Still fixed or Came back.` : !verdictOf(s) && allChecked(s) ? 'All checked. Press Looks good.' : !verdictOf(s) && some && left ? `${left} still to check. ${left === 1 ? 'Tick it, say it still stands' : 'Tick them, say which still stand'}, or press Looks good to say all are fixed.` : ''
+  // With changes already sent on this picture, Looks good would drop them: there the way on is Send.
+  const sent = s.status === 'sent'
+  const hint = open ? `${open} came back? Say Still fixed or Came back.` : !verdictOf(s) && allChecked(s) && !sent ? 'All checked. Press Looks good.' : some && left && sent ? `${left} still to check. ${left === 1 ? 'Tick it or say it still stands' : 'Tick them or say which still stand'}, then press Send.` : !verdictOf(s) && some && left ? `${left} still to check. ${left === 1 ? 'Tick it, say it still stands' : 'Tick them, say which still stand'}, or press Looks good to say all are fixed.` : ''
   const head = narrow ? `<span class="asked-count${count.done ? ' done' : ''}">${esc(count.words)}</span>` : `<button class="tool" data-asked-shut ${tip('Hide this list', 'K')}>${ICONS.close}</button>`
   setHtml(box, `<h2><span>You asked for these last time</span>${head}</h2>${hint ? `<p class="ask-hint">${esc(hint)}</p>` : ''}<ol>${asked.rows.map(row).join('')}</ol>${held ? `<p class="ask-held">${held} more you ticked fixed before. Each is flagged here if the picture changes there again.</p>` : ''}`)
   keepApart()
@@ -2238,7 +2241,9 @@ function paintAsked(ctx, s) {
       ctx.strokeRect(p.x, p.y, p.w, p.h)
     }
     ctx.setLineDash([])
-    const tag = word === 'fixed' ? `✓ ${a.n}` : word === 'stands' ? `${a.n} ${back ? 'came back' : 'stands'}` : back ? `${a.n} Came back?` : String(a.n)
+    // Lettered, not numbered: the agent's readings on the same picture are numbered by the marks they read.
+    const name = askLetter(a.n)
+    const tag = word === 'fixed' ? `✓ ${name}` : word === 'stands' ? `${name} ${back ? 'came back' : 'stands'}` : back ? `${name} Came back?` : name
     const tw = ctx.measureText(tag).width + size * 0.8
     const th = Math.round(size * 1.5)
     // Above the outline, or inside its top when there is no room above; never off the picture.

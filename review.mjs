@@ -84,6 +84,7 @@ import { addNote, closeRequest, decidedPhase, itemConfirmed, requestConfirmed, w
 import { listen, markDelivered, noteProject, projectOf, queuedSince, unread, waitingWork } from './lib/listen.mjs'
 import { clearDesktopWake, clearWake, lastRun, listWakes, projectFolder, readDesktopWake, readWake, setDesktopWake, setKimiWake, setWake, switchWake } from './lib/wake.mjs'
 import { installHooks, removeHooks, sayHook } from './lib/hook.mjs'
+import { askLetter } from './public/flow.js'
 
 const args = process.argv.slice(2)
 // The store reads --home itself (lib/home.mjs), so it can come before the command or after it. It is taken out here.
@@ -204,7 +205,8 @@ function describe(r) {
     lines.push(`  Earlier marks: ${asked.length - open} of ${asked.length} ticked fixed${open ? `, ${open} still to do` : ''}${r.noComment && open ? ' (sent with the rest, not looked at)' : ''}`)
     // Sent unseen, an unticked mark was not looked at: not the same as left unticked. `n` is its number here, not a pin's.
     const unticked = r.noComment ? 'not looked at, so still to do' : 'not ticked, so still to do'
-    for (const a of asked) lines.push(`    ${a.n}. ${a.said === 'fixed' ? (a.fixedIn ? `still fixed (fixed in round ${a.fixedIn})` : 'fixed') : a.cameBack ? (a.said === 'stands' ? 'came back' : 'came back? not answered, so look again') : a.said === 'stands' ? 'still stands' : unticked}, from round ${a.round}: ${a.type === 'notes' ? `notes "${printable(a.text)}"` : markLine({ ...a, n: undefined })}`)
+    // Lettered as the page letters them, so they are never taken for the numbered marks and readings below.
+    for (const a of asked) lines.push(`    ${askLetter(a.n)}. ${a.said === 'fixed' ? (a.fixedIn ? `still fixed (fixed in round ${a.fixedIn})` : 'fixed') : a.cameBack ? (a.said === 'stands' ? 'came back' : 'came back? not answered, so look again') : a.said === 'stands' ? 'still stands' : unticked}, from round ${a.round}: ${a.type === 'notes' ? `notes "${printable(a.text)}"` : markLine({ ...a, n: undefined })}`)
   }
   if (r.notes) lines.push(`  Notes: ${r.notes.replace(/\n/g, '\n         ')}`)
   for (const [i, s] of r.shapes.entries()) {

@@ -161,3 +161,8 @@ test('earlier marks ticked and never sent are counted with what was left behind'
   const kept = { 1: { marks: [], notes: '', said: { 1: 'fixed', 2: 'stands', 3: null } } }
   assert.deepEqual(leftBehind(2, r => kept[r] ?? null, () => true), [{ round: 1, marks: 0, notes: '', ticks: 2 }])
 })
+
+test('earlier marks are lettered, A for 1 and on past Z, so they are never taken for numbered readings', async () => {
+  const { askLetter } = await import('../public/flow.js')
+  assert.deepEqual([1, 2, 26, 27, 28, 52, 53].map(askLetter), ['A', 'B', 'Z', 'AA', 'AB', 'AZ', 'BA'])
+})

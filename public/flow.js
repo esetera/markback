@@ -161,6 +161,21 @@ const cutWords = text => {
 }
 const ASK_NAMES = { box: ['Box round', 'A box here'], arrow: ['Arrow at', 'An arrow here'], freehand: ['Drawn over', 'A line drawn here'], words: ['', 'Words chosen here'], text: ['', 'Words written here'], pin: ['Said:', 'Said here'], notes: ['Notes:', 'Notes'] }
 
+/**
+ * An earlier mark's name on the page and in `review read`: A for 1, B for 2, and on to Z, then AA. Letters, so they are never
+ * taken for the agent's readings, which are numbered by the marks they read.
+ */
+export function askLetter(n) {
+  let left = Math.max(1, Math.floor(Number(n) || 1))
+  let name = ''
+  while (left > 0) {
+    left--
+    name = String.fromCharCode(65 + (left % 26)) + name
+    left = Math.floor(left / 26)
+  }
+  return name
+}
+
 /** An earlier mark in a few words: what was written or said there, or the words under it, or else only what it was. */
 export function askWords(ask) {
   const [lead, bare] = ASK_NAMES[ask.type] ?? ['Mark at', 'A mark here']
