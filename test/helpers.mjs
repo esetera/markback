@@ -1,5 +1,5 @@
 import { deflateSync } from 'node:zlib'
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const crcTable = Array.from({ length: 256 }, (_, n) => {
@@ -43,16 +43,36 @@ export function writePicture(path, width = 800, height = 500, patch = null) {
 export function standInTailscale(dir, initial = {}) {
   const program = join(dir, 'tailscale.mjs')
   const file = join(dir, 'tailscale.json')
-  const state = () => JSON.parse(readFileSync(file, 'utf8'))
-  const set = patch => writeFileSync(file, JSON.stringify({ ...(existsSync(file) ? state() : {}), ...patch }))
+  // Written whole, under another name, then renamed: a test that reads it while the stand-in writes never sees half of it.
+  const write = data => {
+    const tmp = `${file}.${process.pid}.tmp`
+    writeFileSync(tmp, JSON.stringify(data))
+    renameSync(tmp, file)
+  }
+  const state = () => {
+    for (let tries = 0; ; tries++) {
+      try {
+        return JSON.parse(readFileSync(file, 'utf8'))
+      } catch (error) {
+        if (tries >= 20) throw error
+        // A copy of the stand-in still at work: a moment later the file is whole again.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
+      }
+    }
+  }
+  const set = patch => write({ ...(existsSync(file) ? state() : {}), ...patch })
   set({ host: 'my-mac.example.ts.net', login: 'alice@example.com', backend: 'Running', https: true, down: false, tags: [], funnelOnServe: false, noPath: false, serve: {}, calls: [], ...initial })
   writeFileSync(program, `#!/usr/bin/env node
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 const file = ${JSON.stringify(file)}
 const s = JSON.parse(readFileSync(file, 'utf8'))
 const words = process.argv.slice(2)
 s.calls.push(words.join(' '))
-const save = () => writeFileSync(file, JSON.stringify(s))
+const save = () => {
+  const tmp = file + '.' + process.pid + '.tmp'
+  writeFileSync(tmp, JSON.stringify(s))
+  renameSync(tmp, file)
+}
 save()
 const stop = (text, code = 1) => { console.error(text); process.exit(code) }
 if (words[0] === 'version') console.log('1.80.0')
