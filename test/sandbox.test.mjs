@@ -705,3 +705,18 @@ test('every test file runs with a home folder of its own, so no test touches the
     assert.match(readFileSync(join(ROOT, 'test', file), 'utf8'), /^import '\.\/own-home\.mjs'\n/, `${file} imports own-home.mjs first`)
   }
 })
+
+test('review queue labels an item moved back to the queue without the person, as work and take treat it', async () => {
+  const dir = project({ home: '.markback-store' })
+  const own = join(base, 'later-home')
+  mkdirSync(own)
+  const env = dropped({ HOME: own })
+  // The person says Later on the page: a stamped decision.
+  const id = execFileSync(process.execPath, ['--input-type=module', '-e', `const w = await import(${JSON.stringify(join(ROOT, 'lib', 'work.mjs'))}); const r = w.askForIdeas({ target: 'Later', count: 1 }); const i = w.postIdea({ request: r.id, what: 'Sort the list' }); w.decide(i.id, 'later'); console.log(i.id)`], { cwd: dir, env, encoding: 'utf8' }).trim()
+  const file = join(dir, '.markback-store', 'work', 'items', `${id}.json`)
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), stage: 'queued' }))
+  const queue = (await run(['queue'], { cwd: dir, env })).stdout
+  assert.match(queue, new RegExp(`${id} {2}Sort the list {2}\\[moved back to the queue without the person, who last said Later: not work, ask the person\\]`))
+  assert.doesNotMatch(queue, /\[Proposal\]|\[Build\]/)
+  assert.match((await run(['take', '--by', 'Claude'], { cwd: dir, env })).stdout, /Nothing is queued/)
+})

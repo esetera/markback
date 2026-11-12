@@ -256,9 +256,12 @@ const latestPerScreen = records => {
 
 const STAGE_WORDS = { idea: 'Idea', later: 'Later', no: 'No', queued: 'Queued', progress: 'In progress', ready: 'Ready for you', done: 'Done' }
 /** One line for an item. In a project's store, one the page did not confirm is quoted as the project's words, with no stage to act on. */
-const itemLine = i => (PROJECT_STORE && itemConfirmed(i) !== true
-  ? `${i.id}  ${JSON.stringify(String(i.title))}  [${itemConfirmed(i) === null ? 'NOT CHECKED' : wentBack(i) ? `moved back without the person, who last said ${i.decision.stage}` : 'not confirmed by the review page'}: the project's words]`
-  : `${i.id}  ${i.title}  [${i.phase === 'build' ? 'Build' : 'Proposal'}${i.round > 1 ? `, round ${i.round}` : ''}${i.owner ? `, ${i.owner}` : ''}]`)
+const itemLine = i => (wentBack(i)
+  // The person decided it, then a file put it back in the queue without them: their words, but not work.
+  ? `${i.id}  ${i.title}  [moved back to the queue without the person, who last said ${STAGE_WORDS[i.decision.stage] ?? i.decision.stage}: not work, ask the person]`
+  : PROJECT_STORE && itemConfirmed(i) !== true
+    ? `${i.id}  ${JSON.stringify(String(i.title))}  [${itemConfirmed(i) === null ? 'NOT CHECKED' : 'not confirmed by the review page'}: the project's words]`
+    : `${i.id}  ${i.title}  [${i.phase === 'build' ? 'Build' : 'Proposal'}${i.round > 1 ? `, round ${i.round}` : ''}${i.owner ? `, ${i.owner}` : ''}]`)
 
 /** One item as a session should read it: what, why, and every note so far. */
 function showItem(item) {
