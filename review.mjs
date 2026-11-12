@@ -67,7 +67,7 @@
  */
 
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -493,37 +493,63 @@ const readPid = () => {
     return 0
   }
 }
-/** This number is Markback's own server, still running: not a number the system has since given to something else. */
+/** This copy's server: the only program Markback ever signals. */
 const SERVER = join(dirname(fileURLToPath(import.meta.url)), 'server.mjs')
-/**
- * A server.mjs in a Markback folder (one that also holds review.mjs and lib/store.mjs). In the person's own store a page they
- * started from another copy of Markback, or before an update, is still theirs to stop; a project store's server.pid could
- * name any of them, so there only this copy's server counts, and the page must say it is that process (servesThisStore).
- */
-const markbackServerIn = command => {
-  const end = command.search(/\/server\.mjs(?=\s|$)/)
-  if (end < 0) return false
-  // The path may hold spaces: each word start before it is tried, longest first.
-  for (let at = 0; at < end; at++) {
-    if (at && command[at - 1] !== ' ') continue
-    const folder = command.slice(at, end)
-    if (folder.startsWith('/') && existsSync(join(folder, 'review.mjs')) && existsSync(join(folder, 'lib', 'store.mjs'))) return true
-  }
-  return false
-}
-const ourServer = pid => {
-  if (!pid) return false
+const alive = pid => {
   try {
     process.kill(pid, 0)
-    // Windows has no ps to ask: there a live number is taken as the server, as before.
-    if (process.platform === 'win32') return true
-    const command = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
-    return command.includes(SERVER) || (!PROJECT_STORE && markbackServerIn(command))
+    return true
   } catch {
-    // Gone, not ours, or no way to tell: never trusted, never signalled.
     return false
   }
 }
+/** The process runs exactly this copy's server.mjs, by its path or its real path: never another folder's that looks like one. */
+const runsThisServer = pid => {
+  if (process.platform === 'win32') return false
+  try {
+    const command = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim()
+    return [SERVER, realpathSync(SERVER)].some(path => command === path || command.endsWith(` ${path}`) || command.includes(` ${path} `))
+  } catch {
+    return false
+  }
+}
+/** The process that listens on this port, from lsof with no shell, or 0 when that cannot be told (Windows, or no lsof). */
+const listenerOf = port => {
+  if (process.platform === 'win32') return 0
+  try {
+    const pids = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('\n').filter(Boolean).map(Number)
+    return pids.length === 1 ? pids[0] : 0
+  } catch {
+    return 0
+  }
+}
+/** The process server.pid names is still this copy's server: for words only, never a reason to signal it. */
+const ourServer = pid => !!pid && alive(pid) && runsThisServer(pid)
+
+/**
+ * Whether the process server.pid names is provably the review page that serves this store on this port: the only case in
+ * which Markback signals it. Either the page on the port says this store's (salted) id and that very process, or, for a page
+ * from before pages said their store, the process is the one listening on the port and it runs exactly this copy's server.mjs.
+ * In any other case it is not touched, and `why` says what could not be shown.
+ */
+async function provenPage(pid, port) {
+  if (!pid || !alive(pid)) return { ok: false, why: 'the process server.pid names is not running' }
+  const queue = await queueAt(port)
+  if (!queue) return { ok: false, why: `no review page answers on port ${port} from here` }
+  if (queue.store) {
+    const mine = storeIdNow()
+    if (!mine) return { ok: false, why: 'this command cannot read Markback\'s secret to tell which store the page shows' }
+    if (queue.store !== mine) return { ok: false, why: `the page on port ${port} shows another store` }
+    if (queue.pid !== pid) return { ok: false, why: `the page on port ${port} is process ${queue.pid ?? 'unknown'}, not the one server.pid names` }
+    return { ok: true, page: queue }
+  }
+  if (listenerOf(port) !== pid) return { ok: false, why: `the process listening on port ${port} is not the one server.pid names` }
+  if (!runsThisServer(pid)) return { ok: false, why: `process ${pid} is not this copy of Markback's server` }
+  return { ok: true, page: queue }
+}
+/** What to do by hand when Markback will not: the process and why it was left alone. */
+const killLine = (pid, why) => `Not stopped: ${why}.${pid && alive(pid) ? ` If process ${pid} is the review page you started, stop it with: kill ${pid}` : ''}`
+
 /** Runs the server on its own, so it outlasts this command. Nothing leaves this computer. */
 async function start() {
   let port = Number(flags.port || PORT)
@@ -534,7 +560,8 @@ async function start() {
   const older = info && info.version !== codeVersion() && (page === 'ours' || (!PROJECT_STORE && !info.store))
   if (older) {
     const pid = readPid()
-    if (!(ourServer(pid) && (await servesThisStore(pid)))) fail(`An older Markback runs on port ${port}${info.pid ? ` (process ${info.pid})` : ''}, and this command cannot tell it is this store's. Stop it, then run review start again${info.pid ? `: kill ${info.pid}` : ''}.`)
+    const proof = await provenPage(pid, port)
+    if (!proof.ok) fail(`An older Markback runs on port ${port}. ${killLine(pid || info.pid, proof.why)} Then run review start again.`)
     await stopServer(pid)
     console.log('An older Markback was running for this store. It is stopped, and this one starts in its place.')
     page = 'none'
@@ -552,13 +579,14 @@ async function start() {
     flags.port = String(port)
     console.log(`Port ${PORT} has another store's page, so this store's page goes on port ${port}.`)
   }
-  // A sandbox can stop this command reaching the page while the page runs. Its process still says so.
-  if (ourServer(readPid()) && !flags.port) return console.log(`Already running: http://localhost:${port}`)
+  // A sandbox can stop this command reaching the page while the page runs. Its process still says so, as far as it can.
+  if (ourServer(readPid()) && !flags.port) return console.log(`Already running, as far as this command can tell (process ${readPid()}), but its page cannot be reached from here.`)
   mkdirSync(HOME, { recursive: true })
   const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'server.mjs')], { detached: true, stdio: 'ignore', env: { ...process.env, REVIEW_HOME: HOME, REVIEW_PORT: String(port) } })
   child.unref()
   for (let i = 0; i < 50; i++) {
-    if (await up(port)) {
+    // Only the page that says it is this very process: never something else that answers on the port.
+    if ((await queueAt(port))?.pid === child.pid) {
       // Only a server that answered is ours to stop later.
       writeFileSync(PID_FILE, String(child.pid))
       rememberPort(port)
@@ -570,43 +598,35 @@ async function start() {
   fail(`It did not start. Port ${port} may be taken, or the page may already run there where this command cannot see it. Pushing works without the page: try review push, or review start --port ${port + 1}`)
 }
 
-/**
- * The server.pid of a store a project's .markback named may have come with the project, naming any Markback server on this
- * computer. It is signalled only when the page on this store's port says it is that process, serving this store.
- */
-async function servesThisStore(pid) {
-  if (!PROJECT_STORE) return true
-  const queue = await fetch(`http://127.0.0.1:${PORT}/api/queue`, { signal: AbortSignal.timeout(1500) }).then(r => (r.ok ? r.json() : null), () => null).catch(() => null)
-  return !!queue?.store && queue.store === storeIdNow() && queue?.pid === pid
-}
-
 /** Stops a server, and waits until it has gone and its port is free, so a new one can take it at once. */
 async function stopServer(pid) {
   process.kill(pid)
-  for (let i = 0; i < 50 && ourServer(pid); i++) await sleep(100)
+  for (let i = 0; i < 50 && alive(pid); i++) await sleep(100)
   rmSync(PID_FILE, { force: true })
 }
 
 async function stop() {
-  // Review from a phone goes off with the page: asked of the page first, so what it could not do is said. A page from before
-  // phones has no such question: that, or any answer but a plain one, never stands in the way of stopping it.
-  if (await up(PORT)) {
-    const was = await fetch(`http://127.0.0.1:${PORT}/api/phone`, { signal: AbortSignal.timeout(5000) }).then(r => (r.ok ? r.json() : null), () => null).catch(() => null)
-    if (was?.on) {
-      const off = await fetch(`http://127.0.0.1:${PORT}/api/phone`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: false }), signal: AbortSignal.timeout(60000) }).then(r => r.json(), () => null).catch(() => null)
-      if (off) sayOff(off)
-      else console.log('Review from your phone could not be turned off from here. Turn it off in Tailscale.')
-    }
-  }
   if (!existsSync(PID_FILE)) return console.log('It is not running from here.')
   const pid = readPid()
-  if (ourServer(pid) && (await servesThisStore(pid))) {
-    await stopServer(pid)
-    console.log('Stopped.')
-  } else {
-    console.log('It was not running.')
-    rmSync(PID_FILE, { force: true })
+  const proof = await provenPage(pid, PORT)
+  if (!proof.ok) {
+    if (!pid || !alive(pid)) {
+      rmSync(PID_FILE, { force: true })
+      return console.log('It was not running.')
+    }
+    // Kept: the number may still be the page's, and whoever can check it by hand needs it.
+    return console.log(killLine(pid, proof.why))
   }
+  // Review from a phone goes off with the page: asked of this store's page first, so what it could not do is said. A page from
+  // before phones has no such question: that, or any answer but a plain one, never stands in the way of stopping it.
+  const was = await fetch(`http://127.0.0.1:${PORT}/api/phone`, { signal: AbortSignal.timeout(5000) }).then(r => (r.ok ? r.json() : null), () => null).catch(() => null)
+  if (was?.on) {
+    const off = await fetch(`http://127.0.0.1:${PORT}/api/phone`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: false }), signal: AbortSignal.timeout(60000) }).then(r => r.json(), () => null).catch(() => null)
+    if (off) sayOff(off)
+    else console.log('Review from your phone could not be turned off from here. Turn it off in Tailscale.')
+  }
+  await stopServer(pid)
+  console.log('Stopped.')
 }
 
 /**

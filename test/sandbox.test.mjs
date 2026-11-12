@@ -463,7 +463,7 @@ test('review stop never signals a server named by a .markback store\'s server.pi
     const dir = project({ home: '.markback-store', port: await freePort() })
     mkdirSync(join(dir, '.markback-store'))
     writeFileSync(join(dir, '.markback-store', 'server.pid'), String(theirs.pid))
-    assert.match((await run(['stop'], { cwd: dir })).stdout, /It was not running/)
+    assert.match((await run(['stop'], { cwd: dir })).stdout, /Not stopped: /)
     assert.ok((await queueAt(theirPort))?.apps, 'their page still runs')
   } finally {
     theirs.kill()
@@ -741,7 +741,7 @@ test('a project store\'s server.pid naming an older Markback elsewhere is never 
     const dir = project({ home: '.markback-store', port })
     mkdirSync(join(dir, '.markback-store'))
     writeFileSync(join(dir, '.markback-store', 'server.pid'), String(older.pid))
-    assert.match((await run(['stop'], { cwd: dir })).stdout, /It was not running/)
+    assert.match((await run(['stop'], { cwd: dir })).stdout, /Not stopped: /)
     const started = await run(['start'], { cwd: dir })
     assert.doesNotMatch(started.stdout, /older Markback was running/)
     assert.ok(await queueAt(port), 'the older page still runs')
