@@ -62,8 +62,14 @@ async function rig({ reader = null } = {}) {
       await new Promise(r => setTimeout(r, 100))
     }
   }
+  // A server that has gone already, or will not go, must not hold the run: a failure ends the test instead of hanging it.
   const stop = () => new Promise(resolve => {
-    server.once('exit', resolve)
+    if (server.exitCode !== null || server.signalCode !== null) return resolve()
+    const hard = setTimeout(() => server.kill('SIGKILL'), 5000)
+    server.once('exit', () => {
+      clearTimeout(hard)
+      resolve()
+    })
     server.kill()
   })
   cleanups.push(() => {
